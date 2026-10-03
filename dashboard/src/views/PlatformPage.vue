@@ -145,6 +145,7 @@
 
           <main class="platform-workbench__main">
             <PlatformEditor
+              ref="platformEditor"
               v-if="selectedPlatform"
               :key="selectedPlatform.id"
               :platform="selectedPlatform"
@@ -336,7 +337,16 @@ const confirmDialog = useConfirmDialog();
 const configData = ref({});
 const metadata = ref({});
 const loadingPlatforms = ref(true);
-const selectedPlatformId = ref(null);
+const platformEditor = ref(null);
+const selectedPlatformIdState = ref(null);
+const selectedPlatformId = computed({
+  get: () => selectedPlatformIdState.value,
+  set: (value) => {
+    if (value !== selectedPlatformIdState.value && platformEditor.value?.isModified &&
+        !window.confirm('当前机器人有未保存更改。切换将放弃这些更改，是否继续？')) return;
+    selectedPlatformIdState.value = value;
+  },
+});
 const showAddPlatformDialog = ref(false);
 const platformStats = ref({});
 const showWebhookDialog = ref(false);
@@ -442,19 +452,34 @@ function getPlatformIconFor(platform) {
 }
 
 function getPlatformStat(platformId) {
-  return platformStats.value[platformId] || null;
+  return platformStats.value[platformId] ||
+    (platforms.value.find(p => p.id === platformId)?.type === 'wangshangliao'
+      ? { status: 'stopped', connection_state: 'stopped' } : null);
 }
 
 function getPlatformStatusLabel(platform) {
   if (platform.enable === false) {
     return tm("workspace.disabled");
   }
+  const state = getPlatformStat(platform.id)?.connection_state;
+  if (platform.type === "wangshangliao" && state)
+    return tm(`wangshangliao.${state}`);
   const status = getPlatformStat(platform.id)?.status || "unknown";
   return tm(`runtimeStatus.${status}`);
 }
 
 function getPlatformStatusClass(platform) {
   if (platform.enable === false) return "bot-list-item__status-dot--disabled";
+  const connection = getPlatformStat(platform.id)?.connection_state;
+  if (
+    platform.type === "wangshangliao" &&
+    connection &&
+    connection !== "online"
+  ) {
+    return ["error", "reauth_required"].includes(connection)
+      ? "bot-list-item__status-dot--error"
+      : "bot-list-item__status-dot--disabled";
+  }
   const status = getPlatformStat(platform.id)?.status;
   if (status === "running") return "bot-list-item__status-dot--success";
   if (status === "error") return "bot-list-item__status-dot--error";

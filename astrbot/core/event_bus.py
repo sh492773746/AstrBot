@@ -12,9 +12,11 @@ class:
 
 import asyncio
 from asyncio import Queue
+from functools import partial
 
 from astrbot.core import logger
 from astrbot.core.astrbot_config_mgr import AstrBotConfigManager
+from astrbot.core.pipeline.context import PipelineContext
 from astrbot.core.pipeline.scheduler import PipelineScheduler
 
 from .platform import AstrMessageEvent
@@ -35,27 +37,68 @@ class EventBus:
         self.astrbot_config_mgr = astrbot_config_mgr
         # 持有正在执行的 pipeline 任务的强引用, 防止 task 在 pending 状态被 GC 回收
         self._pending_tasks: set[asyncio.Task] = set()
+        self._scheduler_lock = asyncio.Lock()
+
+    async def ensure_scheduler(self, conf_id: str) -> PipelineScheduler:
+        """Initialize hot-created profiles without routing them to defaults."""
+        async with self._scheduler_lock:
+            scheduler = self.pipeline_scheduler_mapping.get(conf_id)
+            if scheduler is not None:
+                return scheduler
+            config = self.astrbot_config_mgr.confs.get(conf_id)
+            base = self.pipeline_scheduler_mapping.get("default")
+            if config is None or base is None:
+                raise RuntimeError("Pipeline configuration unavailable")
+            scheduler = PipelineScheduler(
+                PipelineContext(
+                    config, base.ctx.plugin_manager, conf_id, base.ctx.db_helper
+                )
+            )
+            await scheduler.initialize()
+            self.pipeline_scheduler_mapping[conf_id] = scheduler
+            return scheduler
 
     async def dispatch(self) -> None:
         while True:
             event: AstrMessageEvent = await self.event_queue.get()
+            completion = getattr(event, "processing_completion", None)
+            if isinstance(completion, asyncio.Future) and completion.cancelled():
+                continue
             conf_info = self.astrbot_config_mgr.get_conf_info(event.unified_msg_origin)
             conf_id = conf_info["id"]
             conf_name = conf_info.get("name") or conf_id
             self._print_event(event, conf_name)
-            scheduler = self.pipeline_scheduler_mapping.get(conf_id)
-            if not scheduler:
+            try:
+                scheduler = await self.ensure_scheduler(conf_id)
+            except Exception as exc:
                 logger.error(
-                    f"PipelineScheduler not found for id: {conf_id}, event ignored."
+                    f"PipelineScheduler unavailable for id: {conf_id} "
+                    f"({type(exc).__name__}), event ignored."
                 )
+                if isinstance(completion, asyncio.Future) and not completion.done():
+                    completion.set_exception(RuntimeError("pipeline_missing"))
                 continue
             task = asyncio.create_task(scheduler.execute(event))
             self._pending_tasks.add(task)
-            task.add_done_callback(self._on_task_done)
+            task.add_done_callback(partial(self._on_task_done, completion=completion))
+            if isinstance(completion, asyncio.Future):
+                event.processing_task = task
+                completion.add_done_callback(
+                    lambda future, task=task: (
+                        task.cancel() if future.cancelled() else None
+                    )
+                )
 
-    def _on_task_done(self, task: asyncio.Task) -> None:
+    def _on_task_done(self, task: asyncio.Task, completion=None) -> None:
         """pipeline 任务结束回调: 移除强引用并暴露未捕获的异常"""
         self._pending_tasks.discard(task)
+        if isinstance(completion, asyncio.Future) and not completion.done():
+            if task.cancelled():
+                completion.cancel()
+            elif task.exception() is not None:
+                completion.set_exception(task.exception())
+            else:
+                completion.set_result(None)
         if task.cancelled():
             return
         exc = task.exception()

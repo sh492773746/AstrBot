@@ -4,6 +4,28 @@
       "loadFailed": "加载配置文件失败",
       "close": "关闭"
     },
+  "administratorSelector": {
+    "title": "选择管理员",
+    "choose": "从对话选择",
+    "empty": "未设置管理员",
+    "unknownName": "未记录昵称",
+    "permissionWarning": "管理员权限不限于单个群，请只授权可信用户。",
+    "search": "搜索昵称或账号",
+    "platform": "平台",
+    "allPlatforms": "全部平台",
+    "refresh": "刷新对话",
+    "conversations": "已有私聊用户",
+    "loading": "读取对话中",
+    "noMatches": "没有匹配的用户",
+    "noConversations": "暂无可识别的私聊用户",
+    "manual": "手动填写账号",
+    "accountId": "账号",
+    "selected": "已选择 {count} 人",
+    "remove": "移除 {name}",
+    "loadFailed": "对话读取失败，已选管理员保持不变。",
+    "wangshangliao": "旺商聊",
+    "webchat": "网页聊天"
+  },
   "knowledgeBaseSelector": {
     "notSelected": "未选择",
     "buttonText": "选择知识库...",

@@ -1,0 +1,569 @@
+{
+  "architecture": [
+    {
+      "id": "transport",
+      "name": ["原生接入", "Native adapter"],
+      "files": [
+        "astrbot/core/platform/sources/wangshangliao/adapter.py",
+        "astrbot/core/platform/sources/wangshangliao/business.py",
+        "astrbot/core/platform/sources/wangshangliao/nim.py"
+      ],
+      "responsibility": [
+        "登录、认证消息收发、业务 UID 与 NIM 身份映射",
+        "Login, authenticated messaging, business UID / NIM mapping"
+      ],
+      "boundary": [
+        "只处理启用群；不根据昵称或群号猜测身份",
+        "Enabled groups only; never infer identity from names or display group numbers"
+      ]
+    },
+    {
+      "id": "authorization",
+      "name": ["框架鉴权", "Framework authorization"],
+      "files": ["astrbot/core/pipeline/waking_check/stage.py"],
+      "responsibility": [
+        "根据当前会话有效配置的 admins_id 识别操作者",
+        "Resolve caller authority from the session's effective admins_id"
+      ],
+      "boundary": [
+        "昵称、平台群角色、@ 管理员及模型输出不能授予权限",
+        "Names, upstream group roles, admin mentions and model output never grant authority"
+      ]
+    },
+    {
+      "id": "commands",
+      "name": ["固定命令", "Deterministic commands"],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/syntax.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/commands.py"
+      ],
+      "responsibility": [
+        "整条消息识别、公共命令分流、目录快照及参数校验",
+        "Exact message recognition, public-command routing, directory snapshots and validation"
+      ],
+      "boundary": [
+        "不进入模型；编号按账号、操作者和私聊会话隔离，十分钟过期",
+        "No model call; snapshot numbers expire in ten minutes and bind account, caller and private session"
+      ]
+    },
+    {
+      "id": "ai-tools",
+      "name": ["私聊 AI 管理", "Private AI management"],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/main.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/intent.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/ai_config.py"
+      ],
+      "responsibility": [
+        "wsl_private_management 固定工具复用命令服务",
+        "wsl_private_management uses fixed actions and the shared command service"
+      ],
+      "boundary": [
+        "仅管理员私聊；规则与活动参数预览确认，定时另需确认；不得修改身份、授权或凭据",
+        "Admin private chat only; preview/confirm rules and activity parameters, with separate schedule confirmation; no identity, grant or credential changes"
+      ]
+    },
+    {
+      "id": "semantic",
+      "name": ["上下文审核", "Contextual review"],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/semantic.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/content_rules.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/policy.py"
+      ],
+      "responsibility": [
+        "独立模型审核当前消息与同群上下文，故障时高置信规则兜底",
+        "Independent model review of current and same-group context; high-confidence fallback on failure"
+      ],
+      "boundary": [
+        "明确正常或证据不足不罚；群主、管理员和机器人受保护；历史消息不追罚",
+        "Allow or insufficient evidence means no sanction; protected roles and bots remain exempt; no historical sanctions"
+      ]
+    },
+    {
+      "id": "execution",
+      "name": ["处罚执行与升级", "Sanctions and escalation"],
+      "files": [
+        "astrbot/core/platform/sources/wangshangliao/moderation.py",
+        "astrbot/core/platform/sources/wangshangliao/automatic.py"
+      ],
+      "responsibility": [
+        "最终动作授权、原生角色和目标校验、幂等执行、先三次禁言再违规踢出",
+        "Final capability, upstream-role and target checks; idempotent execution; removal on a new violation after three mutes"
+      ],
+      "boundary": [
+        "三次自动禁言后第四次违规踢出需单独启用；人工禁言不累计；未知结果不重试",
+        "Removal on the fourth violation after three accepted mutes is opt-in; manual mutes do not count; unknown operations are not retried"
+      ]
+    },
+    {
+      "id": "ranking",
+      "name": ["每日发言排行", "Daily rankings"],
+      "files": ["astrbot/builtin_stars/wangshangliao_moderation/rankings.py"],
+      "responsibility": [
+        "北京时间当天有效文字计数、分页、原生 @",
+        "Asia/Shanghai daily eligible text counts, pagination and native mentions"
+      ],
+      "boundary": [
+        "只读本实例已收到的记录；排除机器人、命令与已确认违规；不自动派奖",
+        "Only records received by this instance; exclude bots, commands and confirmed violations; no automatic prizes"
+      ]
+    },
+    {
+      "id": "activities",
+      "name": ["群抽奖", "Group lotteries"],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/activities.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/activity_store.py"
+      ],
+      "responsibility": [
+        "管理员设置、群员报名、倒计时开奖、持久化名单",
+        "Admin settings, member enrollment, deadline drawing and durable winner lists"
+      ],
+      "boundary": [
+        "开启时冻结参数；发布须群主动发送授权；奖品由联系人发放，不自动付款",
+        "Settings freeze at opening; publication requires proactive group grants; contact distributes prizes, no automatic payment"
+      ]
+    },
+    {
+      "id": "invitations",
+      "name": ["邀请归属与奖励", "Invitation attribution and rewards"],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/activities.py",
+        "astrbot/core/platform/sources/wangshangliao/adapter.py",
+        "astrbot/core/platform/sources/wangshangliao/nim.py"
+      ],
+      "responsibility": [
+        "平台邀请归属、待审核只读记录、新成员去重计奖",
+        "Native attribution, read-only pending records and deduplicated newcomer credits"
+      ],
+      "boundary": [
+        "已有成员作基线；待审核、归属不明和重复入群不计奖；积分不是现金",
+        "Existing members form the baseline; pending, unknown and repeated joins earn no credits; points are not cash"
+      ]
+    },
+    {
+      "id": "schedules",
+      "name": ["每日定时禁言", "Daily group schedules"],
+      "files": ["astrbot/builtin_stars/wangshangliao_moderation/schedules.py"],
+      "responsibility": [
+        "北京时间时段预览、确认、未来边界调度及审计",
+        "Asia/Shanghai interval preview, confirmation, future-boundary scheduling and audit"
+      ],
+      "boundary": [
+        "创建者撤权、断线、错过边界或未知结果暂停；暂停和删除不自动解禁",
+        "Revoked creator authority, offline state, missed boundaries or uncertainty pause jobs; pause/delete never automatically unmute"
+      ]
+    },
+    {
+      "id": "cards",
+      "name": ["成员批量维护", "Member batch maintenance"],
+      "files": ["astrbot/builtin_stars/wangshangliao_moderation/cards.py"],
+      "responsibility": [
+        "名片预览与执行、封禁和注销账号清理、进度与停止",
+        "Card preview/execution, banned/cancelled-account cleanup, progress and stop"
+      ],
+      "boundary": [
+        "rename 与 cleanup 分别授权；保护群管理角色；未知结果先回读",
+        "Separate rename and cleanup grants; protected group roles; read back unknown results first"
+      ]
+    },
+    {
+      "id": "replies",
+      "name": ["回复与撤回", "Replies and recall"],
+      "files": [
+        "astrbot/core/platform/sources/wangshangliao/event.py",
+        "astrbot/core/platform/sources/wangshangliao/reply_recall.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/text.py"
+      ],
+      "responsibility": [
+        "纯文本整理、脱敏、原生 @、功能回复受理20秒后撤回",
+        "Plain-text presentation, redaction, native mentions and feature recall twenty seconds after acceptance"
+      ],
+      "boundary": [
+        "仅撤回机器人对应群回复；抽奖通知与报名反馈、私聊、成员命令及普通 AI 回复不撤回",
+        "Only matching group feature replies; lottery notices and signup replies, private chat, member commands and ordinary AI replies are kept"
+      ]
+    },
+    {
+      "id": "dashboard",
+      "name": ["插件管理页", "Plugin management page"],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/dashboard.py",
+        "dashboard/plugin-pages/wangshangliao/App.vue"
+      ],
+      "responsibility": [
+        "配置版本校验、逐群授权、近期审计、架构与权限对照",
+        "Revision checks, per-group grants, bounded audit, architecture and permission reference"
+      ],
+      "boundary": [
+        "须 Dashboard JWT 与 bot 权限；不暴露凭证，不提供直接处罚和重试入口",
+        "Dashboard JWT and bot scope required; no credentials, direct sanctions or retry controls"
+      ]
+    },
+    {
+      "id": "storage",
+      "name": ["持久化与测试门禁", "Persistence and test gates"],
+      "files": [
+        "astrbot/core/platform/sources/wangshangliao/storage.py",
+        "astrbot/core/platform/sources/wangshangliao/test_window.py"
+      ],
+      "responsibility": [
+        "按实例保存消息、操作、活动和任务；限时单向受控测试",
+        "Instance-scoped messages, operations, activities and jobs; bounded one-way controlled tests"
+      ],
+      "boundary": [
+        "测试最多300秒、10条入站；不授予管理员或动作权限；重启关闭窗口",
+        "At most 300 seconds and ten inbound messages; no admin or capability grants; windows close on restart"
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "id": "ranking",
+      "name": ["每日排名", "Daily ranking"],
+      "commands": ["排名"],
+      "examples": ["排名", "排名 2"],
+      "access": ["allowed", "allowed", "denied", "allowed"],
+      "grants": [],
+      "rule": [
+        "群需启用且允许回复；私聊管理员须先选群；不派奖",
+        "Enabled group and replies required; private admins select a group first; no prizes"
+      ]
+    },
+    {
+      "id": "lottery-status",
+      "name": ["抽奖状态", "Lottery status"],
+      "commands": ["抽奖状态"],
+      "examples": ["抽奖状态"],
+      "access": ["allowed", "allowed", "denied", "allowed"],
+      "grants": [],
+      "rule": [
+        "未开活动时仅返回状态，不创建活动",
+        "Without an active lottery, return status only; do not create one"
+      ]
+    },
+    {
+      "id": "lottery-join",
+      "name": ["抽奖报名", "Lottery enrollment"],
+      "commands": ["参加抽奖"],
+      "examples": ["参加抽奖"],
+      "access": ["allowed", "allowed", "denied", "group-only"],
+      "grants": [],
+      "rule": [
+        "只在活动群报名；重复成员不重复记入；不满足邀请门槛则拒绝",
+        "Enroll in the activity group only; deduplicate members; enforce invitation gate"
+      ]
+    },
+    {
+      "id": "own-invites",
+      "name": ["个人邀请与积分", "Own invitations and points"],
+      "commands": ["我的邀请", "邀请奖励"],
+      "examples": ["我的邀请", "邀请奖励"],
+      "access": ["allowed", "allowed", "denied", "allowed"],
+      "grants": [],
+      "rule": [
+        "只查询操作者自己的有效邀请和积分；不自动支付",
+        "Only the caller's eligible invitations and points; no automatic payment"
+      ]
+    },
+    {
+      "id": "help",
+      "name": ["帮助与身份", "Help and identity"],
+      "commands": ["帮助", "我的权限"],
+      "examples": ["帮助", "我的权限", "sid"],
+      "access": ["private-only", "private-only", "denied", "allowed"],
+      "grants": [],
+      "rule": [
+        "非管理员私聊连帮助和 sid 也只返回无权限",
+        "Non-admin private help and sid also return only permission denial"
+      ]
+    },
+    {
+      "id": "directory",
+      "name": ["群与成员目录", "Group and member directory"],
+      "commands": ["群列表", "选择群", "成员列表", "成员搜索", "下一页"],
+      "examples": ["群列表", "选择群 1", "成员搜索 名称", "下一页"],
+      "access": ["private-only", "private-only", "denied", "allowed"],
+      "grants": [],
+      "rule": [
+        "目录编号十分钟有效，绑定机器人、操作者和私聊会话",
+        "Directory numbers expire in ten minutes and bind bot, caller and private session"
+      ]
+    },
+    {
+      "id": "audit",
+      "name": ["权限与规则查询", "Capabilities and rule queries"],
+      "commands": ["能力", "规则", "违规计数", "结果", "开发门禁"],
+      "examples": ["能力", "规则", "违规计数", "结果 操作ID", "开发门禁"],
+      "access": ["private-only", "private-only", "denied", "allowed"],
+      "grants": [],
+      "rule": [
+        "只读查询；开发门禁命令不创建窗口、不增加权限",
+        "Read-only; the gate command neither opens a window nor grants authority"
+      ]
+    },
+    {
+      "id": "mute",
+      "name": ["成员禁言", "Mute member"],
+      "commands": ["禁言"],
+      "examples": ["禁言 @成员", "禁言 @成员 3", "禁言 2 3"],
+      "access": ["denied", "allowed", "denied", "allowed"],
+      "grants": ["mute"],
+      "rule": [
+        "群内须真实 @；私聊用快照编号；默认30分钟，整数1至1440分钟，无二次确认",
+        "Native mention in group; snapshot number privately; default thirty minutes, integer 1–1440 minutes, no second confirmation"
+      ]
+    },
+    {
+      "id": "unmute",
+      "name": ["成员解禁", "Unmute member"],
+      "commands": ["解禁"],
+      "examples": ["解禁 @成员", "解禁 2"],
+      "access": ["denied", "allowed", "denied", "allowed"],
+      "grants": ["unmute"],
+      "rule": [
+        "校验唯一目标及当前身份；不需要二次确认",
+        "Validate the unique target and current identity; no second confirmation"
+      ]
+    },
+    {
+      "id": "kick",
+      "name": ["手动踢出", "Manual removal"],
+      "commands": ["踢出", "确认踢出"],
+      "examples": ["踢出 2", "确认踢出 PREVIEW_TOKEN"],
+      "access": ["denied", "kick-mode", "denied", "allowed"],
+      "grants": ["kick"],
+      "rule": [
+        "业务内容规则模式：私聊预览，再由同一管理员用新消息确认；确认码单次、十分钟有效。旧模式仍按固定动作执行",
+        "Content-rule mode: private preview then a new confirmation from the same admin; single-use ten-minute token. Legacy mode retains fixed-action execution"
+      ]
+    },
+    {
+      "id": "announce",
+      "name": ["发布公告", "Publish announcement"],
+      "commands": ["公告"],
+      "examples": ["公告 内容"],
+      "access": ["denied", "allowed", "denied", "allowed"],
+      "grants": ["announce"],
+      "rule": [
+        "群内使用当前群；私聊须先选群；仍需平台原生管理角色",
+        "Current group in group chat; select group privately; native management role still required"
+      ]
+    },
+    {
+      "id": "mute-all",
+      "name": ["全员禁言与解除", "Mute/unmute all"],
+      "commands": ["全员禁言", "解除全员禁言"],
+      "examples": ["全员禁言", "解除全员禁言"],
+      "access": ["denied", "allowed", "denied", "allowed"],
+      "grants": ["mute_all", "unmute_all"],
+      "rule": [
+        "各动作分别授权；人工操作先暂停该群定时规则",
+        "Each action needs its own grant; manual action first pauses the group's schedule"
+      ]
+    },
+    {
+      "id": "lottery-query",
+      "name": ["抽奖设置与历史", "Lottery settings and history"],
+      "commands": ["中奖名单", "抽奖记录", "抽奖设置"],
+      "examples": ["抽奖设置", "中奖名单 1", "抽奖记录"],
+      "access": ["private-only", "private-only", "denied", "allowed"],
+      "grants": [],
+      "rule": [
+        "管理员私聊选群后查询；不是公共群内命令",
+        "Admin private query after selecting a group; not a public group command"
+      ]
+    },
+    {
+      "id": "lottery-settings",
+      "name": ["抽奖参数", "Lottery parameters"],
+      "commands": [
+        "抽奖奖励",
+        "中奖人数",
+        "抽奖倒计时",
+        "参与上限",
+        "抽奖邀请门槛",
+        "领奖联系人"
+      ],
+      "examples": [
+        "抽奖奖励 奖品",
+        "中奖人数 3",
+        "抽奖倒计时 10",
+        "参与上限 15",
+        "抽奖邀请门槛 3",
+        "领奖联系人 管理员"
+      ],
+      "access": ["private-only", "private-only", "denied", "allowed"],
+      "grants": [],
+      "rule": [
+        "设置下期参数；活动已开不能修改；只设置不自动开启",
+        "Configure the next lottery; active settings cannot change; settings alone do not open it"
+      ]
+    },
+    {
+      "id": "lottery-control",
+      "name": ["抽奖开启与结束", "Lottery lifecycle"],
+      "commands": ["开启抽奖", "立即开奖", "取消抽奖"],
+      "examples": ["开启抽奖", "立即开奖", "取消抽奖"],
+      "access": ["private-only", "private-only", "denied", "allowed"],
+      "grants": [],
+      "proactive": true,
+      "rule": [
+        "需当前群主动发送授权与回复；开奖结果持久化一次发布；不自动派奖",
+        "Requires current-group proactive authorization and replies; durable once-only result publication; no automatic payout"
+      ]
+    },
+    {
+      "id": "invite-settings",
+      "name": ["邀请奖励设置与查询", "Invitation reward administration"],
+      "commands": [
+        "设置邀请奖励",
+        "开启邀请奖励",
+        "暂停邀请奖励",
+        "邀请奖励状态",
+        "邀请记录"
+      ],
+      "examples": [
+        "设置邀请奖励 5",
+        "开启邀请奖励",
+        "暂停邀请奖励",
+        "邀请奖励状态",
+        "邀请记录"
+      ],
+      "access": ["private-only", "private-only", "denied", "allowed"],
+      "grants": [],
+      "rule": [
+        "全群统一积分值；启用建立基线，待审核不计奖；修改值不重算旧账",
+        "Uniform group points; enabling baselines existing members; pending joins earn nothing; no repricing old credits"
+      ]
+    },
+    {
+      "id": "schedules",
+      "name": ["每日定时任务", "Daily schedule"],
+      "commands": [
+        "定时禁言",
+        "确认定时",
+        "定时状态",
+        "暂停定时",
+        "恢复定时",
+        "删除定时"
+      ],
+      "examples": [
+        "定时禁言 23:00 08:00",
+        "确认定时 PREVIEW_TOKEN",
+        "定时状态",
+        "暂停定时",
+        "恢复定时",
+        "删除定时"
+      ],
+      "access": ["private-only", "private-only", "denied", "allowed"],
+      "grants": ["mute_all", "unmute_all"],
+      "rule": [
+        "创建和恢复须新预览确认及两个动作授权；状态查询不执行动作；运行时再核验创建者权限；暂停和删除不解禁",
+        "Creation/resume require fresh confirmation and both grants; status queries execute no action; recheck creator at runtime; pause/delete do not unmute"
+      ]
+    },
+    {
+      "id": "ai-tools",
+      "name": ["自然语言管理工具", "Natural-language management tool"],
+      "commands": [],
+      "examples": ["wsl_private_management"],
+      "access": ["unavailable", "unavailable", "denied", "tool"],
+      "grants": [],
+      "rule": [
+        "固定工具与配置草案；操作仍需独立授权；配置不直接处罚或开启活动，踢出及定时仍需明确确认",
+        "Fixed tools and config drafts with independent grants; settings do not punish or start activities, and removal/schedules still require explicit confirmation"
+      ]
+    },
+    {
+      "id": "cards",
+      "name": ["成员名片维护", "Member card maintenance"],
+      "commands": [],
+      "examples": ["card_preview", "card_member_preview", "card_execute", "card_status", "card_stop"],
+      "access": ["unavailable", "unavailable", "denied", "tool"],
+      "grants": ["rename"],
+      "rule": [
+        "管理员私聊AI支持指定成员改名及批量规范，预览后另发确认；当前成员快照及原名再次核验；按群自动扫描开关也需配置确认且不得自行授权",
+        "Admin private AI supports single-member custom cards and batch normalization with separate confirmation; recheck member identity and original card; per-group automatic scans require a confirmed setting and existing grants"
+      ]
+    },
+    {
+      "id": "cleanup",
+      "name": ["封禁／注销账号清理", "Banned/cancelled-account cleanup"],
+      "commands": [],
+      "examples": [],
+      "access": ["unavailable", "unavailable", "unavailable", "unavailable"],
+      "grants": ["cleanup"],
+      "rule": [
+        "仅机器人页预览、确认与执行；cleanup 不继承 kick 或 rename；不自动运行",
+        "Bot-page preview, confirmation and execution only; cleanup does not inherit kick/rename; not automatic"
+      ]
+    }
+  ],
+  "layers": [
+    {
+      "name": ["操作者身份", "Caller identity"],
+      "source": ["会话有效配置 admins_id", "Session's effective admins_id"],
+      "boundary": [
+        "群主、平台管理员、昵称及 @ 目标不能代替；撤权立即作用于后续调用",
+        "Group owners/admins, names and mention targets are no substitute; revocation affects subsequent calls"
+      ]
+    },
+    {
+      "name": ["机器人动作授权", "Bot capabilities"],
+      "source": [
+        "群授权中的逐群动作白名单",
+        "Per-group action allowlist in Group Grants"
+      ],
+      "boundary": [
+        "只控制机器人可做的动作，不把任何群员变成管理员",
+        "Controls bot actions only; never makes a group member an administrator"
+      ]
+    },
+    {
+      "name": ["平台原生权限", "Upstream permissions"],
+      "source": [
+        "机器人在旺商聊的真实群角色及目标成员身份",
+        "Bot's real upstream group role and target member identity"
+      ],
+      "boundary": [
+        "保存授权不等于平台允许执行；群管理角色和机器人目标受保护",
+        "A saved grant is not upstream permission; protected roles and bot targets stay protected"
+      ]
+    },
+    {
+      "name": ["主动发送授权", "Proactive-send authority"],
+      "source": [
+        "机器人页的主动发送目标白名单",
+        "Bot-page proactive target allowlist"
+      ],
+      "boundary": [
+        "抽奖通知需目标群授权；不替代调用者身份或处罚动作授权",
+        "Lottery notices need the target-group grant; never replaces caller or sanction authority"
+      ]
+    },
+    {
+      "name": ["管理面板权限", "Dashboard authority"],
+      "source": [
+        "Dashboard JWT 登录及 bot 范围",
+        "Dashboard JWT sign-in and bot scope"
+      ],
+      "boundary": [
+        "与聊天管理员分开；插件 API 范围不能代替 bot 范围",
+        "Separate from chat admins; plugin API scope does not replace bot scope"
+      ]
+    },
+    {
+      "name": ["自动任务与测试窗口", "Automation and test windows"],
+      "source": [
+        "单独启用的规则、调度及有界开发窗口",
+        "Explicit automation, schedules and bounded test windows"
+      ],
+      "boundary": [
+        "自动审核不要求被审成员是管理员；定时／活动重核验创建者；测试窗口不授予任何管理权限",
+        "Reviewed members need not be admins; schedules/activities recheck creator authority; test windows grant no management authority"
+      ]
+    }
+  ]
+}

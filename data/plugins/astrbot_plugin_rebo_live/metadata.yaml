@@ -1,0 +1,7 @@
+name: astrbot_plugin_rebo_live
+display_name: 热播 Live 助手
+desc: 登录热播账号，通过 Telegram 管理直播间定时消息。
+version: v0.2.0
+author: local
+support_platforms:
+  - telegram

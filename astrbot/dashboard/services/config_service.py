@@ -718,10 +718,21 @@ class ConfigProfileService:
     def get_profile(self, config_id: str) -> dict:
         if config_id not in self.acm.confs:
             raise ValueError(f"Config file {config_id} does not exist")
-        return {
+        result = {
             "config": self.acm.confs[config_id],
             "metadata": ConfigMetadataI18n.convert_to_i18n_keys(CONFIG_METADATA_3),
         }
+        policy = getattr(self.acm, "profile_policy", None)
+        if policy is not None:
+            description = policy.describe(config_id, result["metadata"])
+            if description is not None:
+                result["metadata"] = description["metadata"]
+                result["profile_role"] = {
+                    key: value
+                    for key, value in description.items()
+                    if key != "metadata"
+                }
+        return result
 
     def get_profile_from_dashboard_query(
         self,
@@ -776,6 +787,9 @@ class ConfigProfileService:
                 config[key] = default_conf.get(key, [])
 
         current_config = self.acm.confs[config_id]
+        policy = getattr(self.acm, "profile_policy", None)
+        if policy is not None:
+            policy.validate(config_id, config)
         if (
             not allow_admin_id_change
             and "admins_id" in config
@@ -867,6 +881,9 @@ class ConfigProfileService:
         return "更新成功"
 
     async def delete_profile(self, config_id: str) -> None:
+        policy = getattr(self.acm, "profile_policy", None)
+        if policy is not None:
+            policy.validate_delete(config_id)
         if not await self.acm.delete_conf(config_id):
             raise ValueError("Failed to delete config profile")
         self.core_lifecycle.pipeline_scheduler_mapping.pop(config_id, None)
@@ -1440,20 +1457,49 @@ class BotConfigService:
     def get_bot_stats(self) -> dict:
         return self.core_lifecycle.platform_manager.get_all_stats()
 
-    async def create_bot(self, config: dict) -> None:
+    async def create_bot(self, config: dict, owner: str = "") -> None:
         bot_id = config.get("id")
         if not bot_id:
             raise ValueError("Bot config must have an 'id' field")
-        if self._find_bot(bot_id) is not None:
+        existing = self._find_bot(bot_id)
+        if existing is not None:
+            if (
+                existing.get("type") == config.get("type") == "wangshangliao"
+                and owner
+                and isinstance(config.get("session_ref"), str)
+            ):
+                import hashlib
+
+                from astrbot.core.platform.sources.wangshangliao.storage import Vault
+
+                saved = Vault(bot_id).load() or {}
+                receipt = saved.get("registration", {})
+                if (
+                    receipt.get("owner") == owner
+                    and receipt.get("reference_hash")
+                    == hashlib.sha256(config["session_ref"].encode()).hexdigest()
+                    and config.get("enabled_groups", [])
+                    == existing.get("enabled_groups", [])
+                ):
+                    return
             raise ValueError(f"Bot {bot_id} already exists")
+        if config.get("type") == "wangshangliao":
+            await self.save_wangshangliao(config, owner)
+            return
         ensure_platform_webhook_config(config)
         self.config["platform"].append(config)
         save_config(self.config, self.config, is_core=True)
         await self.core_lifecycle.platform_manager.load_platform(config)
 
-    async def update_bot(self, bot_id: str, config: dict) -> None:
+    async def update_bot(self, bot_id: str, config: dict, owner: str = "") -> None:
         if config.get("id") != bot_id:
             raise ValueError("Bot id cannot be changed")
+        current = self._find_bot(bot_id)
+        if current and current.get("type") == "wangshangliao":
+            await self.save_wangshangliao(config, owner, current)
+            return
+        if config.get("type") == "wangshangliao":
+            raise ValueError("platform_type_change")
         ensure_platform_webhook_config(config)
         for idx, bot in enumerate(self.config.get("platform", [])):
             if bot.get("id") == bot_id:
@@ -1462,6 +1508,225 @@ class BotConfigService:
                 await self.core_lifecycle.platform_manager.reload(config)
                 return
         raise ValueError(f"Bot {bot_id} not found")
+
+    async def save_wangshangliao(
+        self, config: dict, owner: str, current: dict | None = None
+    ) -> None:
+        """Commit a native login reference with rollback on configuration failure.
+
+        Args:
+            config: Public platform settings and optional one-time session reference.
+            owner: Authenticated Dashboard principal.
+            current: Existing configuration when editing or logging in again.
+
+        Raises:
+            ValueError: On invalid fields, identity conflicts or expired references.
+        """
+        import hashlib
+
+        from astrbot.core.platform.sources.wangshangliao.registration import (
+            registrations,
+        )
+        from astrbot.core.platform.sources.wangshangliao.storage import Vault
+
+        allowed = {
+            "id",
+            "type",
+            "enable",
+            "account_id",
+            "nickname",
+            "enabled_groups",
+            "reply_private",
+            "reply_groups",
+            "ai_routes",
+            "proactive_send",
+            "moderation",
+            "developer_test",
+            "session_ref",
+            "login_method",
+            "name",
+        }
+        if set(config) - allowed or config.get("type") != "wangshangliao":
+            raise ValueError("platform_config_fields")
+        if config.get("login_method", "password") not in {"password", "sms"}:
+            raise ValueError("login_method_invalid")
+        groups = config.get("enabled_groups", [])
+        from astrbot.core.platform.sources.wangshangliao.policy import validate_policy
+
+        if type(config.get("reply_private", True)) is not bool:
+            raise ValueError("reply_private_invalid")
+        replies = config.get("reply_groups", {})
+        if not isinstance(replies, dict) or any(
+            not isinstance(group, str)
+            or not group.isascii()
+            or not group.isdigit()
+            or int(group) <= 0
+            or type(enabled) is not bool
+            for group, enabled in replies.items()
+        ):
+            raise ValueError("reply_groups_invalid")
+        if current and "ai_routes" in current:
+            config.setdefault("ai_routes", copy.deepcopy(current["ai_routes"]))
+        routes = config.get("ai_routes", {})
+        if (
+            not isinstance(routes, dict)
+            or set(routes) - {"admin_provider_id", "groups"}
+            or not isinstance(routes.get("admin_provider_id", ""), str)
+            or len(routes.get("admin_provider_id", "")) > 256
+            or not isinstance(routes.get("groups", {}), dict)
+            or len(routes.get("groups", {})) > 100
+            or any(
+                not isinstance(group, str)
+                or group not in groups
+                or not isinstance(provider_id, str)
+                or len(provider_id) > 256
+                for group, provider_id in routes.get("groups", {}).items()
+            )
+        ):
+            raise ValueError("ai_routes_invalid")
+        config["ai_routes"] = {
+            "admin_provider_id": routes.get("admin_provider_id", ""),
+            "groups": dict(routes.get("groups", {})),
+        }
+        # Preserve opt-ins when an older dashboard omits newer policy fields.
+        if current:
+            for field in ("content_rules_since", "semantic", "auto_kick"):
+                if field in current.get("moderation", {}):
+                    config.setdefault("moderation", {}).setdefault(
+                        field, copy.deepcopy(current["moderation"][field])
+                    )
+        validate_policy(config.get("moderation", {}))
+        draft = config.get("developer_test", {})
+        if (
+            not isinstance(draft, dict)
+            or set(draft)
+            - {"sender_instance", "groups", "scopes", "keywords", "seconds", "budget"}
+            or not isinstance(draft.get("sender_instance", ""), str)
+            or len(draft.get("sender_instance", "")) > 256
+            or not isinstance(draft.get("groups", []), list)
+            or any(
+                not isinstance(g, str) or g not in groups
+                for g in draft.get("groups", [])
+            )
+            or not isinstance(draft.get("scopes", []), list)
+            or any(
+                s
+                not in (
+                    "private_commands",
+                    "private_ai",
+                    "group_commands",
+                    "group_ai",
+                    "group_rules",
+                )
+                for s in draft.get("scopes", [])
+            )
+            or not isinstance(draft.get("keywords", []), list)
+            or len(draft.get("keywords", [])) > 10
+            or any(
+                not isinstance(w, str) or not w.startswith("WSL_TEST_") or len(w) > 100
+                for w in draft.get("keywords", [])
+            )
+            or type(draft.get("seconds", 300)) is not int
+            or not 1 <= draft.get("seconds", 300) <= 300
+            or type(draft.get("budget", 10)) is not int
+            or not 1 <= draft.get("budget", 10) <= 10
+        ):
+            raise ValueError("developer_test_invalid")
+        proactive = config.get("proactive_send", {})
+        if (
+            not isinstance(proactive, dict)
+            or type(proactive.get("enabled", False)) is not bool
+        ):
+            raise ValueError("proactive_send_invalid")
+        targets = proactive.get("targets", [])
+        if (
+            not isinstance(targets, list)
+            or len(targets) > 1000
+            or any(
+                not isinstance(target, str) or not target or len(target) > 2048
+                for target in targets
+            )
+        ):
+            raise ValueError("proactive_targets_invalid")
+        config["proactive_send"] = {
+            **proactive,
+            "targets": list(dict.fromkeys(targets)),
+        }
+        if not isinstance(groups, list) or any(
+            not isinstance(group, str)
+            or not group.isascii()
+            or not group.isdigit()
+            or not 0 < int(group) < 1 << 30
+            for group in groups
+        ):
+            raise ValueError("enabled_groups_invalid")
+        config["enabled_groups"] = list(dict.fromkeys(groups))
+        async with registrations.commit_lock:
+            instance = config["id"]
+            tx = None
+            reference = config.get("session_ref")
+            if reference:
+                tx = registrations.claim(owner, instance, reference)
+                if current and current.get("account_id") != tx.account_id:
+                    raise ValueError("account_change_requires_new_instance")
+            elif current is None:
+                raise ValueError("login_required")
+            account = tx.account_id if tx else current["account_id"]
+            if any(
+                bot.get("type") == "wangshangliao"
+                and bot.get("id") != instance
+                and bot.get("account_id") == account
+                for bot in self.config.get("platform", [])
+            ):
+                raise ValueError("account_already_configured")
+            clean = {k: v for k, v in config.items() if k != "session_ref"}
+            clean["account_id"] = account
+            if tx:
+                clean["nickname"] = tx.nickname
+            vault = Vault(instance)
+            previous = vault.load()
+            previous_platforms = list(self.config["platform"])
+            if current:
+                await self.core_lifecycle.platform_manager.terminate_platform(instance)
+            try:
+                if tx:
+                    registrations.claim(owner, instance, reference)
+                    vault.save(
+                        {
+                            **tx.saved,
+                            "registration": {
+                                "owner": owner,
+                                "reference_hash": hashlib.sha256(
+                                    reference.encode()
+                                ).hexdigest(),
+                            },
+                        }
+                    )
+                if current:
+                    self.config["platform"][:] = [
+                        clean if bot.get("id") == instance else bot
+                        for bot in previous_platforms
+                    ]
+                else:
+                    self.config["platform"].append(clean)
+                save_config(self.config, self.config, is_core=True)
+            except BaseException:
+                self.config["platform"][:] = previous_platforms
+                if previous is not None:
+                    vault.save(previous)
+                else:
+                    vault.clear()
+                if current:
+                    await self.core_lifecycle.platform_manager.load_platform(current)
+                raise
+            if tx:
+                code = next(
+                    code
+                    for code, value in registrations.transactions.items()
+                    if value is tx
+                )
+                await registrations.discard(code)
+            await self.core_lifecycle.platform_manager.load_platform(clean)
 
     async def set_bot_enabled(self, bot_id: str, enabled: bool) -> None:
         bot = self._find_bot(bot_id)

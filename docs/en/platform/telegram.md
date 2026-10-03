@@ -1,6 +1,10 @@
 
 # Connecting to Telegram
 
+## Command Menu
+
+The menu includes `/start` and valid Telegram commands from enabled plugins. Built-in commands have Chinese descriptions. Visibility does not grant permission; AstrBot still checks authorization. Failed updates preserve the previous menu and are retried on subsequent registration. The Wangshangliao moderation plugin does not manage Telegram groups.
+
 ## Supported Message Types
 
 > Version v4.15.0.
@@ -37,6 +41,26 @@ Fill in the configuration fields that appear:
 - Bot Token: Your Telegram bot's `token`.
 
 Please ensure your network environment can access Telegram. You may need to configure a proxy using `Settings → Network → Proxy & Dependency Sources → HTTP Proxy`.
+
+## Dedicated Tenant Controller
+
+The local tenant-control integration uses AstrBot for both the controller and
+tenant bot runtimes. Configure these optional fields only on its dedicated
+Telegram adapter:
+
+- `telegram_allowed_updates`: `["message", "pre_checkout_query", "managed_bot", "callback_query"]`.
+  An empty list preserves the previous polling behavior.
+- `telegram_required_plugin`: `astrbot_plugin_tenant_control`. Leave this empty
+  for ordinary bots. The controller waits for the plugin before receiving updates;
+  on unload, the adapter stops reception and drains already queued payment events.
+
+Install the archive built by `integrations/tenant-control` and configure its
+verified operator IDs in AstrBot's plugin settings. The plugin reuses AstrBot's
+Telegram client, command pipeline and lifecycle; it does not start another poller.
+This integration requires this repository's adapter extensions, not an arbitrary
+upstream image. Keep the controller isolated from production and tenant instances.
+Rotate any exposed token before enabling it. See the integration README for the
+shared DB/key configuration and separate privileged deployment worker.
 
 ## Streaming Output
 

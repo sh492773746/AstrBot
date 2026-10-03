@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>旺商聊开发说明</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊接入器开发说明</h1>
+<p>更新：2026-10-02。使用入口见<a href="wangshangliao-index.html">文档目录</a>。</p>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>责任</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>adapter.py</code> / <code>event.py</code></td>
+<td>生命周期、标准事件、可信路由、回复及最终能力入口</td>
+</tr>
+<tr>
+<td><code>business.py</code> / <code>wire.py</code></td>
+<td>业务 HTTP、加解密、签名和严格响应验证</td>
+</tr>
+<tr>
+<td><code>nim.py</code></td>
+<td>NIM 连接、文本封装、目录及邀请归属</td>
+</tr>
+<tr>
+<td><code>storage.py</code></td>
+<td>密封会话、收发账本、去重、持久化调度与保留</td>
+</tr>
+<tr>
+<td><code>policy.py</code> / <code>moderation.py</code></td>
+<td>配置校验、白名单、原生角色、目标保护及回执</td>
+</tr>
+<tr>
+<td><code>automatic.py</code></td>
+<td>自动禁言计次、三次禁言后第四次违规踢出与未知结果隔离</td>
+</tr>
+<tr>
+<td><code>reply_recall.py</code></td>
+<td>对应群功能回复的持久化20秒撤回任务</td>
+</tr>
+<tr>
+<td><code>schedule_store.py</code></td>
+<td>每日计划、一次确认、执行与规则审计</td>
+</tr>
+<tr>
+<td><code>test_window.py</code></td>
+<td>接收端单向限时窗口；不授予管理权限</td>
+</tr>
+<tr>
+<td><code>text.py</code></td>
+<td>出站纯文本、有限遮盖与显式推理标签过滤</td>
+</tr>
+</tbody>
+</table>
+<p>业务决策属于内置 <code>wangshangliao_moderation</code> 插件。不要在传输层解析自然语言，
+不要让模型调用任意协议路径，不能复用其他平台入口绕过本平台检查。</p>
+<h2>接口不变量</h2>
+<ul>
+<li>业务 UID、显示账号、NIM ID、业务群 ID、显示群号不可互换；目录失败则失败关闭。</li>
+<li>入站认证并落库后确认；同会话顺序执行；重启不重放未知业务动作。</li>
+<li>最终执行前重查账号、群启用、动作授权、平台角色与目标身份。</li>
+<li><code>accepted</code> 不冒充 <code>verified</code>；<code>unknown</code> 不用新操作 ID 自动再发。</li>
+<li>人工禁言不计升级；群主、平台管理员与受管机器人保持保护。</li>
+<li>测试窗口仅接收端有效，不能绕过回复开关或管理权限。</li>
+<li>输出过滤不等于输入、历史或日志脱敏；禁止记录协议凭证与完整私密会话。</li>
+</ul>
+<h2>开发与发布</h2>
+<p>项目根目录运行 <code>.venv/bin/python -m pytest -q tests/test_wangshangliao_*.py</code>。
+离线回归使用模拟上游和隔离账本；真实脚本必须另行核对副作用。
+接口、权限或持久化变更同时跑插件、后台与前端对应测试。</p>
+<p>接入器/框架代码更新需要重启 AstrBot，单独插件热重载不更新核心模块。
+重启关闭测试窗口并丢弃内存 AI 配置草案，不清除账本。
+发布迁移保留新增审计，详见<a href="wangshangliao-maintenance.html">维护说明</a>。</p>
+</body></html>

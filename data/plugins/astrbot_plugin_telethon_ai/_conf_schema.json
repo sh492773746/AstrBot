@@ -1,0 +1,8 @@
+{
+  "control_platform_id": {"type": "string", "description": "运维总控平台 ID；新安装使用 AI 账号服务 Bot（telethon_ai_service），角色为 controller", "default": "VIP_DHBot"},
+  "admin_ids": {"type": "list", "description": "仅私聊接受的超管数字 ID，首次安装必须填写", "default": []},
+  "provision_profiles": {"type": "bool", "description": "为私有账号注册表创建隔离配置和默认关闭的平台", "default": true},
+  "controller_mode": {"type": "string", "description": "standalone 为唯一总控；companion 仅用于旧总控迁移期", "default": "standalone"},
+  "support_text": {"type": "string", "description": "客户支持联系方式", "default": "请联系平台管理员"},
+  "model_provider_id": {"type": "string", "description": "初始账号模型 ID；为空时采用总控配置档的模型", "default": ""}
+}

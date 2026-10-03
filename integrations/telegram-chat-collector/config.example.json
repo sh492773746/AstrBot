@@ -1,0 +1,8 @@
+{
+  "api_id": 0,
+  "api_hash": "REPLACE_WITH_TELEGRAM_API_HASH",
+  "api_token": "REPLACE_WITH_RANDOM_SECRET_AT_LEAST_32_CHARACTERS",
+  "data_dir": "var",
+  "port": 6190,
+  "proxy": null
+}

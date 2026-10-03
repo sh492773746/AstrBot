@@ -310,11 +310,11 @@ async def send_im_message(
 ):
     body = _model_dict(payload)
     try:
-        await service.send_message(body)
+        result = await service.send_message(body)
     except OpenApiServiceError as exc:
         raise ApiError(str(exc)) from exc
 
-    return ok()
+    return ok(result)
 
 
 @router.post("/im/message", include_in_schema=False)
@@ -333,3 +333,35 @@ async def list_im_bots(
     service: OpenApiService = Depends(get_service),
 ):
     return ok(service.get_bots())
+
+
+@router.get("/im/operations/{operation_id}")
+async def get_im_operation(
+    operation_id: str,
+    platform_id: str,
+    _auth: AuthContext = Depends(require_im_scope),
+    service: OpenApiService = Depends(get_service),
+):
+    """Read a durable operation without sending another message.
+
+    Args:
+        operation_id: Stable caller operation ID.
+        platform_id: Owning bot instance.
+        _auth: Authenticated IM principal.
+        service: Running platform service.
+
+    Returns:
+        Stored status, or not_found when no operation exists.
+    """
+    platform = next(
+        (
+            p
+            for p in service.platform_manager.platform_insts
+            if p.meta().id == platform_id
+        ),
+        None,
+    )
+    if platform is None or not getattr(platform, "supports_operation_ids", False):
+        raise ApiError("operation_query_unsupported")
+    result = await platform.ledger.receipt("proactive/" + operation_id)
+    return ok(result or {"status": "not_found"})

@@ -1,6 +1,6 @@
 <template>
   <div class="config-workspace">
-    <nav class="config-workspace__nav" :aria-label="tm('title')">
+    <nav v-if="visibleSections.length" class="config-workspace__nav" :aria-label="tm('title')">
       <button
         v-for="section in visibleSections"
         :key="section.key"
@@ -25,6 +25,7 @@
           :metadata="section.value.metadata"
           :config-data="config_data"
           :search-keyword="searchKeyword"
+          :runner-locked="profileRole?.runner_locked || false"
         />
 
         <section
@@ -70,7 +71,7 @@
         </section>
       </template>
 
-      <div v-if="visibleSections.length === 0" class="config-workspace__empty">
+      <div v-if="visibleSections.length === 0 && (!profileRole || searchKeyword)" class="config-workspace__empty">
         <v-icon size="34">mdi-magnify-close</v-icon>
         <span>{{ tm('search.noResult') }}</span>
       </div>
@@ -132,6 +133,10 @@ export default {
     searchKeyword: {
       type: String,
       default: ''
+    },
+    profileRole: {
+      type: Object,
+      default: null
     }
   },
   setup() {

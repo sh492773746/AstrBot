@@ -150,6 +150,7 @@ class Main(star.Star):
     @filter.platform_adapter_type(
         filter.PlatformAdapterType.ALL,
         priority=maxsize - 2,
+        context_only=True,
     )
     async def persist_group_message(self, event: AstrMessageEvent) -> None:
         """Persist an incoming message for an enabled group session.
@@ -193,7 +194,7 @@ class Main(star.Star):
         except Exception:
             logger.exception("Failed to persist an incoming group message.")
 
-    @filter.platform_adapter_type(filter.PlatformAdapterType.ALL)
+    @filter.platform_adapter_type(filter.PlatformAdapterType.ALL, context_only=True)
     async def on_message(self, event: AstrMessageEvent):
         """群聊上下文感知"""
         message_components = _iter_message_components(event)

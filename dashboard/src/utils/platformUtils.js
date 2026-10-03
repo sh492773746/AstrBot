@@ -12,7 +12,9 @@ import mattermostIcon from '@/assets/images/platform_logos/mattermost.svg?no-inl
  * @returns {string|undefined} 图标URL
  */
 export function getPlatformIcon(name) {
-  if (name === 'webchat') {
+  if (name === 'wangshangliao') {
+    return new URL('@/assets/images/platform_logos/wangshangliao.png', import.meta.url).href
+  } else if (name === 'webchat') {
     return '/favicon.svg'
   } else if (name === 'aiocqhttp') {
     return new URL('@/assets/images/platform_logos/onebot.png', import.meta.url).href
@@ -63,6 +65,7 @@ export function getTutorialLink(platformType) {
     "aiocqhttp": "https://docs.astrbot.app/platform/aiocqhttp.html",
     "wecom": "https://docs.astrbot.app/platform/wecom.html",
     "weixin_oc": "https://docs.astrbot.app/platform/weixin_oc.html",
+    "wangshangliao": "./local-docs/wangshangliao.html",
     "wecom_ai_bot": "https://docs.astrbot.app/platform/wecom_ai_bot.html",
     "lark": "https://docs.astrbot.app/platform/lark.html",
     "telegram": "https://docs.astrbot.app/platform/telegram.html",

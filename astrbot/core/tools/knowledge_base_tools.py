@@ -69,7 +69,7 @@ async def retrieve_knowledge_base(
                 f"[知识库] 会话 {umo} 配置的以下知识库无效: {invalid_kb_ids}",
             )
         if not kb_names:
-            return None
+            raise ValueError("Configured session knowledge bases are unavailable")
         logger.debug(f"[知识库] 使用会话级配置，知识库数量: {len(kb_names)}")
     else:
         kb_names = config.get("kb_names", [])
@@ -81,9 +81,10 @@ async def retrieve_knowledge_base(
         return None
 
     all_kbs = [await kb_mgr.get_kb_by_name(kb) for kb in kb_names]
+    if any(kb is None for kb in all_kbs):
+        raise ValueError("Configured knowledge base is missing or not loaded")
     if check_all_kb(all_kbs):
-        logger.debug("所配置的所有知识库全为空，跳过检索过程")
-        return None
+        raise ValueError("Configured knowledge bases contain no indexed documents")
 
     logger.debug(f"[知识库] 开始检索知识库，数量: {len(kb_names)}, top_k={top_k}")
     kb_context = await kb_mgr.retrieve(

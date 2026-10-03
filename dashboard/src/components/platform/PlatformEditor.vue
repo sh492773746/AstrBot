@@ -7,7 +7,14 @@
           <div class="bot-editor__title">{{ draft.id || platform.id }}</div>
           <div class="bot-editor__subtitle">
             {{ draft.type || platform.type }}
-            <template v-if="runtimeStat?.status">
+            <template
+              v-if="
+                draft.type === 'wangshangliao' && runtimeStat?.connection_state
+              "
+            >
+              · {{ tm(`wangshangliao.${runtimeStat.connection_state}`) }}
+            </template>
+            <template v-else-if="runtimeStat?.status">
               · {{ tm(`runtimeStatus.${runtimeStat.status}`) }}
             </template>
           </div>
@@ -54,9 +61,24 @@
         >
           {{ tm("workspace.save") }}
         </v-btn>
+        <v-btn
+          v-if="draft.type === 'wangshangliao'"
+          class="bot-editor__guide"
+          variant="text"
+          rounded="xl"
+          href="local-docs/wangshangliao-start.html"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          使用教程 · PDF
+        </v-btn>
       </div>
     </div>
 
+    <p v-if="!loading && draft.type === 'wangshangliao'" class="text-caption text-medium-emphasis px-6 my-2" style="flex: 0 0 auto" role="status">
+      {{ isModified ? '有未保存更改，请点击保存更改。' : '配置已保存' }}
+    </p>
+    <p v-for="(state, group) in runtimeStat?.group_directory_state || {}" :key="group" class="text-caption px-6 my-1" style="overflow-wrap: anywhere">{{ groupDirectoryNames[draft.id]?.[group] || "群名待加载" }}（{{ group }}）· {{ state.complete ? "目录完整 / Complete" : "目录不可用 / Unavailable" }} {{ state.error || "" }}</p>
     <v-divider />
 
     <div v-if="loading" class="bot-editor__loading">
@@ -84,7 +106,15 @@
           </v-btn>
         </div>
 
+        <WangshangliaoLogin
+          v-if="draft.type === 'wangshangliao'"
+          :key="draft.id"
+          v-model="draft"
+          @group-directory="directory => groupDirectoryNames[directory.instance] = directory.names"
+          existing
+        />
         <AstrBotConfig
+          v-else
           :iterable="draft"
           :metadata="metadata['platform_group']?.metadata"
           metadata-key="platform"
@@ -166,9 +196,13 @@
             </div>
           </div>
 
+          <v-alert v-if="draft.type === 'wangshangliao'" type="info" variant="tonal" class="mb-3">
+            {{ tm('wangshangliao.privateDirectoryIncomplete') }}
+          </v-alert>
           <div class="route-builder__controls">
             <v-autocomplete
               v-model="pendingSessionUmo"
+              :menu-props="{ maxHeight: 360 }"
               :items="availableSessionUmos"
               :loading="loadingSessions"
               :label="tm('workspace.routes.sessionLabel')"
@@ -403,6 +437,7 @@ import {
   fileApi,
   sessionApi,
 } from "@/api/v1";
+import WangshangliaoLogin from "./WangshangliaoLogin.vue";
 import AstrBotConfig from "@/components/shared/AstrBotConfig.vue";
 import ConfigProfileDrawer from "@/components/config/ConfigProfileDrawer.vue";
 import UmoDisplay from "@/components/shared/UmoDisplay.vue";
@@ -453,6 +488,7 @@ function openConfigDrawer(configId) {
 }
 
 const draft = ref({});
+const groupDirectoryNames = ref({});
 const originalPlatformId = ref("");
 const initialConfigSnapshot = ref("");
 const initialRouteSnapshot = ref("");
@@ -523,6 +559,8 @@ const isModified = computed(
     JSON.stringify(draft.value) !== initialConfigSnapshot.value ||
     currentRouteSnapshot.value !== initialRouteSnapshot.value,
 );
+
+defineExpose({ isModified });
 
 const hasInvalidAdvancedRoute = computed(() =>
   advancedRoutes.value.some(
@@ -975,6 +1013,10 @@ function showError(error) {
   flex-wrap: wrap;
   gap: 4px;
   justify-content: flex-end;
+}
+
+.bot-editor__guide {
+  margin-inline-start: auto;
 }
 
 .bot-editor__loading {

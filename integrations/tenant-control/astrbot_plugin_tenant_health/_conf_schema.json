@@ -1,0 +1,7 @@
+{
+  "platform_id": {
+    "type": "string",
+    "description": "Tenant Telegram platform ID",
+    "default": ""
+  }
+}

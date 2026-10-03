@@ -27,6 +27,7 @@ class PlatformAdapterType(enum.Flag):
     WEIXIN_OC = enum.auto()
     MATTERMOST = enum.auto()
     WEBCHAT = enum.auto()
+    WANGSHANGLIAO = enum.auto()
     ALL = enum.auto()
 
 
@@ -35,6 +36,7 @@ ADAPTER_NAME_2_TYPE = {
     "qq_official": PlatformAdapterType.QQOFFICIAL,
     "qq_official_webhook": PlatformAdapterType.QQOFFICIAL_WEBHOOK,
     "telegram": PlatformAdapterType.TELEGRAM,
+    "wangshangliao": PlatformAdapterType.WANGSHANGLIAO,
     "wecom": PlatformAdapterType.WECOM,
     "wecom_ai_bot": PlatformAdapterType.WECOM_AI_BOT,
     "lark": PlatformAdapterType.LARK,

@@ -1,0 +1,7 @@
+name: astrbot_plugin_domain_analytics
+display_name: 域名访问人数等监控机器人
+desc: 域名、热播及 Fragment 统计入口，复用现有统计服务和授权数据。
+version: v1.0.0
+author: local
+support_platforms:
+  - telegram

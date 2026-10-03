@@ -129,7 +129,8 @@ async def run_agent(
     tool_name_by_call_id: dict[str, str] = {}
     buffered_llm_chains: list[MessageChain] = []
     can_buffer_llm_result = _should_buffer_llm_result(
-        buffer_intermediate_messages,
+        buffer_intermediate_messages
+        or astr_event.get_extra("buffer_intermediate_messages") is True,
         stream_to_general,
         agent_runner,
     )

@@ -26,6 +26,10 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  hidePersonaPreview: {
+    type: Boolean,
+    default: false
+  },
   pluginName: {
     type: String,
     default: ''
@@ -336,7 +340,7 @@ function getSpecialSubtype(value) {
         </v-row>
 
         <v-row
-          v-if="!itemMeta?.invisible && itemMeta?._special === 'select_persona'"
+          v-if="!hidePersonaPreview && !itemMeta?.invisible && itemMeta?._special === 'select_persona'"
           class="persona-preview-row"
         >
           <v-col cols="12" class="persona-preview-display">
@@ -423,7 +427,7 @@ function getSpecialSubtype(value) {
               </v-row>
 
               <v-row
-                v-if="!itemMeta?.invisible && itemMeta?._special === 'select_persona'"
+                v-if="!hidePersonaPreview && !itemMeta?.invisible && itemMeta?._special === 'select_persona'"
                 class="persona-preview-row"
               >
                 <v-col cols="12" class="persona-preview-display">

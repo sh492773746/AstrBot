@@ -171,6 +171,7 @@ export default {
       this.eventSource = new EventSourcePolyfill(logApi.liveUrl(), {
         headers: {
           Authorization: token ? `Bearer ${token}` : "",
+          ...(this.lastEventId ? { "Last-Event-ID": this.lastEventId } : {}),
         },
         heartbeatTimeout: 300000,
         withCredentials: true,
@@ -236,7 +237,7 @@ export default {
       const touched = new Set();
       newTraces.forEach((trace) => {
         if (!trace.span_id) return;
-        const recordKey = `${trace.time}-${trace.span_id}-${trace.action}`;
+        const recordKey = JSON.stringify([trace.time, trace.span_id, trace.action, trace.fields]);
         let event = this.eventIndex[trace.span_id];
         if (!event) {
           event = {

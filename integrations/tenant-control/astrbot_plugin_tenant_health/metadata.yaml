@@ -1,0 +1,6 @@
+name: astrbot_plugin_tenant_health
+display_name: Tenant Transport Health
+desc: Local heartbeat for headless tenant instances.
+version: v0.1.0
+author: local
+repo: ""

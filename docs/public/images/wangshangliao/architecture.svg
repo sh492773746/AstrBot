@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8" fill="#4c6470"/></marker></defs>
+<rect width="1200" height="800" fill="#fff"/>
+<style>text{font-family:Arial,sans-serif;fill:#202a30;font-size:18px}.title{font-size:30px;font-weight:bold}.head{font-size:21px;font-weight:bold}.small{font-size:16px}.box{fill:#f1f8f7;stroke:#278477;stroke-width:2;rx:8}.line{fill:none;stroke:#4c6470;stroke-width:2;marker-end:url(#arrow)}</style>
+<text x="40" y="48" class="title">Wangshangliao + AstrBot</text>
+<text x="40" y="78">Native Python integration | Login → SAVE → Connect</text>
+<rect class="box" x="40" y="120" width="275" height="225"/>
+<text x="60" y="153" class="head">Wangshangliao Cloud</text>
+<text x="60" y="192">Signed Business API</text><text x="60" y="223" class="small">Login / Groups / Moderation</text>
+<text x="60" y="273">NIM WebSocket</text><text x="60" y="305" class="small">Text messages / ACK</text>
+<rect class="box" x="375" y="120" width="360" height="225"/>
+<text x="395" y="153" class="head">Native Python Adapter</text>
+<text x="395" y="190">Encrypted session vault</text><text x="395" y="225">Business ID ↔ NIM ID</text>
+<text x="395" y="260">Persistent inbox / outbox</text><text x="395" y="296" class="small">Dedup · Unknown: no blind retry</text>
+<path class="line" d="M315 195H375"/><path class="line" d="M375 280H315"/>
+<rect class="box" x="795" y="120" width="365" height="225"/>
+<text x="815" y="153" class="head">AstrBot Event Pipeline</text><text x="815" y="190">Session config → Persona</text>
+<text x="815" y="225">Knowledge base → LLM</text><text x="815" y="260" class="small">Embedding + Rerank</text><text x="815" y="296">Text reply → Outbox → NIM</text>
+<path class="line" d="M735 195H795"/><path class="line" d="M795 280H735"/>
+<rect class="box" x="40" y="410" width="330" height="200"/>
+<text x="60" y="444" class="head">Dashboard / Plugin page</text><text x="60" y="482">Login / Groups / Replies</text><text x="60" y="519">Effective admins_id profile</text><text x="60" y="556">Saved per-group action grants</text><text x="60" y="588" class="small">No automatic privilege grants</text>
+<rect class="box" x="420" y="410" width="370" height="200"/>
+<text x="440" y="444" class="head">Authorization + Automation</text><text x="440" y="482">Commands / AI audit + fallback</text><text x="440" y="519">Live identity + role checks</text><text x="440" y="556">Three accepted auto mutes → kick</text><text x="440" y="588" class="small">Protected roles / Unknown: no retry</text>
+<path class="line" d="M370 510H420"/><path class="line" d="M605 410V365H177V345"/>
+<rect class="box" x="840" y="410" width="320" height="200"/>
+<text x="860" y="444" class="head">Shared Infrastructure</text><text x="860" y="482">AstrBot logger → LogBroker</text><text x="860" y="519">Dashboard logs</text><text x="860" y="556">Operation ledger / Results</text><text x="860" y="588" class="small">Platform admin rights still required</text>
+<path class="line" d="M790 510H840"/>
+<rect x="40" y="655" width="1120" height="105" rx="8" fill="#fff8e8" stroke="#bb8423" stroke-width="2" stroke-dasharray="8 5"/>
+<text x="60" y="690" class="head">Three AI routes / Separate authority</text><text x="60" y="725">Group customer service · Admin private tools + confirmed drafts · Tool-free content audit</text>
+</svg>

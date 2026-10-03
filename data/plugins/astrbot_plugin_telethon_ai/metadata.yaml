@@ -1,0 +1,6 @@
+name: astrbot_plugin_telethon_ai
+display_name: AI 账号服务总控
+desc: 总控与客户机器人、基础群管、托管开通、账号网关、租户权限及额度的一体化插件。
+version: v0.5.2
+author: local
+astrbot_version: ">=4.28.1,<5"

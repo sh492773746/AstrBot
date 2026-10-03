@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wangshangliao adapter</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">Documentation</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>Native Wangshangliao Adapter</h1>
+<p>Updated October 2, 2026. Start with the <a href="wangshangliao-start-en.html">beginner guide</a>.
+The <a href="wangshangliao-index.html">documentation index</a> links the complete Chinese command,
+operations and acceptance references.</p>
+<h2>Responsibilities And Deployment</h2>
+<p>The Python adapter runs inside AstrBot: business authentication, sealed session recovery,
+NIM connectivity, verified directories, text transport, fixed moderation capabilities,
+authorization, idempotency and receipts. No Rust bridge, DH workbench or pairing token is
+required. AstrBot owns profiles, administrators, models, personas and knowledge bases.
+The built-in plugin owns commands, auditing, rankings, activities and daily schedules.</p>
+<p><img src="images/architecture-layers.svg" alt="Adapter layers"></p>
+<p>Use Python 3.12+ and <code>uv sync --extra wsl</code>; build the dashboard with <code>pnpm install</code>,
+<code>pnpm generate:api</code> and <code>pnpm build</code> in <code>dashboard</code>. The serialized local captcha worker
+needs Node.js and OpenCV/ONNX, starts on demand and needs no GPU. Docker builds need
+the project's <code>INSTALL_WSL</code> argument. Reinstall dependencies on the target OS/architecture;
+available build entry points do not prove every architecture was tested.</p>
+<p>Set <code>ASTRBOT_WANGSHANGLIAO_CONFIG</code> to a protected deployment JSON file:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Contract</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>origin</code></td>
+<td>HTTPS service origin</td>
+</tr>
+<tr>
+<td><code>headers</code></td>
+<td>Protocol request headers</td>
+</tr>
+<tr>
+<td><code>metadata</code></td>
+<td>Fourteen integers</td>
+</tr>
+<tr>
+<td><code>signing_seed</code>, <code>body_key</code>, <code>message_key</code>, <code>server_key</code></td>
+<td>Standard Base64, each decoding to 32 bytes</td>
+</tr>
+<tr>
+<td><code>captcha_id</code>, <code>app_key</code>, <code>device_id</code></td>
+<td>Valid deployment parameters</td>
+</tr>
+</tbody>
+</table>
+<p>Use mode <code>0600</code> on Linux/macOS or a service-account-only ACL on Windows. Never publish
+credentials. Missing/invalid configurations return <code>deployment_missing</code>/<code>deployment_invalid</code>.
+Legacy configs without <code>message_key</code> may authenticate but message startup returns
+<code>message_key_missing</code>. When the variable is unset, an approved sealed import under
+<code>data/platform_data/wangshangliao/deployment/</code> may load. Invalid explicit paths do not fall
+back. Importing protocol configuration does not import passwords or account sessions.</p>
+<p><code>ASTRBOT_YIDUN_SOLVER_URL</code> unset or <code>builtin</code> uses the local solver; empty means manual
+verification; external HTTP remains a compatibility option. Automatic failure retains
+manual recovery. <code>.venv/bin/python scripts/check_wangshangliao.py</code> is offline preflight,
+not live acceptance.</p>
+<h2>Login And Identity</h2>
+<p>Create/select a bot, complete password/SMS login and device verification, select groups/profile
+and save within the ten-minute login transaction. Authentication, saved configuration and
+an online NIM connection are separate states. Empty enabled groups disable group handling,
+not necessarily private chat. Disable-and-save retains recovery credentials; logout removes
+them but not ledgers. Re-login stops the old connection. Stop old automation before migration.</p>
+<p>Instance IDs, business UIDs, display accounts, business group IDs, display group numbers and
+NIM IDs differ. Administrators and native <code>At.qq</code> use business UIDs; APIs/grants use business
+group IDs. Nicknames and typed mentions do not identify targets. Incomplete/inconsistent
+directories prevent moderation instead of authorizing actions from partial mappings.</p>
+<pre><code class="language-text">BOT_INSTANCE:GroupMessage:BOT_BUSINESS_UID/GROUP_BUSINESS_ID
+BOT_INSTANCE:FriendMessage:BOT_BUSINESS_UID/private/PEER_BUSINESS_UID/BASE64URL_NIM_ID
+</code></pre>
+<p>Choose known authenticated conversations, never fabricate UMO. Local known peers are not
+a complete cloud directory. Group AI requires a native mention of the current bot.
+Fixed commands match the entire message without <code>/</code>, <code>群管</code> or a mention.
+Quote decoration degrades to text/native mentions, not a quote bubble. Media transport
+is outside current capability.</p>
+<h2>Three AI Routes And Authorization</h2>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Provider</th>
+<th>Persona / knowledge</th>
+<th>Management tools</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Member or admin mentioning the bot in a group</td>
+<td>Group <code>customer_provider_id</code></td>
+<td>Existing group session</td>
+<td>No Wangshangliao management tool</td>
+</tr>
+<tr>
+<td>Ordinary private consultation</td>
+<td>Current private model</td>
+<td>Existing private profile</td>
+<td>No Wangshangliao management tool</td>
+</tr>
+<tr>
+<td>Authenticated admin private chat</td>
+<td>Instance <code>admin_provider_id</code></td>
+<td>Existing private profile</td>
+<td>Fixed authorized tool</td>
+</tr>
+<tr>
+<td>Content audit</td>
+<td><code>moderation.semantic.provider_id</code></td>
+<td>Separate prompt and bounded same-group context</td>
+<td><code>tools=None</code></td>
+</tr>
+</tbody>
+</table>
+<p>Blank provider choices fall back to the corresponding session model. Administrative natural
+language needs a tool-capable model and persona access to <code>wsl_private_management</code>.
+Other persona tools are not globally disabled. Ordinary users' fixed private commands,
+including help, permissions and personal invitations, return <code>无权限</code>; ordinary consultation
+follows the reply switch. Group administrators still receive customer service when mentioning.</p>
+<p>Private-only fixed commands sent in groups are consumed silently: no private-chat guidance,
+execution or customer-agent fallback. Help aliases and content-mode administrator group kicks
+are also silent. Public rankings/activity queries and permitted group actions retain existing replies.</p>
+<p>Manage administrators in the effective profile's <code>admins_id</code>, optionally selecting known
+private conversations by display name. Authorization uses exact UIDs. Dashboard login,
+chat administrators, upstream roles, action grants and proactive destinations are separate.
+Natural-language configuration requires a before/after preview and a new private confirmation.
+It cannot grant authority or credentials, or punish as a configuration side effect.
+See the plugin reference for field scopes and the additional schedule confirmation.</p>
+<p>Saved <code>ai_routes.groups</code> maps business group IDs directly to provider-ID <strong>strings</strong>.
+<code>customer_provider_id</code> is the page/API input name, not a nested saved-group object.
+<code>reply_private</code> and unspecified <code>reply_groups</code> default true; enabled groups are still required.
+<code>proactive_send.enabled</code> and moderation booleans default false.
+Audit timeout defaults12 seconds (1..30), context count defaults20 (1..50),
+cooldown defaults60 seconds (10..86400). Keywords: at most50 per list,100 characters each.</p>
+<h2>Sending, Persistence And Output</h2>
+<p>Proactive sending defaults off and needs the switch plus exact destination grants.
+<code>private_peer_unknown</code> requires a real authenticated conversation, not synthetic records.
+Managed-bot tests additionally need a receiving-side window.</p>
+<p>Authenticated <code>POST /api/v1/im/messages</code> uses a known <code>umo</code> and components: <code>plain</code> for
+text and <code>at.qq</code> for a <strong>string business UID</strong>, not NIM/nickname. Follow its operation-ID
+contract; query <code>GET /api/v1/im/operations/{operation_id}?platform_id=BOT_INSTANCE</code>,
+never resend to check delivery. <code>accepted</code> is not delivery or readback; <code>verified</code> requires
+capability-specific verification; <code>unknown</code> is not blindly retried; <code>needs_review</code> retains
+interrupted processing without regenerating.</p>
+<p>IM access needs Dashboard JWT or supported <code>im</code>-scoped API authentication. Use a stable
+caller-owned <code>operation_id</code> (1..256 characters) for each business operation; do not change
+content under an old ID or use a new ID to blindly retry an uncertain request.</p>
+<p>Storage is under <code>data/platform_data/wangshangliao/&lt;SHA256_INSTANCE_ID&gt;/</code>, including
+<code>session.key</code>, <code>session.sealed</code> and message/moderation/cards/activities/schedule databases.
+Same-host sealing does not protect against the host administrator. Protect backups as
+credentials. Messages persist before ACK; at most16 concurrent sessions/1,024 active queued
+sessions, persistent overflow and same-session order.</p>
+<p>Applicable group feature replies are recalled twenty seconds after each accepted segment.
+Lottery announcements, cancellation notices, results, signup and status replies are exempt.
+This covers command/ranking/activity/violation replies, not private messages, ordinary AI,
+user commands or arbitrary proactive messages. Jobs persist; over-five-minute overdue jobs
+expire; uncertain attempts are not retried. Member-message recall separately needs <code>recall</code>.</p>
+<p>AI output becomes plain text, preserving links/native mentions and disabling text-to-image
+for those results. Paired <code>think/thinking/thought/analysis</code> blocks, leading unclosed tags and
+orphan closing tags are filtered. This does not cover every streaming path/unlabeled reasoning
+and may leave an empty answer. Limited credential/contact masking is not DLP or input/history/log
+sanitization.</p>
+<h2>Testing And Troubleshooting</h2>
+<p>Managed bots, including disabled instances, are excluded by default. Configure a window on
+the <strong>receiving bot</strong>, with the sender as source. Saving scope does not start the window.
+Explicitly activate it; at most300 seconds/ten inbound events, in-memory, invalid after
+restart/stop/account replacement. Reverse traffic remains excluded. Private AI, private/group
+commands and group rules are separate; group rules use <code>WSL_TEST_</code> in a specified group.
+Windows grant no authority and do not replace ordinary external-account acceptance.</p>
+<p>For silence check receiving direction, saved replies, native mentions, <code>ignored_bot</code>, window
+and effective profile. For private denial distinguish fixed commands from consultation.
+For blank pages check generated assets, browser errors and login proxies; do not loosen iframe
+sandbox. Missing activity/schedule routes require matching running backend/plugin/page versions.
+For unknown actions/backlog inspect durable results, do not delete databases or replay actions.</p>
+<p>October2 offline regression found three formatting failures involving native-mention spacing
+and ranking line breaks. They are recorded in acceptance, not repaired by this documentation update.</p>
+<p>See <a href="wangshangliao-testing.html">acceptance</a> and
+<a href="wangshangliao-maintenance.html">maintenance</a>. Offline tests/historical screenshots do not
+prove full live isolation, peer delivery or continuous-operation stability.</p>
+</body></html>

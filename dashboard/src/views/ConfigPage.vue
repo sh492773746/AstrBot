@@ -69,17 +69,23 @@
 
       <v-slide-y-transition mode="out-in">
         <div v-if="(selectedConfigID || isSystemConfig) && fetched" :key="configContentKey" class="config-content" style="width: 100%;">
+          <ConfigRoleSummary
+            v-if="profileRole"
+            :role="profileRole"
+            :config-data="config_data"
+          />
           <!-- 可视化编辑 -->
           <AstrBotCoreConfigWrapper
             :metadata="metadata"
             :config_data="config_data"
             :search-keyword="configSearchKeyword"
+            :profile-role="profileRole"
           />
         </div>
       </v-slide-y-transition>
 
       <!-- 浮动按钮放在 transition 外部 -->
-      <template v-if="(selectedConfigID || isSystemConfig) && fetched">
+      <template v-if="(selectedConfigID || isSystemConfig) && fetched && (!profileRole || profileRole.editable)">
         <v-tooltip :text="tm('actions.save')" location="left">
           <template v-slot:activator="{ props }">
             <v-btn v-bind="props" icon="mdi-content-save" size="x-large" style="position: fixed; right: 52px; bottom: 52px;"
@@ -96,7 +102,7 @@
           </template>
         </v-tooltip>
 
-        <v-tooltip text="测试当前配置" location="left" v-if="!isSystemConfig">
+        <v-tooltip text="测试当前配置" location="left" v-if="!isSystemConfig && !profileRole">
           <template v-slot:activator="{ props }">
             <v-btn v-bind="props" icon="mdi-chat-processing" size="x-large"
               style="position: fixed; right: 52px; bottom: 196px;" color="primary"
@@ -259,6 +265,7 @@
 <script>
 import { configProfileApi, systemConfigApi } from '@/api/v1';
 import AstrBotCoreConfigWrapper from '@/components/config/AstrBotCoreConfigWrapper.vue';
+import ConfigRoleSummary from '@/components/config/ConfigRoleSummary.vue';
 import ConfigProfileMenu from '@/components/config/ConfigProfileMenu.vue';
 import StandaloneChat from '@/components/chat/StandaloneChat.vue';
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
@@ -275,6 +282,7 @@ export default {
   name: 'ConfigPage',
   components: {
     AstrBotCoreConfigWrapper,
+    ConfigRoleSummary,
     ConfigProfileMenu,
     VueMonacoEditor,
     StandaloneChat,
@@ -418,6 +426,7 @@ export default {
       },
       fetched: false,
       metadata: {},
+      profileRole: null,
       save_message_snack: false,
       save_message: "",
       save_message_success: "",
@@ -571,6 +580,7 @@ export default {
         this.lastSavedConfigSnapshot = this.getConfigSnapshot(this.config_data);
         this.fetched = true
         this.metadata = res.data.data.metadata;
+        this.profileRole = res.data.data.profile_role || null;
         this.configContentKey += 1;
         // 获取配置后更新
           this.$nextTick(() => {

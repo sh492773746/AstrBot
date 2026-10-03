@@ -66,6 +66,20 @@ class HelpCommand:
 
     async def help(self, event: AstrMessageEvent) -> None:
         """查看帮助"""
+        if event.get_platform_name() == "wangshangliao":
+            from astrbot.builtin_stars.wangshangliao_moderation.commands import (
+                HELP,
+            )
+
+            event.set_extra(
+                "wsl_command_result", bool(event.get_extra("wsl_test_scope"))
+            )
+            try:
+                if event.is_private_chat():
+                    await event.send(event.plain_result(HELP))
+            finally:
+                event.stop_event()
+            return
         notice = ""
         try:
             notice = await self._query_astrbot_notice()

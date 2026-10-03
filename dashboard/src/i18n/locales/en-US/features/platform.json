@@ -254,5 +254,16 @@
     "occurredAt": "Occurred At",
     "traceback": "Traceback",
     "close": "Close"
+  },
+  "wangshangliao": {
+    "online": "Online",
+    "reconnecting": "Reconnecting",
+    "reauth_required": "Login required",
+    "awaiting_save": "Authenticated; save login to connect",
+    "stopped": "Stopped",
+    "error": "Connection error",
+    "rate_limited": "Rate limited",
+    "account_conflict": "Account conflict",
+    "privateDirectoryIncomplete": "Private directory is incomplete: only locally known conversations are listed. Search or scroll to select."
   }
 }

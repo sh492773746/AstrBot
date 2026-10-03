@@ -50,6 +50,7 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0.41",
   "sqlmodel>=0.0.24",
   "telegramify-markdown>=1.0.0",
+  "markdown-it-py>=3.0.0",
   "watchfiles>=1.0.5",
   "websockets>=15.0.1",
   "wechatpy>=1.8.18",
@@ -72,7 +73,16 @@ dependencies = [
   "pyotp>=2.9.0",
   "reportlab>=5.0.0",
   "xlrd>=2.0.2",
+  "pynacl==1.6.0",
+  "xxhash==3.6.0",
+  "lz4==4.4.4",
+  "zstandard==0.25.0",
+  "protobuf==6.33.6",
+  "regex>=2024.11.6",
 ]
+
+[project.optional-dependencies]
+wsl = ["opencv-python-headless>=4.10,<5", "numpy>=1.26,<3", "requests>=2.32,<3"]
 
 [dependency-groups]
 dev = [
@@ -90,7 +100,7 @@ astrbot = "astrbot.cli.__main__:cli"
 Repository = "https://github.com/AstrBotDevs/AstrBot"
 
 [tool.ruff]
-exclude = ["astrbot/core/utils/t2i/local_strategy.py", "astrbot/api/all.py", "tests"]
+exclude = ["astrbot/core/utils/t2i/local_strategy.py", "astrbot/api/all.py", "tests", "astrbot/core/platform/sources/wangshangliao/_solver_vendor"]
 line-length = 88
 target-version = "py310"
 

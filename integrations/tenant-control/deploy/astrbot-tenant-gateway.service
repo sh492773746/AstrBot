@@ -1,0 +1,37 @@
+[Unit]
+Description=AstrBot tenant model gateway (private Docker bridge)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=astrgateway
+Group=astrtenant-state
+WorkingDirectory=/opt/astrbot-prod/integrations/tenant-control
+ExecStart=/opt/astrbot-runtime/tenant-gateway-venv/bin/python -m tenant_control --db /var/lib/astrbot-tenant-state/control.db gateway
+Environment=PYTHONUNBUFFERED=1
+Environment=CONTROL_DB_GROUP=astrtenant-state
+Environment=TENANT_GATEWAY_BIND=172.17.0.1
+Environment=TENANT_GATEWAY_PORT=18734
+Environment=TENANT_MONTHLY_MODEL_REQUESTS=100
+LoadCredential=gateway.json:/etc/astrbot-tenant-gateway/gateway.json
+Restart=on-failure
+RestartSec=5
+UMask=0007
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/astrbot-tenant-state
+InaccessiblePaths=/opt/astrbot-prod/data /run/docker.sock /var/run/docker.sock
+
+[Install]
+WantedBy=multi-user.target

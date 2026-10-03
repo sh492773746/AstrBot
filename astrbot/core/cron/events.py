@@ -49,6 +49,7 @@ class CronMessageEvent(AstrMessageEvent):
         self.context_obj = context
         self.is_at_or_wake_command = True
         self.is_wake = True
+        self.send_index = 0
 
         if extras:
             self._extras.update(extras)
@@ -56,7 +57,39 @@ class CronMessageEvent(AstrMessageEvent):
     async def send(self, message: MessageChain) -> None:
         if message is None:
             return
-        await self.context_obj.send_message(self.session, message)
+        job = self.get_extra("cron_job") or {}
+        operation_id = (
+            f"cron/{job['id']}/{job.get('scheduled_at') or job.get('run_started_at')}/{self.send_index}"
+            if job.get("id")
+            else None
+        )
+        platform = (
+            next(
+                (
+                    p
+                    for p in self.context_obj.platform_manager.platform_insts
+                    if p.meta().id == self.session.platform_id
+                ),
+                None,
+            )
+            if hasattr(self.context_obj, "platform_manager")
+            else None
+        )
+        if operation_id and getattr(platform, "supports_operation_ids", False):
+            outcome = await self.context_obj.send_message_result(
+                self.session, message, operation_id=operation_id
+            )
+            if outcome.get("status") not in {"accepted", "verified"}:
+                raise RuntimeError(
+                    "scheduled_send_" + str(outcome.get("status", "unknown"))
+                )
+        elif operation_id:
+            await self.context_obj.send_message(
+                self.session, message, operation_id=operation_id
+            )
+        else:
+            await self.context_obj.send_message(self.session, message)
+        self.send_index += 1
         await super().send(message)
 
     async def send_streaming(self, generator, use_fallback: bool = False) -> None:

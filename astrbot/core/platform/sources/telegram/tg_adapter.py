@@ -72,6 +72,15 @@ class TelegramPlatformAdapter(Platform):
 
         self.base_url = base_url
         self.file_base_url = file_base_url
+        allowed_updates = self.config.get("telegram_allowed_updates", [])
+        if not isinstance(allowed_updates, list) or any(
+            not isinstance(item, str) or not item for item in allowed_updates
+        ):
+            raise ValueError("telegram_allowed_updates must be a list of update names")
+        self.allowed_updates = allowed_updates
+        self.required_plugin = self.config.get("telegram_required_plugin", "")
+        if not isinstance(self.required_plugin, str):
+            raise ValueError("telegram_required_plugin must be a plugin name")
 
         self.enable_command_register = self.config.get(
             "telegram_command_register",
@@ -94,6 +103,8 @@ class TelegramPlatformAdapter(Platform):
             EVENT_JOB_ERROR,
         )
         self._terminating = False
+        self._application_hooks = {}
+        self._required_plugin_pause_lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._polling_recovery_requested = asyncio.Event()
         self._consecutive_polling_failures = 0
@@ -147,7 +158,48 @@ class TelegramPlatformAdapter(Platform):
         )
         self.application.add_handler(message_handler)
         self.client = self.application.bot
+        for hook in getattr(self, "_application_hooks", {}).values():
+            hook(self.application)
         logger.debug(f"Telegram base url: {self.client.base_url}")
+
+    def register_application_hook(self, key, callback):
+        """Attach a plugin handler before polling, including client rebuilds.
+
+        Args:
+            key: Unique plugin registration key.
+            callback: Synchronous callback receiving the new application.
+        """
+        existing = self._application_hooks.get(key)
+        if existing is not None and existing != callback:
+            raise RuntimeError("Telegram application hook already registered")
+        self._application_hooks[key] = callback
+        callback(self.application)
+
+    def unregister_application_hook(self, key):
+        """Remove a plugin rebuild hook; the plugin detaches its own handlers.
+
+        Args:
+            key: Previously registered plugin key.
+        """
+        self._application_hooks.pop(key, None)
+
+    async def suspend_required_plugin(self, key: str) -> None:
+        """Pause reception and drain queued updates before a required plugin unloads.
+
+        Args:
+            key: Name of the plugin configured as this adapter's prerequisite.
+        """
+        if self.required_plugin != key:
+            raise ValueError(
+                "Only the configured required plugin can suspend reception"
+            )
+        async with self._required_plugin_pause_lock:
+            self.application.bot_data.pop(f"{key}:ready", None)
+            updater = self.application.updater
+            if updater is not None and updater.running:
+                await updater.stop()
+            if self.application.running:
+                await self.application.update_queue.join()
 
     async def _start_application(self) -> None:
         await self.application.initialize()
@@ -251,9 +303,29 @@ class TelegramPlatformAdapter(Platform):
                     await asyncio.sleep(self._polling_restart_delay)
                     continue
                 logger.info("Starting Telegram polling...")
-                await updater.start_polling(error_callback=self._on_polling_error)
+                if self.config.get(
+                    "telegram_require_analytics_plugin"
+                ) and not self.application.bot_data.get("domain_analytics_ready"):
+                    await asyncio.sleep(1)
+                    continue
+                if self.required_plugin and not self.application.bot_data.get(
+                    f"{self.required_plugin}:ready"
+                ):
+                    await asyncio.sleep(1)
+                    continue
+                polling_options = {}
+                if self.allowed_updates:
+                    polling_options["allowed_updates"] = self.allowed_updates
+                await updater.start_polling(
+                    error_callback=self._on_polling_error, **polling_options
+                )
                 logger.info("Telegram Platform Adapter is running.")
                 while updater.running and not self._terminating:  # noqa: ASYNC110
+                    if self.required_plugin and not self.application.bot_data.get(
+                        f"{self.required_plugin}:ready"
+                    ):
+                        await self.suspend_required_plugin(self.required_plugin)
+                        break
                     if self._polling_recovery_requested.is_set():
                         await self._recreate_application()
                         break
@@ -340,16 +412,17 @@ class TelegramPlatformAdapter(Platform):
                 )
                 if current_hash == self.last_command_hash:
                     return
-                self.last_command_hash = current_hash
-                await self.client.delete_my_commands()
                 await self.client.set_my_commands(commands)
+                self.last_command_hash = current_hash
 
         except Exception as e:
-            logger.error(f"向 Telegram 注册指令时发生错误: {e!s}")
+            logger.error("Telegram command registration failed: %s", type(e).__name__)
 
     def collect_commands(self) -> list[BotCommand]:
         """从注册的处理器中收集所有指令"""
-        command_dict = {}
+        if self.config.get("telegram_dedicated_reporting", False):
+            return []
+        command_dict = {"start": "开始使用机器人"}
         skip_commands = {"start"}
 
         for handler_md in star_handlers_registry:
@@ -358,6 +431,9 @@ class TelegramPlatformAdapter(Platform):
                 handler_metadata.handler_module_path not in star_map
                 or not star_map[handler_metadata.handler_module_path].activated
             ):
+                continue
+            supported = star_map[handler_metadata.handler_module_path].support_platforms
+            if supported and "telegram" not in supported:
                 continue
             if not handler_metadata.enabled:
                 continue
@@ -413,8 +489,25 @@ class TelegramPlatformAdapter(Platform):
 
             # Build description.
             description = handler_metadata.desc or (
-                f"Command group: {cmd_name}" if is_group else f"Command: {cmd_name}"
+                f"命令组：{cmd_name}" if is_group else f"命令：{cmd_name}"
             )
+            if (
+                handler_metadata.handler_module_path
+                == "astrbot.builtin_stars.builtin_commands.main"
+            ):
+                description = {
+                    "help": "查看帮助与可用命令",
+                    "sid": "查看当前会话编号及相关信息",
+                    "name": "设置当前会话的显示名称",
+                    "reset": "开始新对话，保留历史记录",
+                    "new": "开始新对话，保留历史记录",
+                    "stop": "停止当前任务",
+                    "stats": "查看当前对话的用量统计",
+                    "provider": "查看或切换模型提供商",
+                    "dashboard_update": "更新管理面板",
+                    "set": "设置会话变量",
+                    "unset": "删除会话变量",
+                }.get(getattr(event_filter, "command_name", ""), description)
             if len(description) > 30:
                 description = description[:30] + "..."
             result.append((cmd_name, description))
@@ -429,12 +522,14 @@ class TelegramPlatformAdapter(Platform):
             return
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=self.config["start_message"],
+            text=self.config.get("start_message") or "欢迎使用 AstrBot！",
         )
 
     async def message_handler(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
+        if self.config.get("telegram_dedicated_reporting", False):
+            return
         logger.debug(f"Telegram message: {update.message}")
 
         # Handle media group messages
@@ -636,7 +731,10 @@ class TelegramPlatformAdapter(Platform):
                 message.message.append(Comp.Plain(plain_text))
             message.message_str = plain_text
 
-            if message.message_str.strip() == "/start":
+            # Dedicated plugin instances own /start through native command filters.
+            if message.message_str.strip() == "/start" and not self.config.get(
+                "telegram_required_plugin"
+            ):
                 await self.start(update, context)
                 return None
 

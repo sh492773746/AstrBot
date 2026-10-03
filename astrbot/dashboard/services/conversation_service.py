@@ -153,12 +153,16 @@ class ConversationService:
 
         webchat_titles = await self._get_webchat_titles([conversation])
         alias_map = build_umo_alias_map(await self.db_helper.get_umo_aliases([user_id]))
+        serialized = self._serialize_conversation(
+            conversation,
+            alias_map,
+            include_history=False,
+            webchat_title=webchat_titles.get(conversation.user_id, ""),
+        )
         return {
             "user_id": user_id,
             "cid": cid,
-            "title": conversation.title
-            or webchat_titles.get(conversation.user_id, "")
-            or None,
+            "title": serialized["title"],
             "persona_id": conversation.persona_id,
             "history": conversation.history,
             "created_at": conversation.created_at,
@@ -256,14 +260,21 @@ class ConversationService:
                     continue
 
                 webchat_titles = await self._get_webchat_titles([conversation])
+                aliases = build_umo_alias_map(
+                    await self.db_helper.get_umo_aliases([user_id])
+                )
+                serialized = self._serialize_conversation(
+                    conversation,
+                    aliases,
+                    include_history=False,
+                    webchat_title=webchat_titles.get(user_id, ""),
+                )
                 content = json.loads(conversation.history)
                 export_record = {
                     "cid": cid,
                     "user_id": user_id,
                     "platform_id": conversation.platform_id,
-                    "title": conversation.title
-                    or webchat_titles.get(conversation.user_id, "")
-                    or None,
+                    "title": serialized["title"],
                     "persona_id": conversation.persona_id,
                     "created_at": conversation.created_at,
                     "updated_at": conversation.updated_at,
@@ -407,16 +418,27 @@ class ConversationService:
         Returns:
             Conversation data suitable for a dashboard API response.
         """
+        umo_info = self._build_umo_info(conversation.user_id, alias_map)
+        fallback_title = ""
+        if umo_info["platform"].startswith("wangshangliao"):
+            fallback_title = umo_info.get("display_name", "")
+            if not fallback_title or fallback_title == conversation.user_id:
+                session = umo_info.get("session_id", "")
+                if "/private/" in session:
+                    target = session.split("/private/", 1)[1].split("/", 1)[0]
+                    fallback_title = f"旺商聊私聊 · {target}"
+                else:
+                    fallback_title = f"旺商聊群聊 · {session.rsplit('/', 1)[-1]}"
         result = {
             "platform_id": conversation.platform_id,
             "user_id": conversation.user_id,
             "cid": conversation.cid,
-            "title": conversation.title or webchat_title or None,
+            "title": conversation.title or webchat_title or fallback_title or None,
             "persona_id": conversation.persona_id,
             "token_usage": conversation.token_usage,
             "created_at": conversation.created_at,
             "updated_at": conversation.updated_at,
-            "umo_info": self._build_umo_info(conversation.user_id, alias_map),
+            "umo_info": umo_info,
         }
         if include_history:
             result["history"] = conversation.history

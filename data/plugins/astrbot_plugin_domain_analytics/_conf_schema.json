@@ -1,0 +1,6 @@
+{
+  "enabled": {"description": "启用域名统计机器人", "type": "bool", "default": false},
+  "platform_id": {"description": "专用 Telegram 平台 ID，须与机器人名称一致", "type": "string", "default": "域名访问人数等监控机器人"},
+  "api_url": {"description": "本机统计服务接口", "type": "string", "default": "http://127.0.0.1:18373"},
+  "api_token": {"description": "内部接口密钥", "type": "string", "default": "", "obvious_hint": true}
+}

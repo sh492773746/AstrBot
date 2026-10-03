@@ -152,6 +152,10 @@ class PlatformManager:
                     from .sources.dingtalk.dingtalk_adapter import (
                         DingtalkPlatformAdapter,  # noqa: F401
                     )
+                case "wangshangliao":
+                    from .sources.wangshangliao.adapter import (
+                        WangshangliaoAdapter,  # noqa: F401
+                    )
                 case "telegram":
                     from .sources.telegram.tg_adapter import (
                         TelegramPlatformAdapter,  # noqa: F401
@@ -348,6 +352,32 @@ class PlatformManager:
                         "last_error": None,
                     }
                 )
+
+        # Saved instances remain visible while reauthentication stops transport.
+        known_ids = {stat["id"] for stat in stats_list}
+        for config in self.astrbot_config.get("platform", []):
+            if config.get("type") != "wangshangliao" or config.get("id") in known_ids:
+                continue
+            import time
+
+            from .sources.wangshangliao.registration import registrations
+
+            pending_save = any(
+                tx.instance == config["id"]
+                and tx.state == "authenticated"
+                and tx.expires > time.monotonic()
+                for tx in registrations.transactions.values()
+            )
+            stats_list.append(
+                {
+                    "id": config["id"],
+                    "type": "wangshangliao",
+                    "status": "pending" if pending_save else "stopped",
+                    "connection_state": "awaiting_save" if pending_save else "stopped",
+                    "error_count": 0,
+                    "last_error": None,
+                }
+            )
 
         return {
             "platforms": stats_list,

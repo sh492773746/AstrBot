@@ -26,6 +26,128 @@ _TELEGRAM_PLATFORM_EVENT = None
 _TELEGRAM_MODULES: dict[str, object] = {}
 
 
+@pytest.mark.parametrize("allowed_updates", ["message", [None], [42]])
+def test_invalid_update_subscription_is_rejected(allowed_updates):
+    config = make_platform_config("telegram")
+    config["telegram_allowed_updates"] = allowed_updates
+    with pytest.raises(ValueError, match="telegram_allowed_updates"):
+        _load_telegram_adapter()(config, {}, asyncio.Queue())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_polling_preserves_default_or_uses_explicit_update_types(explicit):
+    config = make_platform_config("telegram")
+    updates = ["message", "pre_checkout_query", "managed_bot"]
+    if explicit:
+        config["telegram_allowed_updates"] = updates
+    adapter = _load_telegram_adapter()(config, {}, asyncio.Queue())
+    adapter.application = MockTelegramBuilder.create_application()
+    adapter.client = adapter.application.bot
+    adapter._start_command_scheduler = MagicMock()
+
+    async def start_polling(**kwargs):
+        adapter._terminating = True
+
+    adapter.application.updater.start_polling = AsyncMock(side_effect=start_polling)
+    await asyncio.wait_for(adapter.run(), timeout=2)
+    options = adapter.application.updater.start_polling.await_args.kwargs
+    if explicit:
+        assert options["allowed_updates"] == updates
+    else:
+        assert "allowed_updates" not in options
+
+
+@pytest.mark.asyncio
+async def test_required_plugin_blocks_polling_until_ready():
+    config = make_platform_config("telegram")
+    config["telegram_required_plugin"] = "tenant-control"
+    adapter = _load_telegram_adapter()(config, {}, asyncio.Queue())
+    adapter.application = MockTelegramBuilder.create_application()
+    adapter.client = adapter.application.bot
+    adapter._start_command_scheduler = MagicMock()
+    adapter.application.bot_data = {}
+    sleep = asyncio.sleep
+
+    async def wait_for_plugin(_):
+        adapter.application.updater.start_polling.assert_not_awaited()
+        adapter.application.bot_data["tenant-control:ready"] = True
+        await sleep(0)
+
+    async def start_polling(**kwargs):
+        adapter._terminating = True
+
+    adapter.application.updater.start_polling = AsyncMock(side_effect=start_polling)
+    with patch("asyncio.sleep", new=wait_for_plugin):
+        await asyncio.wait_for(adapter.run(), timeout=2)
+    adapter.application.updater.start_polling.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_required_plugin_unload_stops_polling():
+    config = make_platform_config("telegram")
+    config["telegram_required_plugin"] = "tenant-control"
+    adapter = _load_telegram_adapter()(config, {}, asyncio.Queue())
+    adapter.application = MockTelegramBuilder.create_application()
+    adapter.client = adapter.application.bot
+    adapter._start_command_scheduler = MagicMock()
+    adapter.application.bot_data = {"tenant-control:ready": True}
+    adapter.application.running = True
+    adapter.application.update_queue = asyncio.Queue()
+    updater = adapter.application.updater
+    updater.running = True
+    sleep = asyncio.sleep
+
+    async def unload_plugin(_):
+        adapter.application.bot_data.clear()
+        await sleep(0)
+
+    async def stop_polling():
+        updater.running = False
+        adapter._terminating = True
+
+    updater.stop = AsyncMock(side_effect=stop_polling)
+    with patch("asyncio.sleep", new=unload_plugin):
+        await asyncio.wait_for(adapter.run(), timeout=2)
+    updater.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_required_plugin_suspension_drains_already_received_updates():
+    config = make_platform_config("telegram")
+    config["telegram_required_plugin"] = "tenant-control"
+    adapter = _load_telegram_adapter()(config, {}, asyncio.Queue())
+    adapter.application = MockTelegramBuilder.create_application()
+    adapter.application.bot_data = {"tenant-control:ready": True}
+    adapter.application.running = True
+    adapter.application.update_queue = asyncio.Queue()
+    await adapter.application.update_queue.put("paid-receipt")
+    adapter.application.updater.running = True
+    suspension = asyncio.create_task(adapter.suspend_required_plugin("tenant-control"))
+    await asyncio.sleep(0)
+    assert not suspension.done()
+    adapter.application.updater.stop.assert_awaited_once()
+    assert "tenant-control:ready" not in adapter.application.bot_data
+    await adapter.application.update_queue.get()
+    adapter.application.update_queue.task_done()
+    await asyncio.wait_for(suspension, timeout=2)
+    adapter.application.stop.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_plugin_only_bot_discards_native_messages_even_if_ready():
+    config = make_platform_config("telegram")
+    config["telegram_required_plugin"] = "astrbot_plugin_telethon_ai"
+    config["telegram_dedicated_reporting"] = True
+    adapter = _load_telegram_adapter()(config, {}, asyncio.Queue())
+    adapter.application.bot_data = {"astrbot_plugin_telethon_ai:ready": True}
+    adapter.convert_message = AsyncMock()
+    adapter.commit_event = MagicMock()
+    await adapter.message_handler(create_mock_update(), _build_context())
+    adapter.convert_message.assert_not_awaited()
+    adapter.commit_event.assert_not_called()
+
+
 def _build_telegram_patched_modules():
     mocks = create_mock_telegram_modules()
     return {
@@ -82,6 +204,78 @@ def _build_context() -> MagicMock:
     context.bot.username = "test_bot"
     context.bot.id = 12345678
     return context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["/start", "/start welcome", "/start@test_bot"])
+async def test_required_plugin_start_reaches_native_message_pipeline(text):
+    config = make_platform_config("telegram")
+    config["telegram_required_plugin"] = "astrbot_plugin_tenant_control"
+    config.pop("start_message", None)
+    adapter = _load_telegram_adapter()(config, {}, asyncio.Queue())
+    adapter.client.username = "test_bot"
+    adapter.start = AsyncMock()
+    update = create_mock_update(chat_type="private", chat_id=11)
+    update.message.text = text
+    update.message.entities = []
+    message = await adapter.convert_message(update, _build_context())
+    assert message is not None
+    assert message.message_str.startswith("/start")
+    assert message.raw_message is update
+    adapter.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("welcome", [None, "Custom welcome"])
+async def test_regular_bot_start_keeps_welcome_and_handles_missing_config(welcome):
+    config = make_platform_config("telegram")
+    config.pop("start_message", None)
+    if welcome:
+        config["start_message"] = welcome
+    adapter = _load_telegram_adapter()(config, {}, asyncio.Queue())
+    update = create_mock_update(chat_type="private", chat_id=11)
+    update.message.text = "/start"
+    update.message.entities = []
+    context = _build_context()
+    context.bot.send_message = AsyncMock()
+    assert await adapter.convert_message(update, context) is None
+    context.bot.send_message.assert_awaited_once()
+    assert context.bot.send_message.await_args.kwargs["text"] == (
+        welcome or "欢迎使用 AstrBot！"
+    )
+
+
+@pytest.mark.asyncio
+async def test_command_registration_retries_failure_and_preserves_menu():
+    adapter = _load_telegram_adapter()(
+        make_platform_config("telegram"), {}, asyncio.Queue()
+    )
+    adapter.collect_commands = MagicMock(
+        return_value=[SimpleNamespace(command="start", description="Start")]
+    )
+    adapter.client.set_my_commands = AsyncMock(
+        side_effect=[RuntimeError("offline"), None]
+    )
+    adapter.client.delete_my_commands = AsyncMock()
+    original_hash = adapter.last_command_hash
+
+    await adapter.register_commands()
+    assert adapter.last_command_hash == original_hash
+    await adapter.register_commands()
+    await adapter.register_commands()
+
+    assert adapter.client.set_my_commands.await_count == 2
+    adapter.client.delete_my_commands.assert_not_awaited()
+
+
+def test_command_menu_always_contains_start(monkeypatch):
+    module = _load_telegram_module("astrbot.core.platform.sources.telegram.tg_adapter")
+    monkeypatch.setattr(module, "star_handlers_registry", [])
+    monkeypatch.setattr(module, "BotCommand", lambda cmd, desc: (cmd, desc))
+    adapter = module.TelegramPlatformAdapter(
+        make_platform_config("telegram"), {}, asyncio.Queue()
+    )
+    assert adapter.collect_commands() == [("start", "开始使用机器人")]
 
 
 @pytest.mark.asyncio

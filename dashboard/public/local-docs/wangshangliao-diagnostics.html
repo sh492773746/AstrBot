@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>旺商聊日志与排障</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊日志与排障</h1>
+<p>接入器与插件共用 AstrBot 日志管线，不额外建立一套日志服务，也不修改现有
+日志级别、保留周期或轮转设置。三路 AI、固定命令、名片任务、活动和定时任务
+使用统一前缀 <code>Wangshangliao</code>。</p>
+<h2>查看入口</h2>
+<ul>
+<li>WebUI：<strong>数据与日志 → 日志</strong>，查找 <code>Wangshangliao</code>，再按 <code>instance=</code> 缩小机器人范围。</li>
+<li>默认主日志：<code>data/logs/astrbot.log</code>；若已自定义日志路径，以设置为准。</li>
+<li>本机 systemd 部署可运行 <code>journalctl -u astrbot.service --since '10 minutes ago' --no-pager</code>，
+再筛选 <code>Wangshangliao</code>。日志级别高于 INFO 时，不会显示正常路由和权限拒绝记录。</li>
+<li>多个群与机器人共用进程，不要只凭时间相近判断同一次操作，应结合关联字段。</li>
+</ul>
+<h2>字段说明</h2>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>instance</code></td>
+<td>机器人实例标识，不是用户昵称</td>
+</tr>
+<tr>
+<td><code>stage</code> / <code>outcome</code></td>
+<td>处理阶段及真实返回状态</td>
+</tr>
+<tr>
+<td><code>correlation</code></td>
+<td>消息或任务标识的 SHA-256 前 16 位；同一原始消息可关联路由、审核和处罚</td>
+</tr>
+<tr>
+<td><code>route</code></td>
+<td><code>admin_private</code>、<code>customer_private</code>、<code>customer_group</code> 或 <code>moderation</code>；模型选择日志使用配置字段标签</td>
+</tr>
+<tr>
+<td><code>action</code></td>
+<td>服务端固定操作名，不记录用户输入的自由文本</td>
+</tr>
+<tr>
+<td><code>group</code> / <code>actor</code> / <code>session</code></td>
+<td>群、用户、会话标识的哈希；缺失为 <code>-</code></td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td>白名单错误类别，不是异常原文</td>
+</tr>
+<tr>
+<td><code>duration_ms</code></td>
+<td>模型审核或管理工具耗时；未测量为 <code>-</code></td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td>本条汇总的事件数量，正常记录为 1</td>
+</tr>
+</tbody>
+</table>
+<p>后台名片任务以任务 ID 为关联值；新确认消息与预览消息有不同的消息关联值。
+因此 <code>correlation</code> 不是跨全部会话、全部发送分片的全局调用链 ID。</p>
+<h2>常见问题定位</h2>
+<table>
+<thead>
+<tr>
+<th>日志组合</th>
+<th>意义与处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ai_route / customer_only</code></td>
+<td>普通私聊或群内客服，没有群管工具；群内管理员也走客服路线</td>
+</tr>
+<tr>
+<td><code>ai_route / management_enabled</code></td>
+<td>当前管理员私聊已具备管理工具；不代表已经执行操作</td>
+</tr>
+<tr>
+<td><code>ai_route / management_unavailable</code></td>
+<td>管理员私聊没有拿到工具，检查人格工具白名单与插件加载</td>
+</tr>
+<tr>
+<td><code>ai_route / management_history_isolated</code></td>
+<td>管理历史已从客服会话隔离，不是故障</td>
+</tr>
+<tr>
+<td><code>model_route / configured</code></td>
+<td>采用该路配置的独立模型</td>
+</tr>
+<tr>
+<td><code>model_route / session_default</code></td>
+<td>未单独配置，沿用会话模型</td>
+</tr>
+<tr>
+<td><code>model_route / session_fallback</code></td>
+<td>指定模型不可用，保留会话模型；检查模型配置</td>
+</tr>
+<tr>
+<td><code>reply_gate / reply_disabled</code></td>
+<td>当前私聊或目标群的实际回复开关关闭</td>
+</tr>
+<tr>
+<td><code>reply_gate / not_eligible</code></td>
+<td>当前消息不具备普通回复条件</td>
+</tr>
+<tr>
+<td><code>reply_gate / managed_account_blocked</code></td>
+<td>本机托管机器人互聊保护，需使用有效且对应方向的测试窗口</td>
+</tr>
+<tr>
+<td><code>reply_gate / test_window_rejected</code></td>
+<td>测试窗口不允许当前回复，核对有效期、次数、来源及范围</td>
+</tr>
+<tr>
+<td><code>reply_gate / empty_reply</code></td>
+<td>回复为空或仅含不发送的引用组件</td>
+</tr>
+<tr>
+<td><code>dispatch_gate / stale_or_unknown_time</code></td>
+<td>历史或时间不明消息被忽略，避免重放命令</td>
+</tr>
+<tr>
+<td><code>command / silent</code></td>
+<td>命令按既有约定静默处理，例如群内发送私聊专用命令</td>
+</tr>
+<tr>
+<td><code>admin_tool / rejected</code></td>
+<td>权限、参数或确认校验未通过，不是成功写入</td>
+</tr>
+<tr>
+<td><code>error=confirmation_invalid</code></td>
+<td>确认过期、不属于本会话或不是精确确认，重新预览</td>
+</tr>
+<tr>
+<td><code>error=configuration_conflict</code></td>
+<td>预览后配置已变化，重新预览，不能强制覆盖</td>
+</tr>
+<tr>
+<td><code>semantic / rule_fallback</code></td>
+<td>审核失败，继续既有规则兜底；类别区分模型超时、响应无效、模型缺失或其他运行失败</td>
+</tr>
+<tr>
+<td><code>progressive_result</code></td>
+<td>撤回和禁言分别记录回执，不能因一个成功认定两个都成功</td>
+</tr>
+<tr>
+<td><code>card_item</code> / <code>card_job</code></td>
+<td>成员写入结果及后台任务状态，不包含原名或新名</td>
+</tr>
+<tr>
+<td><code>schedule / paused</code></td>
+<td>计划已暂停，核对权限、时间边界及实际结果后处理</td>
+</tr>
+<tr>
+<td><code>lottery_tick / blocked</code></td>
+<td>抽奖后台处理异常，先查活动状态，不要重复创建</td>
+</tr>
+<tr>
+<td><code>invitation_scan / rejected</code></td>
+<td>邀请核验失败；<code>permission_denied</code> 表示活动管理员权限已撤回</td>
+</tr>
+</tbody>
+</table>
+<h2>状态不能混淆</h2>
+<ul>
+<li><code>preview</code>：仅生成预览，未保存或执行。</li>
+<li><code>saved</code>：配置已保存，不代表活动已开始；抽奖启动以 <code>started</code> 及活动状态为准。</li>
+<li><code>schedule_confirmation_required</code>：仍需完成定时规则的确认。</li>
+<li><code>accepted</code>：上游受理，不是最终状态核验完成。</li>
+<li><code>verified</code>：已核验；名片和其他异步操作应以任务查询结果为准。</li>
+<li><code>unknown</code>、<code>not_confirmed</code>、<code>needs_review</code>：保留现场并查询结果，<strong>不要重发管理操作</strong>。</li>
+<li><code>command_reply / send_returned</code>：回复调用已返回，不保证实际送达；看 <code>reply_result</code> 和接入器发送账本。</li>
+</ul>
+<p>正常路由与预期权限拒绝记为 INFO；异常、失败回退、未知回执记为 WARNING。
+接入器原有需要人工介入的终止类错误仍为 ERROR。
+重复后台错误在 60 秒内聚合，缓存最多保留 512 个失败窗口；窗口淘汰或后续
+失败触发过期清理时补记被抑制的数量。没有后续事件或进程退出时，不保证输出
+最终汇总；日志不是精确的持久计费或处罚计数账本。管理工具返回和逐次处罚回执不聚合。</p>
+<h2>隐私边界</h2>
+<p>这些结构化日志不记录聊天正文、AI 提示词、模型回复全文、工具参数全文、
+确认口令、成员名片、账号密码、Token 或 Cookie；自由异常文本不直接写入。
+哈希用于排障关联，不是匿名化证明，不应公开提供可关联用户的完整日志。
+AstrBot 其他模块、第三方插件或 DEBUG/trace 日志可能另有正文记录，
+<strong>不能据此认为整个日志文件均已脱敏</strong>。对外提交前仍需筛选和人工检查。</p>
+<p>日志只负责观察，不会改变管理员身份、群授权、模型选择、处罚次数或开启自动踢群。
+本次回归使用本地隔离数据，不代替真实用户的四种身份会话验收。</p>
+</body></html>

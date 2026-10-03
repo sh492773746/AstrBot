@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1580" viewBox="0 0 900 1580" role="img" aria-labelledby="title desc">
+<title id="title">旺商聊与 AstrBot 三路 AI 及授权架构</title><desc id="desc">2026-10-02。核心提供机制，插件决定业务，接入器核验后执行。群客服、管理员私聊群管、独立无工具审核分离；配置草案需确认。</desc>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#536373"/></marker></defs>
+<style>text{font-family:system-ui,'PingFang SC','Microsoft YaHei',sans-serif;fill:#202830;letter-spacing:0;font-size:19px}.h{font-size:25px;font-weight:700}.s{font-size:17px;fill:#536373}.arrow{stroke:#536373;stroke-width:2;marker-end:url(#a)}</style>
+<rect width="900" height="1580" fill="white"/>
+<text x="30" y="42" class="h">旺商聊 × AstrBot / Responsibility Map</text>
+<text x="30" y="75">通用机制归核心 · 业务决策归插件 · 平台执行归接入器</text>
+<rect x="30" y="100" width="840" height="125" rx="6" fill="#edf5ff" stroke="#8ab4e8"/>
+<text x="50" y="134" class="h">① AstrBot 已有能力 / Core</text>
+<text x="50" y="170">有效 admins_id、命令鉴权、Dashboard 登录与权限、日志</text>
+<text x="50" y="203">模型、人格、知识库、会话路由、配置与版本校验</text>
+<path d="M450 226V250" class="arrow"/>
+<rect x="30" y="260" width="840" height="130" rx="6" fill="#eff8f1" stroke="#8cba96"/>
+<text x="50" y="295" class="h">② 旺商聊群管插件 / Plugin</text>
+<text x="50" y="329">固定命令、独立语义审核与兜底、排名、抽奖、邀请与计划</text>
+<text x="50" y="362">管理员私聊工具与配置草案；批量名片和计划调度不调用模型</text>
+<path d="M450 391V415" class="arrow"/>
+<rect x="30" y="425" width="840" height="140" rx="6" fill="#f4f5f7" stroke="#a9b1bc"/>
+<text x="50" y="460" class="h">③ 旺商聊原生接入器 / Adapter</text>
+<text x="50" y="494">登录与重连、消息 / At 转换、群目录、业务 ID ↔ NIM ID</text>
+<text x="50" y="528">目标与动作授权、身份刷新、固定能力、分段幂等与回执</text>
+<path d="M450 566V590" class="arrow"/>
+<text x="450" y="620" text-anchor="middle" class="h">旺商聊业务服务 + NIM 消息服务</text>
+<path d="M30 644H870" stroke="#cbd2da"/>
+<rect x="30" y="665" width="840" height="120" rx="6" fill="white" stroke="#a17426" stroke-dasharray="7 5"/>
+<text x="50" y="698" class="h">A. 管理员私聊命令 / Commands</text>
+<text x="50" y="732">后台从私聊按名称选管理员 → 精确 UID 鉴权 → 私聊命令</text>
+<text x="50" y="763">→ 目标群启用与动作授权 → 平台角色、目标身份 → 执行</text>
+<text x="30" y="828" class="h">B. 群内违规规则 / Implemented</text>
+<text x="50" y="863">可信群消息 → 独立无工具审核 → 故障时高置信规则兜底</text>
+<text x="50" y="896">→ 撤回警告 / 再犯禁言 → 逐群开启后第三次自动禁言踢出</text>
+<text x="50" y="928" class="s">不要求 @；正常或歧义不罚；保护群管理角色；未知结果停止，不重发。</text>
+<path d="M30 952H870" stroke="#cbd2da"/>
+<text x="30" y="981" class="s">聊天管理员、后台用户、平台角色、动作授权、发送目的地相互独立。</text>
+<text x="30" y="1012" class="s">accepted ≠ 对端确认；能力、离线回归与真实验收分别记录。</text>
+<path d="M30 1034H870" stroke="#cbd2da"/>
+<text x="30" y="1070" class="h">C. 群名片规范 / Card Normalization</text>
+<text x="50" y="1105">逐群显式授权 → 完整目录 → 插件预览 → 新指令确认执行</text>
+<text x="50" y="1137">或：逐群自动开关 → 五分钟目录扫描 → 持久化串行队列</text>
+<text x="50" y="1169">接入器复核身份、原名及权限 → 固定改名接口 → 完整目录回读</text>
+<text x="50" y="1201" class="s">排除机器人和管理成员；未知不重发；清理另需 cleanup，不继承 rename。</text>
+<path d="M30 1232H870" stroke="#cbd2da"/>
+<text x="30" y="1270" class="h">D. 三路 AI / Identity-based Routing</text>
+<text x="50" y="1306">群内 @（普通成员 / 管理员） → 群客服模型 + 群人格 / 知识库</text>
+<text x="50" y="1338" class="s">普通私聊咨询沿用私聊配置；客服不提供旺商聊管理工具。</text>
+<text x="50" y="1377">有效管理员私聊 → 管理员模型 → 固定工具 / 设置预览</text>
+<text x="50" y="1409" class="s">同私聊新消息确认，十分钟草案；定时另需确认；禁止改身份和授权。</text>
+<text x="50" y="1448">群违规审核 → 独立模型 / 提示 → tools=None → 结构化判断</text>
+<text x="50" y="1480" class="s">不继承客服人格 / 知识库；处罚仍由最终执行器检查身份与动作授权。</text>
+<text x="30" y="1530" class="s">空模型配置沿用对应会话模型；固定命令优先，不调用模型。</text>
+<text x="30" y="1560" class="s">群内 @ 不进入管理员配置；测试窗口只放行指定方向，不授予权限。</text>
+</svg>
