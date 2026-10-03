@@ -140,6 +140,21 @@ class CronJobManager:
                     job.job_id,
                 )
                 continue
+            if (
+                str((job.payload or {}).get("session", "")).startswith("wangshangliao")
+                and job.next_run_time
+            ):
+                due = job.next_run_time
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=timezone.utc)
+                if due < datetime.now(timezone.utc):
+                    await self.db.update_cron_job(
+                        job.job_id,
+                        status="missed",
+                        last_error="Scheduled occurrence missed while offline",
+                    )
+                    if job.run_once:
+                        continue
             try:
                 self._schedule_job(job)
             except CronJobSchedulingError:
@@ -407,6 +422,7 @@ class CronJobManager:
                 "description": job.description,
                 "note": note,
                 "run_started_at": start_time.isoformat(),
+                "scheduled_at": (job.next_run_time or start_time).isoformat(),
                 "run_at": (
                     job.payload.get("run_at") if isinstance(job.payload, dict) else None
                 ),
@@ -542,6 +558,9 @@ class CronJobManager:
         async for _ in runner.step_until_done(agent_max_step):
             # agent will send message to user via using tools
             pass
+        delivery_status = cron_event.get_extra("_delivery_status")
+        if delivery_status and delivery_status not in {"accepted", "verified"}:
+            raise RuntimeError("scheduled_send_" + str(delivery_status))
         llm_resp = runner.get_final_llm_resp()
         if runner.state == AgentState.ERROR:
             # The run failed (e.g. malformed function call at max steps) but

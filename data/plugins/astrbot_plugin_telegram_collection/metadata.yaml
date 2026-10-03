@@ -1,0 +1,5 @@
+name: astrbot_plugin_telegram_collection
+display_name: Telegram 采集管理
+desc: 统一管理采集账号、人员统计与关键词订阅、补采进度和故障。
+version: v1.0.0
+author: local

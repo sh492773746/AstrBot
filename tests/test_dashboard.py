@@ -262,7 +262,7 @@ window.renderTabs = renderTabs;
 
 
 @pytest_asyncio.fixture(scope="module")
-async def core_lifecycle_td(tmp_path_factory):
+async def core_lifecycle_td(tmp_path_factory, preserve_plugin_imports):
     """Creates and initializes a core lifecycle instance with a temporary database."""
     tmp_db_path = tmp_path_factory.mktemp("data") / "test_data_v3.db"
     db = SQLiteDatabase(str(tmp_db_path))

@@ -1,0 +1,54 @@
+{
+  "enabled": {
+    "description": "启用总控插件（不等于开放收款）；修改后重载插件",
+    "type": "bool",
+    "default": false
+  },
+  "platform_id": {
+    "description": "Dedicated AstrBot Telegram control platform ID",
+    "type": "string",
+    "default": "tenant-control"
+  },
+  "admin_ids": {
+    "description": "Verified numeric Telegram IDs of platform operators",
+    "type": "list",
+    "items": {"type": "string"},
+    "default": []
+  },
+  "support_text": {
+    "description": "Customer support contact",
+    "type": "string",
+    "default": ""
+  },
+  "profile_id": {
+    "type": "string",
+    "description": "总控专属 AstrBot 配置档 ID；共享实例必须绑定",
+    "default": ""
+  },
+  "tenant_template_version": {
+    "type": "string",
+    "description": "新租户社区模板版本；只影响之后创建的租户",
+    "options": ["community-v1"],
+    "default": "community-v1"
+  },
+  "allow_test_purchase": {
+    "type": "bool",
+    "description": "允许 Stars 测试购买，仅官方 Telegram 测试环境有效；正式环境始终关闭",
+    "default": false
+  },
+  "allow_trial_grants": {
+    "type": "bool",
+    "description": "允许超管二次确认签发1–7天测试资格；不产生付款记录，部署就绪后才能创建",
+    "default": false
+  },
+  "default_features": {
+    "type": "list",
+    "description": "新租户默认功能白名单，仅支持 community；空列表禁用社区业务",
+    "default": ["community"]
+  },
+  "default_model_quota": {
+    "type": "int",
+    "description": "新租户每月模型请求上限，0 表示禁止；创建时存为租户权益快照",
+    "default": 1000
+  }
+}

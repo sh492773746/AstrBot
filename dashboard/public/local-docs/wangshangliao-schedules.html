@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>旺商聊每日计划</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊每日全员禁言计划</h1>
+<p>更新：2026-10-02。<a href="wangshangliao-index.html">文档目录</a>。</p>
+<h2>入口与权限</h2>
+<p>每群一条每日 <code>Asia/Shanghai</code> 计划，支持跨午夜，不是通用定时任务或任意代码执行。
+需要原操作者在有效配置中仍为 AstrBot 管理员、实例在线、群启用，
+逐群 <code>mute_all</code>/<code>unmute_all</code> 已保存，且机器人有真实平台管理角色。
+普通用户私聊固定命令返回“无权限”；群内管理员只能转私聊创建/确认。
+首次主管从已有私聊在后台配置，不通过聊天自授权。</p>
+<h2>固定命令流程</h2>
+<p>每条为单独新消息：</p>
+<pre><code class="language-text">群列表
+选择群 1
+定时禁言 23:00 08:00
+确认定时 &lt;预览码&gt;
+定时状态
+</code></pre>
+<p>时间严格 <code>HH:MM</code> 且不相等。预览包含目标、时区与下次动作；确认码600秒有效、
+一次使用，绑定账号、管理员、私聊和版本；确认前重新鉴权。保存/恢复仅安排下一个
+严格未来边界，不立即改变群状态。例如凌晨保存此例，下次动作是08:00解禁。</p>
+<table>
+<thead>
+<tr>
+<th>命令</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>定时状态</code></td>
+<td>状态、下一动作、最近回执和故障原因</td>
+</tr>
+<tr>
+<td><code>暂停定时</code></td>
+<td>停止未来调度，不解禁当前群</td>
+</tr>
+<tr>
+<td><code>恢复定时</code></td>
+<td>新预览，经新确认后从未来边界恢复</td>
+</tr>
+<tr>
+<td><code>删除定时</code></td>
+<td>删除未来计划，保留审计，不解禁</td>
+</tr>
+</tbody>
+</table>
+<p>插件页“定时管理”可看状态、执行和变更记录，并按当前版本暂停；
+不直接创建/修改/恢复，后台权限不替代聊天管理员身份。旧版本暂停返回冲突须刷新。</p>
+<h2>自然语言流程</h2>
+<p>管理员私聊“把大海兼职群设成每天23:00禁言、08:00解禁”：</p>
+<ol>
+<li>AI 配置草案返回目标与前后值，不执行计划。</li>
+<li>同一私聊新消息 <code>确认设置 &lt;草案码&gt;</code>，经管理工具验证后生成原生定时预览。</li>
+<li>核对预览，再新消息 <code>确认定时 &lt;新的定时码&gt;</code>，计划才保存。</li>
+</ol>
+<p>两种码不同，不可互换。AI 草案内存存储，重启失效；定时确认/审计使用持久账本。
+自然语言模型或工具不可用时改用固定命令，不依赖“好的”或同一条消息自动确认。</p>
+<h2>运行、安全停止与审计</h2>
+<p><code>schedules.py</code> 每五秒检查，插件卸载停止 worker。<code>schedule_store.py</code> 将账号、群、
+创建者、原私聊路由、时区、版本和下一边界保存在 <code>schedules.sqlite3</code>；
+confirmations 一次确认，executions 执行声明/结果，rule_audit 记录变更。
+执行意图先提交 SQLite，幂等 ID 绑定账号/群/版本/计划时间/动作。</p>
+<p>人工通过机器人执行全员禁言或解除先暂停该群计划，共用 adapter 群锁。
+其他管理员在旺商聊客户端直接改状态时不能可靠推断其意图，人工接管前先暂停。
+暂停/删除无法撤回已提交上游的请求，也不自动恢复群状态。</p>
+<p>创建者撤权、换账号、断线、群停用、授权取消、错过边界、同版本未完成声明、
+调度延迟超过30秒或未知结果会暂停待核查。重启不补发错过动作。
+执行前及目录查询后均复核授权，<code>accepted</code> 不冒充 <code>verified</code>，<code>unknown</code> 不重试。
+核对真实群状态后，重新预览与确认恢复；不能删账本“修复”。</p>
+<h2>发布与回滚</h2>
+<p>上线前运行模拟测试 <code>tests/test_wangshangliao_schedules.py</code> 与权限/并发回归，
+不需真实群改变禁言状态。发布不自动增加授权或创建计划。
+停服后使用维护脚本备份配置及全部账本；不要让两版调度器同时运行。
+回滚停止新版，恢复兼容源码，保留新审计及上线后数据。无自动裁剪，应监控磁盘。
+流程见<a href="wangshangliao-maintenance.html">维护说明</a>，真实验收见<a href="wangshangliao-testing.html">测试文档</a>。</p>
+</body></html>

@@ -732,4 +732,9 @@ class AstrBotDashboard:
 
     async def shutdown_trigger(self) -> None:
         await self.shutdown_event.wait()
+        from astrbot.core.platform.sources.wangshangliao.registration import (
+            registrations,
+        )
+
+        await registrations.close()
         logger.info("AstrBot WebUI 已经被关闭")

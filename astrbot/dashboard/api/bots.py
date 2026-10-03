@@ -77,7 +77,14 @@ async def create_bot(
     _auth: AuthContext = Depends(require_bot_scope),
     service: BotConfigService = Depends(get_service),
 ):
-    await service.create_bot(payload.to_dashboard_config())
+    await service.create_bot(
+        payload.to_dashboard_config(),
+        **(
+            {"owner": _auth.username if _auth.via == "jwt" else ""}
+            if payload.to_dashboard_config().get("type") == "wangshangliao"
+            else {}
+        ),
+    )
     return ok(message="新增平台配置成功~")
 
 
@@ -108,6 +115,11 @@ async def update_bot_by_id(
     await service.update_bot(
         bot_id,
         payload.to_dashboard_config(fallback_id=bot_id),
+        **(
+            {"owner": _auth.username if _auth.via == "jwt" else ""}
+            if payload.to_dashboard_config().get("type") == "wangshangliao"
+            else {}
+        ),
     )
     return ok(message="更新平台配置成功~")
 
@@ -177,7 +189,15 @@ async def update_bot(
     _auth: AuthContext = Depends(require_bot_scope),
     service: BotConfigService = Depends(get_service),
 ):
-    await service.update_bot(bot_id, payload.to_dashboard_config(fallback_id=bot_id))
+    await service.update_bot(
+        bot_id,
+        payload.to_dashboard_config(fallback_id=bot_id),
+        **(
+            {"owner": _auth.username if _auth.via == "jwt" else ""}
+            if payload.to_dashboard_config().get("type") == "wangshangliao"
+            else {}
+        ),
+    )
     return ok(message="更新平台配置成功~")
 
 
@@ -206,7 +226,14 @@ async def create_dashboard_alias_platform(
     service: BotConfigService = Depends(get_service),
 ):
     try:
-        await service.create_bot(payload.to_dashboard_config())
+        await service.create_bot(
+            payload.to_dashboard_config(),
+            **(
+                {"owner": _auth.username if _auth.via == "jwt" else ""}
+                if payload.to_dashboard_config().get("type") == "wangshangliao"
+                else {}
+            ),
+        )
         return ok(message="新增平台配置成功~")
     except ValueError as exc:
         return _alias_error(str(exc))
@@ -228,6 +255,11 @@ async def update_dashboard_alias_platform(
             str(bot_id),
             BotConfigRequest(config=config).to_dashboard_config(
                 fallback_id=str(bot_id)
+            ),
+            **(
+                {"owner": _auth.username if _auth.via == "jwt" else ""}
+                if config.get("type") == "wangshangliao"
+                else {}
             ),
         )
         return ok(message="更新平台配置成功~")

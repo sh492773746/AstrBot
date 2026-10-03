@@ -1,0 +1,26 @@
+{
+  "provider": [
+    {
+      "id": "platform-chat",
+      "type": "openai_chat_completion",
+      "provider": "openai",
+      "provider_type": "chat_completion",
+      "enable": true,
+      "key": [],
+      "model": "platform-chat",
+      "api_base": ""
+    },
+    {
+      "id": "platform-embedding",
+      "type": "openai_embedding",
+      "provider": "openai",
+      "provider_type": "embedding",
+      "enable": true,
+      "embedding_api_key": "",
+      "embedding_model": "platform-embedding",
+      "embedding_api_base": ""
+    }
+  ],
+  "chat_provider_id": "platform-chat",
+  "embedding_provider_id": "platform-embedding"
+}

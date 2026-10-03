@@ -1,0 +1,1 @@
+"""Native Wangshangliao protocol integration."""

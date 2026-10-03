@@ -53,6 +53,26 @@ class _MalformedStreamingErrorRunner(_StreamingErrorRunner):
 
 
 @pytest.mark.asyncio
+async def test_event_can_buffer_one_logical_tool_reply():
+    class Runner(_StreamingErrorRunner):
+        streaming = False
+
+        async def step(self):
+            yield AgentResponse(type="llm_result", data={"chain": MessageChain().message("Working. ")})
+            yield AgentResponse(type="llm_result", data={"chain": MessageChain().message("Done.")})
+            self.finished = True
+
+    runner = Runner("")
+    ev = runner.run_context.context.event
+    ev.get_extra = lambda key: True if key == "buffer_intermediate_messages" else None
+    ev.set_result = lambda result: None
+    ev.clear_result = lambda: None
+    replies = [reply async for reply in run_agent(runner)]
+    assert len(replies) == 1
+    assert replies[0].get_plain_text().split() == ["Working.", "Done."]
+
+
+@pytest.mark.asyncio
 async def test_run_agent_forwards_streaming_provider_error():
     error_text = (
         "LLM 响应错误: Not found the model k2.7-code-highspeed or Permission denied"

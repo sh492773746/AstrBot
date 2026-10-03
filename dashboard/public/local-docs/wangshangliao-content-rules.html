@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>旺商聊内容规则</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊内容审核与处罚</h1>
+<p>更新：2026-10-03。<a href="wangshangliao-index.html">文档目录</a>。
+本页描述当前行为，不默认任何群已授权，不用历史消息追罚成员。</p>
+<h2>仅手动踢出</h2>
+<p>当前接收机器人启用 <code>moderation.manual_kick_only=true</code>，所有群的自动踢出开关
+已关闭。AI和自动规则不得踢群；管理员只能通过私聊固定命令预览并另发确认执行。
+AI不能修改此限制，也不能重新开启 <code>auto_kick</code>，旧自动踢出请求在执行器再次拒绝。
+手动确认仍需原管理员、同一私聊、新消息、有效确认码及完整动作授权。</p>
+<p>递进审核保留撤回和禁言：前三次5、15、60分钟，后续每次最多60分钟。
+原踢出关键词在递进模式仅参与违规判断，不再升级踢人；旧关键词模式不执行踢出词规则。
+下面的第四次违规踢出描述仅适用于未开启此限制、且另行授权自动踢出的其他实例，
+不代表当前接收机器人的启用状态。</p>
+<h2>独立审核</h2>
+<p>启用群消息在审核链路处理，不要求 @，独立于客服回复开关。
+需要规则总开关、自动处理开关及逐群动作授权；原生角色和目标身份最终由执行器核验。
+平台群主、群管理员和已接入机器人免自动处罚；平台角色与 AstrBot 管理员不同，
+豁免不传递给转发者。</p>
+<p><code>moderation.semantic</code> 可选择已配置真实模型、超时和上下文数量。
+审核默认读取同群十分钟内最多20条先前消息，使用独立 SYSTEM_PROMPT，
+不继承客服人格/知识库，<code>tools=None</code>，仅输出受校验的结构化判断及当前消息证据。
+昵称、正文、引用均是不可信数据，不能通过提示注入授予权限。
+开启审核会将待审文本与有界上下文发送给所选模型服务，应先确认隐私要求。</p>
+<table>
+<thead>
+<tr>
+<th>判断</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>明确正常</td>
+<td>不处罚，不再用关键词覆盖</td>
+</tr>
+<tr>
+<td>歧义/需复核</td>
+<td>不自动处罚，不把怀疑当证据</td>
+</tr>
+<tr>
+<td>有效违规及对应证据</td>
+<td>进入独立处罚服务，不由模型任意指定动作或目标</td>
+</tr>
+<tr>
+<td>模型不可用/超时/格式错误/证据无效</td>
+<td>原高置信规则兜底，不把故障当违规</td>
+</tr>
+</tbody>
+</table>
+<h2>递进禁言与强制撤回</h2>
+<p>管理页开启 <code>moderation.progressive_mute</code> 后，确认违规不再先警告：</p>
+<table>
+<thead>
+<tr>
+<th>本轮已受理的自动禁言</th>
+<th>本次处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>第一次</td>
+<td>撤回原消息，并禁言5分钟</td>
+</tr>
+<tr>
+<td>第二次</td>
+<td>撤回原消息，并禁言15分钟</td>
+</tr>
+<tr>
+<td>第三次</td>
+<td>撤回原消息，并禁言60分钟，不踢出</td>
+</tr>
+<tr>
+<td>当前接收机器人第四次及之后</td>
+<td>撤回原消息，并禁言60分钟；<code>manual_kick_only</code> 禁止自动踢人</td>
+</tr>
+<tr>
+<td>其他实例的兼容自动踢出分支</td>
+<td>仅未开启手动限制、群级自动踢出开启且授权完整时，第四次新违规撤回并踢出，不再提交第四次禁言</td>
+</tr>
+</tbody>
+</table>
+<p>时长由执行器固定控制，不允许模型任意指定。新开关为实例级，默认关闭以兼容旧配置；
+必须同时开启撤回并具备该群 <code>recall</code>、<code>mute</code> 授权，不能只开启禁言。撤回失败时，
+仍在重新核验身份和权限后尝试禁言，两项结果分别记账；上游拒绝或未知不能说成功。
+第三次禁言到期不会自动踢出；当前接收机器人即使收到新的违规消息也不自动踢人。</p>
+<p>禁言关键词、踢出关键词现在也进入业务规则审核。启用AI时将它们作为不可信规则数据，
+结合当前发言及上下文判断；明确正常或证据不足不会被关键词二次覆盖处罚。
+AI关闭或故障时采用规范化后的字面匹配兜底，明显举报、引用不直接处罚。
+当前限制下，递进模式的踢出关键词只参与违规判断；其他实例的兼容自动踢出分支也不能直接跳级。
+未配置关键词时不自动添加任意词表，内置高置信业务规则仍有效。</p>
+<p>次数沿用现有持久化自动禁言账本，开启新模式不清零既有受理记录；
+人工禁言不计数，失败不升级，未知结果冻结后续自动禁言和踢出。
+重复消息不重复执行。群主、平台管理员及已接入机器人继续免自动处罚。
+递进模式不使用旧模式的每群处罚冷却，不会因此跳过下一条有效违规。
+插件页「处罚记录」分别展示禁言时长和原消息撤回结果。</p>
+<h2>规则兜底与有效时间</h2>
+<p>正文规范化包括全角、零宽字符和大小写。高置信组合包括“联系方式/外链 +
+引流、接单、充值返利、转线、担保”等，以及“成人露骨词 + 推广 + 联系方式/群号”。
+单独数字、链接、正常咨询、明显举报引用不足以自动处罚；历史域名不自动进入官方白名单。
+不分析图片、二维码或语音，不承诺检测所有变体。</p>
+<p>业务规则模式由 <code>moderation.content_rules_since</code> 标识。
+仅处理可信上游时间在生效后且距当前不超过五分钟的消息；旧、未来异常或时间未知
+只审计，不补采追罚。重复消息不重复累计，首次警告未受理不能直接视为已警告。</p>
+<p>未开启递进模式时，首次高置信违规按配置尝试撤回并警告；同规则版本、群和成员24小时内已受理警告后，
+再犯自动禁言。旧模式自动禁言/维护入口沿用1分钟；手动聊天默认30分钟且可指定1至1440分钟。
+冷却、幂等、目标保护与动作授权继续有效；未知请求不重复处罚。
+旧关键词模式保留独立禁言/踢出关键词，同时命中优先禁言，不因禁言无权限改踢出。
+关键词模式也检查上游发送时间：未知时间、延迟超过五分钟或超前超过五秒均忽略，
+不会累计警告或提交处罚；成员目录不完整、查询期间撤权或关闭自动化时拒绝执行。
+不要用旧模式描述代替业务规则模式的升级/确认流程。</p>
+<h2>兼容分支：三次禁言后再次违规踢出</h2>
+<p>本节不适用于当前启用 <code>manual_kick_only</code> 的接收机器人，也不是开启自动踢出的建议。</p>
+<p>逐群明确打开 <code>moderation.auto_kick[业务群ID]</code>，并保存 <code>mute</code>、<code>recall</code>、<code>kick</code> 授权。
+前三次自动禁言被上游受理后，只有第四次新的确认违规才提交踢出，不再追加禁言，
+不用人工确认码。第三次消息重放、计数达到三次或禁言到期都不会自行触发踢出。
+此开关不授予任何动作或群角色，新群不继承。</p>
+<ul>
+<li>按机器人账号、群和成员持久化累计；不随24小时警告窗口、重启或模型变化清零。</li>
+<li>仅本自动通道、启用后的受理禁言计数；人工、历史、失败、拒绝、未知或重复不计。</li>
+<li>未知禁言/踢出隔离该成员并停止后续自动处罚，先查结果，不靠新消息再试。</li>
+<li>开启自动踢出时，第四次违规不继续禁言；移出后读取完整名单核验。</li>
+<li>确认移出关闭本轮计数，重新进群为新一轮；受理不等于已确认。</li>
+</ul>
+<p>解禁由授权管理员命令/私聊工具完成，不因普通用户道歉自动解除或覆盖人工处罚。
+任意成员消息手动撤回命令未提供。</p>
+<h2>人工踢出</h2>
+<p>业务规则模式下，管理员私聊逐条发送：</p>
+<pre><code class="language-text">群列表
+选择群 1
+成员列表
+踢出 2
+确认踢出 &lt;预览中的确认码&gt;
+结果 &lt;操作ID&gt;
+</code></pre>
+<p>预览不执行，必须原管理员在同一私聊发新消息确认。确认码十分钟、一次使用，
+绑定账号、私聊、目标群与成员映射，执行前重查完整名单和全部权限。
+群内确认及模型自动确认不允许；未知不得重发。旧关键词模式固定踢出入口仍保留，
+使用前查看 <code>规则</code> 明确模式。</p>
+<h2>配置、审计与维护</h2>
+<p>插件页、机器人页或管理员自然语言草案均复用校验。自然语言预览后发
+<code>确认设置 &lt;码&gt;</code> 保存，禁止改权限或以配置请求直接处罚。
+审核开关、模型、关键词、递进禁言和冷却等为实例级，影响多个启用群；自动名片及兼容自动踢出开关才是逐群。
+关闭 <code>automation_enabled</code> 停自动处理，不等于放开人工踢出确认门禁。</p>
+<p>自动计数/意图及内容审计保存在实例群管账本；审计不复制完整敏感正文。
+<code>规则</code>、<code>能力</code>、<code>违规计数</code>、<code>结果 &lt;操作ID&gt;</code> 在管理员私聊选群后查看，
+插件页仅有界展示，不提供直接处罚或未知重试按钮。
+维护先关闭自动化并停止服务，备份源码、有效配置及全部账本；
+回滚保留新增数据与审计，不照抄历史部署备份路径，不删库复位。
+详见<a href="wangshangliao-maintenance.html">维护说明</a>和<a href="wangshangliao-testing.html">当前验收</a>。</p>
+</body></html>

@@ -4,6 +4,28 @@
       "loadFailed": "設定ファイルの読み込みに失敗しました",
       "close": "閉じる"
     },
+  "administratorSelector": {
+    "title": "管理者を選択",
+    "choose": "会話から選択",
+    "empty": "管理者未設定",
+    "unknownName": "名前の記録なし",
+    "permissionWarning": "管理者権限は一つのグループに限定されません。信頼できるユーザーのみ許可してください。",
+    "search": "名前またはアカウントを検索",
+    "platform": "プラットフォーム",
+    "allPlatforms": "すべてのプラットフォーム",
+    "refresh": "会話を更新",
+    "conversations": "既存の個人チャットユーザー",
+    "loading": "会話を読み込み中",
+    "noMatches": "該当するユーザーなし",
+    "noConversations": "識別可能な個人チャットユーザーなし",
+    "manual": "アカウントを手動入力",
+    "accountId": "アカウント",
+    "selected": "{count} 人を選択",
+    "remove": "{name} を削除",
+    "loadFailed": "会話を読み込めません。選択済み管理者は変更されません。",
+    "wangshangliao": "旺商聊",
+    "webchat": "ウェブチャット"
+  },
   "knowledgeBaseSelector": {
     "notSelected": "未選択",
     "buttonText": "ナレッジベースを選択…",

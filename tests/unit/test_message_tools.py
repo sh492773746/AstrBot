@@ -107,6 +107,36 @@ def _make_respond_stage() -> RespondStage:
 
 
 @pytest.mark.asyncio
+async def test_scheduled_delivery_retains_identity_on_unknown():
+    ctx = _make_context(current_session="wsl:GroupMessage:1/5")
+    service = ctx.context.context
+    service.platform_manager = SimpleNamespace(
+        platform_insts=[
+            SimpleNamespace(
+                meta=lambda: SimpleNamespace(id="wsl"), supports_operation_ids=True
+            )
+        ]
+    )
+    service.send_message_result = AsyncMock(
+        return_value={"status": "unknown", "operation_id": "cron/job/time/0"}
+    )
+    ctx.context.event.set_extra("cron_job", {"id": "job", "scheduled_at": "time"})
+    tool = SendMessageToUserTool()
+    for _ in range(2):
+        result = await tool.call(ctx, messages=[{"type": "plain", "text": "hello"}])
+        assert "unknown" in result
+        assert (
+            service.send_message_result.call_args.kwargs["operation_id"]
+            == "cron/job/time/0"
+        )
+    assert not ctx.context.event._has_send_oper
+    service.send_message_result.return_value = {"status": "accepted"}
+    result = await tool.call(ctx, messages=[{"type": "plain", "text": "hello"}])
+    assert "accepted does not mean peer-confirmed" in result
+    assert ctx.context.event.get_extra("_delivery_index") == 1
+
+
+@pytest.mark.asyncio
 async def test_send_message_with_full_three_part_session():
     """LLM passes a complete three-part session string."""
     tool = SendMessageToUserTool()

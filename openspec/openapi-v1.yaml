@@ -5327,6 +5327,28 @@ paths:
         "200":
           description: Webhook accepted
 
+  /api/v1/im/operations/{operation_id}:
+    get:
+      operationId: getImOperation
+      tags: [IM]
+      summary: Query a durable message operation result
+      x-astrbot-scope: im
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: platform_id
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Durable operation result or not_found; no resend occurs.
+          content:
+            application/json:
+              schema: {type: object}
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -5742,6 +5764,7 @@ components:
           type: boolean
           default: true
         config:
+          description: "Wangshangliao supports reply_private (boolean, default true) and reply_groups (group ID to boolean map, omitted entries default true). Group replies still require mentions."
           $ref: "#/components/schemas/DynamicConfig"
       additionalProperties: false
 
@@ -5749,9 +5772,81 @@ components:
       type: object
       required: [action]
       properties:
+        cleanup_limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        cleanup_state:
+          type: string
+          enum: [ACCOUNT_STATE_BAN, ACCOUNT_STATUS_CANCELLED]
+        card_member:
+          type: string
+          nullable: true
+          description: Single ordinary member business ID for a Dashboard card preview.
+        card_name:
+          type: string
+          nullable: true
+          description: Explicit card paired with card_member, including restoration of the original name.
+        card_job_id:
+          type: string
+          nullable: true
+          description: Server-created caller-bound card preview ID for execute, stop or status.
+        group:
+          oneOf:
+            - type: string
+            - type: integer
+          nullable: true
+          description: Enabled business group ID for card preview.
+
+        instance_id:
+          type: string
+        account:
+          type: string
+        password:
+          type: string
+          format: password
+          writeOnly: true
+        validate_str:
+          type: string
+          writeOnly: true
+        verification_code:
+          type: string
+          writeOnly: true
         action:
           type: string
-          enum: [start, poll]
+          enum: [start, poll, login, request_sms, verify_sms, resend_sms, cancel, logout, groups, moderation_preview, moderation_execute, test_status, test_open, test_close, card_preview, cleanup_preview, card_execute, card_status, card_stop]
+        sender_instance:
+          type: string
+        groups:
+          type: array
+          items: { type: string }
+        scopes:
+          type: array
+          items:
+            type: string
+            enum: [private_commands, private_ai, group_commands, group_ai, group_rules]
+        keywords:
+          type: array
+          items: { type: string }
+        seconds:
+          type: integer
+          minimum: 1
+          maximum: 300
+        budget:
+          type: integer
+          minimum: 1
+          maximum: 10
+        operation_action:
+          type: string
+          enum: [mute, unmute, mute_all, unmute_all, announce]
+        member:
+          type: integer
+        text:
+          type: string
+          maxLength: 2000
+        approval_token:
+          type: string
+          description: Single-use confirmation bound to the dashboard user and login session; expires after ten minutes.
         platform_config:
           $ref: "#/components/schemas/DynamicConfig"
         registration_code:
@@ -5997,6 +6092,11 @@ components:
       type: object
       required: [umo, message]
       properties:
+        operation_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Stable operation identity on supported platforms.
         umo:
           type: string
         message:

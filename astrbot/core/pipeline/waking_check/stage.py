@@ -5,6 +5,7 @@ from astrbot.core.message.components import At, AtAll, Reply
 from astrbot.core.message.message_event_result import MessageChain, MessageEventResult
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.platform.message_type import MessageType
+from astrbot.core.star.filter.command import CommandFilter
 from astrbot.core.star.filter.command_group import CommandGroupFilter
 from astrbot.core.star.filter.permission import PermissionTypeFilter
 from astrbot.core.star.session_plugin_manager import SessionPluginManager
@@ -83,6 +84,64 @@ class WakingCheckStage(Stage):
         self,
         event: AstrMessageEvent,
     ) -> None | AsyncGenerator[None, None]:
+        if event.get_platform_name() == "wangshangliao":
+            admin = (
+                str(event.get_sender_id())
+                in {str(uid) for uid in self.ctx.astrbot_config.get("admins_id", [])}
+                and event.get_extra("_api_key_allow_admin_role") is not False
+            )
+            event.role = "admin" if admin else "member"
+        if event.get_platform_name() == "wangshangliao" and event.is_private_chat():
+            from astrbot.builtin_stars.wangshangliao_moderation.syntax import (
+                recognize_command,
+            )
+
+            text = event.message_str.strip()
+            prefixes = self.ctx.astrbot_config.get("wake_prefix", [])
+            candidates = [text] + [
+                text[len(p) :].strip() for p in prefixes if p and text.startswith(p)
+            ]
+            command = bool(recognize_command(text)) or any(
+                candidate.startswith("/") for candidate in candidates
+            )
+            for handler in star_handlers_registry.get_handlers_by_event_type(
+                EventType.AdapterMessageEvent
+            ):
+                for item in handler.event_filters:
+                    if isinstance(item, (CommandFilter, CommandGroupFilter)):
+                        command = command or any(
+                            candidate == name
+                            or (
+                                candidate.startswith(name)
+                                and candidate[len(name) : len(name) + 1].isspace()
+                            )
+                            for name in item.get_complete_command_names()
+                            for candidate in candidates
+                        )
+            if command and not admin:
+                if event.get_extra("wsl_permission_denial"):
+                    event.stop_event()
+                    return
+                event.set_extra("wsl_permission_denial", True)
+                event.stop_event()
+                await event.send(MessageChain().message("无权限"))
+                return
+        if event.get_extra("_context_only") is True:
+            # Native adapters can retain context without running commands or models.
+            event.is_wake = False
+            event.is_at_or_wake_command = False
+            event.set_extra("handlers_parsed_params", {})
+            event.set_extra(
+                "activated_handlers",
+                [
+                    handler
+                    for handler in star_handlers_registry.get_handlers_by_event_type(
+                        EventType.AdapterMessageEvent
+                    )
+                    if handler.extras_configs.get("context_only", False)
+                ],
+            )
+            return
         # apply unique session
         event.set_extra("_session_isolated", False)
         if self.unique_session and event.message_obj.type == MessageType.GROUP_MESSAGE:

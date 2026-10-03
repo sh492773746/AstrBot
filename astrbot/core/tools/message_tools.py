@@ -337,11 +337,35 @@ class SendMessageToUserTool(FunctionTool[AstrAgentContext]):
                 return f"error: invalid session: {session}"
 
         message_chain = MessageChain(chain=components)
+        outcome = None
         try:
-            sent = await context.context.context.send_message(
-                target_session,
-                message_chain,
+            ctx = context.context.context
+            event = context.context.event
+            platforms = getattr(
+                getattr(ctx, "platform_manager", None), "platform_insts", []
             )
+            platform = next(
+                (p for p in platforms if p.meta().id == target_session.platform_id),
+                None,
+            )
+            if getattr(platform, "supports_operation_ids", False):
+                job = event.get_extra("cron_job") or {}
+                index = event.get_extra("_delivery_index", 0)
+                operation = (
+                    f"cron/{job['id']}/{job.get('scheduled_at') or job.get('run_started_at')}/{index}"
+                    if job.get("id")
+                    else None
+                )
+                outcome = await ctx.send_message_result(
+                    target_session, message_chain, operation_id=operation
+                )
+                event.set_extra("_delivery_status", outcome.get("status", "unknown"))
+                if outcome.get("status") not in {"accepted", "verified"}:
+                    return f"Delivery {outcome.get('status', 'unknown')}; do not retry automatically. Operation: {outcome.get('operation_id', '')}"
+                event.set_extra("_delivery_index", index + 1)
+                sent = True
+            else:
+                sent = await ctx.send_message(target_session, message_chain)
         except Exception as exc:
             return f"error: failed to send message to session {target_session}: {exc}"
         if not sent:
@@ -361,6 +385,8 @@ class SendMessageToUserTool(FunctionTool[AstrAgentContext]):
                     "_send_message_to_user_current_session_plain_texts",
                     sent_plain_texts,
                 )
+        if outcome is not None:
+            return f"Delivery {outcome['status']} for session {target_session}; accepted does not mean peer-confirmed."
         return f"Message sent to session {target_session}"
 
 

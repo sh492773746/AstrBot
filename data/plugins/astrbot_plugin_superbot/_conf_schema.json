@@ -1,0 +1,15 @@
+{
+  "chat_only_tenant": {"description": "仅独立 tenant-* 实例：对话模式，不创建知识库", "type": "bool", "default": false},
+  "avatar_daily_budget": {"description": "全实例每日头像付费任务上限，按北京时间；包含预占、失败和待核查，0停止新制作", "type": "int", "default": 10},
+  "avatar_total_budget": {"description": "全实例累计头像付费任务上限，包含历史任务；不自动释放或重置，0停止新制作", "type": "int", "default": 100},
+  "usdt_enabled": {"description": "开放广告专用 USDT 充值，不兑换积分", "type": "bool", "default": false},
+  "usdt_address": {"description": "专用 USDT-TRC20 收款地址（仅公钥地址）", "type": "string", "default": ""},
+  "trongrid_api_key": {"description": "TronGrid 查询 API Key，可选；不填写钱包私钥", "type": "string", "default": "", "secret": true},
+  "enabled": {"description": "启用插件；请先核实专用机器人与超管 UID", "type": "bool", "default": false},
+  "platform_id": {"description": "新机器人独立的 AstrBot Telegram 平台 ID，不填写现有机器人", "type": "string", "default": ""},
+  "owner_uid": {"description": "@example_owner 经核实的 Telegram 数字 UID；不是用户名，不自动猜测", "type": "string", "default": ""},
+  "chat_provider_id": {"description": "用于新机器人独立配置的现有聊天模型 ID", "type": "string", "default": ""},
+  "embedding_provider_id": {"description": "用于新机器人独立知识库的现有嵌入模型 ID", "type": "string", "default": ""},
+  "keno_proxy": {"description": "Keno 专用加拿大代理 URL（HTTP 或 SOCKS5），留空直连；勿在聊天发送凭据", "type": "string", "default": "", "secret": true},
+  "keno_fetch_enabled": {"description": "独立采集真实 Keno；不等于开启下注", "type": "bool", "default": false}
+}

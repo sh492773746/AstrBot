@@ -3,7 +3,7 @@
     <header class="ai-config-panel__header">
       <div class="ai-config-panel__heading">
         <h2 class="ai-config-panel__title">{{ tm('aiSettings.title') }}</h2>
-        <p class="ai-config-panel__subtitle">{{ currentRunner.summary }}</p>
+        <p v-if="!runnerLocked" class="ai-config-panel__subtitle">{{ currentRunner.summary }}</p>
       </div>
 
       <div class="ai-config-panel__actions">
@@ -19,7 +19,7 @@
           />
         </label>
 
-        <StyledMenu location="bottom end" :offset="8">
+        <StyledMenu v-if="!runnerLocked" location="bottom end" :offset="8">
           <template #activator="{ props: menuProps }">
             <v-btn
               v-bind="menuProps"
@@ -51,7 +51,7 @@
                 class="ai-config-panel__brand-logo"
               />
             </h3>
-            <p class="ai-config-panel__section-subtitle">
+            <p v-if="!runnerLocked" class="ai-config-panel__section-subtitle">
               {{ currentRunner.description }}
             </p>
           </div>
@@ -81,6 +81,7 @@
               :iterable="configData"
               :metadata-key="group.key"
               :search-keyword="searchKeyword"
+              :hide-persona-preview="runnerLocked"
             />
           </div>
         </template>
@@ -216,6 +217,10 @@ const props = defineProps({
   searchKeyword: {
     type: String,
     default: ''
+  },
+  runnerLocked: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -276,7 +281,7 @@ const localTabs = computed(() => [
   { value: 'persona', label: tm('aiSettings.tabs.persona') },
   { value: 'capabilities', label: tm('aiSettings.tabs.capabilities') },
   { value: 'advanced', label: tm('aiSettings.tabs.advanced') }
-]);
+].filter((tab) => localTabGroups.value[tab.value]?.length));
 
 function filterMetadataGroup(groupKey, itemFilter, overrides = {}) {
   const source = props.metadata?.[groupKey];
@@ -370,6 +375,12 @@ const commonGroups = computed(() => [
 
 watch(runnerType, () => {
   activeLocalTab.value = 'model';
+});
+
+watch(localTabs, (tabs) => {
+  if (!tabs.some((tab) => tab.value === activeLocalTab.value)) {
+    activeLocalTab.value = tabs[0]?.value || 'model';
+  }
 });
 
 watch(pendingRunnerType, () => {

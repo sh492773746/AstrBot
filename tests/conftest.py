@@ -26,6 +26,25 @@ os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("ASTRBOT_TEST_MODE", "true")
 
 
+@pytest.fixture(scope="module")
+def preserve_plugin_imports():
+    """Restore collected plugin classes after full-lifecycle integration tests."""
+    prefixes = ("data.plugins", "astrbot.builtin_stars")
+    original = {
+        name: module for name, module in sys.modules.items()
+        if name.startswith(prefixes)
+    }
+    yield
+    for name in list(sys.modules):
+        if name.startswith(prefixes) and name not in original:
+            sys.modules.pop(name, None)
+    sys.modules.update(original)
+    for name, module in original.items():
+        parent, _, child = name.rpartition(".")
+        if parent in sys.modules:
+            setattr(sys.modules[parent], child, module)
+
+
 # ============================================================
 # 测试收集和排序
 # ============================================================

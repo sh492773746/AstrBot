@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import AsyncGenerator
+from datetime import datetime
+from pathlib import Path
 
-from astrbot.core import LogBroker, logger
+from astrbot.core import LogBroker, LogManager, logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
 
@@ -45,11 +48,11 @@ class LogService:
     ) -> AsyncGenerator[str, None]:
         queue = None
         try:
+            queue = self.log_broker.register()
             if last_event_id:
                 async for event in self.replay_cached_logs(last_event_id):
                     yield event
 
-            queue = self.log_broker.register()
             while True:
                 message = await queue.get()
                 current_ts = message.get("time", time.time())
@@ -64,7 +67,88 @@ class LogService:
 
     def get_log_history(self) -> dict:
         try:
-            return {"logs": list(self.log_broker.log_cache)}
+            cached = list(self.log_broker.log_cache)
+            archived = []
+            for trace in (False, True):
+                prefix = "trace_log" if trace else "log_file"
+                if not self.config.get(f"{prefix}_enable", False):
+                    continue
+                path = Path(
+                    LogManager._resolve_log_path(
+                        self.config.get(f"{prefix}_path")
+                        or ("logs/astrbot.trace.log" if trace else "logs/astrbot.log")
+                    )
+                )
+                if not path.is_file():
+                    continue
+                earliest = min(
+                    (
+                        float(row.get("time", 0))
+                        for row in cached
+                        if (row.get("type") == "trace") == trace
+                    ),
+                    default=float("inf"),
+                )
+                # Read a bounded tail; archived files remain the complete source.
+                with path.open("rb") as stream:
+                    size = stream.seek(0, 2)
+                    stream.seek(max(0, size - 4 * 1024 * 1024))
+                    if stream.tell():
+                        stream.readline()
+                    lines = stream.read().decode("utf-8", errors="replace").splitlines()
+                entries = []
+                for line in lines:
+                    try:
+                        timestamp = datetime.strptime(
+                            line[1:24], "%Y-%m-%d %H:%M:%S.%f"
+                        ).timestamp()
+                        if trace:
+                            entry = json.loads(line[26:])
+                            if (
+                                not isinstance(entry, dict)
+                                or entry.get("type") != "trace"
+                            ):
+                                continue
+                        else:
+                            entry = {
+                                "type": "log",
+                                "time": timestamp,
+                                "level": "INFO",
+                                "data": line,
+                                "category": (
+                                    match.group(1)
+                                    if (
+                                        match := re.search(
+                                            r"\[category=([a-z_]+)\]:", line
+                                        )
+                                    )
+                                    else "unknown"
+                                ),
+                            }
+                            for level in (
+                                "DEBUG",
+                                "INFO",
+                                "WARNING",
+                                "WARN",
+                                "ERROR",
+                                "CRITICAL",
+                            ):
+                                if f"[{level}]" in line:
+                                    entry["level"] = level
+                                    break
+                        entries.append(entry)
+                    except (ValueError, TypeError):
+                        if not trace and entries:
+                            entries[-1]["data"] += "\n" + line
+                archived.extend(
+                    entry
+                    for entry in entries[-1000:]
+                    if float(entry.get("time", 0)) < earliest
+                )
+            logs = sorted(
+                [*archived, *cached], key=lambda entry: float(entry.get("time", 0))
+            )
+            return {"logs": logs[-2000:]}
         except Exception as exc:
             logger.error(f"获取日志历史失败: {exc}")
             raise LogServiceError(f"获取日志历史失败: {exc}") from exc

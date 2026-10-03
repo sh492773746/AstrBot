@@ -20,7 +20,16 @@ cookies.json
 # Data files
 data_v2.db
 data_v3.db
-data
+/data/*
+!/data/plugins/
+/data/plugins/*
+!/data/plugins/astrbot_plugin_superbot/
+!/data/plugins/astrbot_plugin_telethon_ai/
+!/data/plugins/astrbot_plugin_telegram_collection/
+!/data/plugins/astrbot_plugin_tgwatch/
+!/data/plugins/astrbot_plugin_rebo_live/
+!/data/plugins/astrbot_plugin_tenant_control/
+!/data/plugins/astrbot_plugin_domain_analytics/
 configs/session
 configs/config.yaml
 cmd_config.json
@@ -65,3 +74,32 @@ GenieData/
 .worktrees/
 
 dashboard/bun.lock
+
+# Runtime state and credentials must never be included in this public fork.
+.pytest_cache/
+.ruff_cache/
+*.pyc
+*.db
+*.db-*
+*.sqlite*
+*.session*
+*.log
+*.bak
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+**/.astrbot-plugin/
+!astrbot/builtin_stars/wangshangliao_moderation/.astrbot-plugin/
+astrbot/builtin_stars/wangshangliao_moderation/.astrbot-plugin/*
+!astrbot/builtin_stars/wangshangliao_moderation/.astrbot-plugin/i18n/
+integrations/**/var/
+integrations/**/data/
+integrations/**/dist/
+integrations/**/deploy/vip-*.json
+# Live reports belong in private maintenance storage, not public source history.
+integrations/**/ACCEPTANCE-*.md
+integrations/**/DEPLOYMENT-*.md
+integrations/**/LIVE-TENANT-*.md
+integrations/**/TRIAL-READINESS-*.md

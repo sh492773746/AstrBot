@@ -24,6 +24,8 @@
     </v-btn>
   </div>
 
+  <p class="text-caption mt-2">选择人格不会自动绑定知识库。请在所选配置文件中选择知识库；网页聊天还需选择同一配置。内置知识库检索不需要开放服务器命令权限。</p>
+
   <!-- Knowledge Base Selection Dialog -->
   <v-dialog v-model="dialog" max-width="600px">
     <v-card>

@@ -1,0 +1,21 @@
+{
+  "admins_id": [],
+  "provider_settings": {"enable": false},
+  "dashboard": {
+    "enable": true,
+    "host": "127.0.0.1",
+    "port": 6186,
+    "username": "astrvip",
+    "password": ""
+  },
+  "platform": [
+    {
+      "id": "VIP_DHBot",
+      "type": "telegram",
+      "enable": false,
+      "telegram_token": "",
+      "telegram_allowed_updates": ["message", "pre_checkout_query", "managed_bot", "callback_query"],
+      "telegram_required_plugin": "astrbot_plugin_tenant_control"
+    }
+  ]
+}

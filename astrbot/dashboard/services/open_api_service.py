@@ -643,7 +643,7 @@ class OpenApiService:
             strict=True,
         )
 
-    async def send_message(self, post_data: object) -> None:
+    async def send_message(self, post_data: object) -> dict | None:
         payload = post_data if isinstance(post_data, dict) else {}
         message_payload = payload.get("message", {})
         umo = payload.get("umo")
@@ -673,7 +673,49 @@ class OpenApiService:
             )
 
         try:
-            message_chain = await self.build_message_chain_from_payload(message_payload)
+            if isinstance(message_payload, list) and any(
+                isinstance(part, dict) and part.get("type") == "at"
+                for part in message_payload
+            ):
+                from astrbot.api.event import MessageChain
+                from astrbot.api.message_components import At
+
+                components = []
+                pending = []
+                for part in message_payload:
+                    if not isinstance(part, dict) or part.get("type") != "at":
+                        pending.append(part)
+                        continue
+                    if pending:
+                        batch = await self.build_message_chain_from_payload(pending)
+                        components.extend(batch.chain)
+                        pending = []
+                    target = part.get("qq")
+                    name = part.get("name", "")
+                    if (
+                        set(part) - {"type", "qq", "name"}
+                        or not isinstance(target, str)
+                        or not target.strip()
+                        or target != target.strip()
+                        or len(target) > 256
+                        or target.lower() == "all"
+                        or not isinstance(name, str)
+                        or len(name) > 256
+                    ):
+                        raise OpenApiServiceError("invalid at message part")
+                    components.append(At(qq=target, name=name))
+                if pending:
+                    batch = await self.build_message_chain_from_payload(pending)
+                    components.extend(batch.chain)
+                message_chain = MessageChain(chain=components)
+            else:
+                message_chain = await self.build_message_chain_from_payload(
+                    message_payload
+                )
+            if getattr(platform_inst, "supports_operation_ids", False):
+                return await platform_inst.send_by_session(
+                    session, message_chain, operation_id=payload.get("operation_id")
+                )
             await platform_inst.send_by_session(session, message_chain)
         except OpenApiServiceError:
             raise

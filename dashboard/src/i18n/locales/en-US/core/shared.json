@@ -4,6 +4,28 @@
       "loadFailed": "Failed to load the config profile",
       "close": "Close"
     },
+  "administratorSelector": {
+    "title": "Select Administrators",
+    "choose": "Choose From Conversations",
+    "empty": "No administrators",
+    "unknownName": "Name not recorded",
+    "permissionWarning": "Administrator permissions extend beyond a single group. Only authorize trusted users.",
+    "search": "Search name or account",
+    "platform": "Platform",
+    "allPlatforms": "All platforms",
+    "refresh": "Refresh conversations",
+    "conversations": "Existing private chat users",
+    "loading": "Loading conversations",
+    "noMatches": "No matching users",
+    "noConversations": "No identifiable private chat users",
+    "manual": "Enter Account Manually",
+    "accountId": "Account",
+    "selected": "{count} selected",
+    "remove": "Remove {name}",
+    "loadFailed": "Unable to load conversations. Selected administrators are unchanged.",
+    "wangshangliao": "Wangshangliao",
+    "webchat": "Web Chat"
+  },
   "knowledgeBaseSelector": {
     "notSelected": "Not selected",
     "buttonText": "Select Knowledge Base...",

@@ -110,6 +110,8 @@ class GroupChatContext:
         return response.completion_text
 
     async def need_active_reply(self, event: AstrMessageEvent) -> bool:
+        if event.get_extra("_context_only") is True:
+            return False
         cfg = self.cfg(event)
         if not cfg["enable_active_reply"]:
             return False

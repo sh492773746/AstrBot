@@ -475,7 +475,7 @@ class LogManager:
             format=(
                 "[{time:YYYY-MM-DD HH:mm:ss.SSS}] {extra[plugin_tag]} "
                 "[{extra[short_levelname]}]{extra[astrbot_version_tag]} "
-                "[{extra[source_file]}:{extra[source_line]}]: {message}"
+                "[{extra[source_file]}:{extra[source_line]}] [category={extra[category]}]: {message}"
             ),
             encoding="utf-8",
             rotation=rotation,

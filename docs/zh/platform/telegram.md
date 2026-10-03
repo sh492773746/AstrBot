@@ -15,6 +15,10 @@
 
 主动消息推送：支持。
 
+## 命令菜单
+
+菜单包含 `/start` 和已启用插件的有效 Telegram 命令，内置命令使用中文说明。菜单显示不代表用户拥有执行权限，权限仍由 AstrBot 校验。更新失败会保留原菜单，并在后续注册时重试。旺商聊群管插件不适用于 Telegram。
+
 ## 1. 创建 Telegram Bot
 
 首先，打开 Telegram，搜索 `BotFather`，点击 `Start`，然后发送 `/newbot`，按照提示输入你的机器人名字和用户名。
@@ -37,6 +41,22 @@
 - Bot Token: 你的 Telegram 机器人的 `token`。
 
 请确保你的网络环境可以访问 Telegram。你可能需要使用 `设置 → 网络 → 代理与依赖源 → HTTP 代理` 来设置代理。
+
+## 专用租户总控
+
+本仓库的租户总控和租户机器人都以 AstrBot 为运行底座。仅在总控的专用
+Telegram 适配器中配置以下可选字段：
+
+- `telegram_allowed_updates`：填写 `["message", "pre_checkout_query", "managed_bot", "callback_query"]`，
+  订阅消息、Stars 支付预检和托管机器人事件。留空保持原有轮询行为。
+- `telegram_required_plugin`：填写 `astrbot_plugin_tenant_control`，普通机器人留空。
+  总控会等待插件就绪后再接收更新；卸载插件时，适配器先暂停接收并处理完已排队的支付事件。
+
+安装 `integrations/tenant-control` 构建的插件包，在 AstrBot 插件配置中设置经核实的
+运营管理员 ID。插件复用 AstrBot 的 Telegram 客户端、命令事件和生命周期，
+不会再启动一个独立轮询器。本功能依赖本仓库的适配器扩展，不能直接假定任意原版镜像兼容。
+总控应与生产实例、租户实例分开部署，启用前须轮换已泄露的 Token。
+共享订单库、加密密钥和独立部署器的配置见该集成的 README。
 
 ## 流式输出
 

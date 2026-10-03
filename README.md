@@ -1,6 +1,9 @@
 ![AstrBot-Logo-Simplified](https://github.com/user-attachments/assets/36fb04e4-cc75-4454-bd8b-049d11aa86f9)
 
 
+> This fork includes local platform and group-business customizations. See
+> [the customization guide](docs/local-customizations.md) for scope, setup and data exclusions.
+
 <div align="center">
 
 <a href="https://github.com/AstrBotDevs/AstrBot/blob/master/README_zh.md">简体中文</a> ｜

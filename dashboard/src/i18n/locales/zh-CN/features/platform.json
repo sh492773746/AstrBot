@@ -254,5 +254,16 @@
     "occurredAt": "发生时间",
     "traceback": "错误堆栈",
     "close": "关闭"
+  },
+  "wangshangliao": {
+    "online": "在线",
+    "reconnecting": "重连中",
+    "reauth_required": "需要登录",
+    "awaiting_save": "认证成功，等待保存登录并连接",
+    "stopped": "已停止",
+    "error": "连接错误",
+    "rate_limited": "受限等待",
+    "account_conflict": "账号冲突",
+    "privateDirectoryIncomplete": "私聊目录不完整：目前仅列出本地已知会话，平台完整私聊目录尚未验证。可搜索或滚动选择。"
   }
 }

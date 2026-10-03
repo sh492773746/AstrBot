@@ -319,6 +319,11 @@ async def _apply_kb(
                 context=plugin_context,
             )
             if not kb_result:
+                req.extra_user_content_parts.append(
+                    TextPart(
+                        text="[Knowledge Base Status]: No relevant context was supplied by the built-in retrieval for this session. This does not indicate a filesystem permission denial. Do not search server files or execute shell commands to locate the managed knowledge base. If knowledge is required, explain that no relevant material was retrieved and ask the user to check this session's configuration and knowledge-base selection; do not invent an answer. For greetings or unrelated questions, answer normally."
+                    ).mark_as_temp()
+                )
                 return
             req.extra_user_content_parts.append(
                 TextPart(
@@ -326,7 +331,12 @@ async def _apply_kb(
                 ).mark_as_temp()
             )
         except Exception as exc:  # noqa: BLE001
-            logger.error("Error occurred while retrieving knowledge base: %s", exc)
+            logger.error("Knowledge base retrieval failed: %s", type(exc).__name__)
+            req.extra_user_content_parts.append(
+                TextPart(
+                    text="[Knowledge Base Status]: Built-in retrieval failed. This is not an empty search result. Do not substitute shell commands or filesystem searches for managed knowledge-base retrieval. If the answer requires this knowledge, state that retrieval is temporarily unavailable and ask the administrator to check the knowledge-base provider and index."
+                ).mark_as_temp()
+            )
     else:
         if req.func_tool is None:
             req.func_tool = ToolSet()

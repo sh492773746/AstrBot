@@ -95,6 +95,7 @@ outline: deep
 | --- | --- | --- |
 | `GET` | `/api/v1/im/bots` | — |
 | `POST` | `/api/v1/im/messages` | — |
+| `GET` | `/api/v1/im/operations/{operation_id}` | — |
 
 ## `config`
 

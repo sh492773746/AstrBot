@@ -1,0 +1,38 @@
+{
+  "enabled": {
+    "description": "启用工作统计（完成配置后开启）",
+    "type": "bool",
+    "default": false
+  },
+  "platform_id": {
+    "description": "AstrBot Telegram 平台 ID",
+    "type": "string",
+    "default": ""
+  },
+  "work_chat_id": {
+    "description": "排行榜工作群数字 ID；首次可留空，在主管理员私聊配置检查中绑定",
+    "type": "string",
+    "default": ""
+  },
+  "admin_ids": {
+    "description": "管理员数字 ID 列表，第一项为主管理员；机器人内增删会同步到此配置",
+    "type": "list",
+    "default": []
+  },
+  "api_url": {
+    "description": "独立采集服务地址",
+    "type": "string",
+    "default": "http://127.0.0.1:6190"
+  },
+  "api_token": {
+    "description": "采集服务 Bearer 密钥",
+    "type": "string",
+    "default": "",
+    "obvious_hint": true
+  },
+  "reports_enabled": {
+    "description": "启用工作群定时榜单（选择新工作群后需手动启用）",
+    "type": "bool",
+    "default": true
+  }
+}

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>旺商聊文档目录</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊文档目录</h1>
+<p>更新：2026-10-03。以当前仓库实现为准；历史验收报告不代替当前使用说明。</p>
+<h2>使用与配置</h2>
+<table>
+<thead>
+<tr>
+<th>文档</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="wangshangliao-start.html">从零开始使用</a></td>
+<td>登录、按名称选择管理员、群授权、聊天操作与常见问题</td>
+</tr>
+<tr>
+<td><a href="wangshangliao.html">接入器说明</a></td>
+<td>部署、配置、身份与会话、主动发送、能力边界</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-plugin.html">插件说明</a></td>
+<td>全部命令、权限表、排名、抽奖、邀请奖励、三路 AI</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-content-rules.html">内容审核与处罚</a></td>
+<td>独立审核、规则兜底、5/15/60 分钟递进禁言、人工踢出</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-schedules.html">每日禁言计划</a></td>
+<td>预览确认、未来边界、暂停恢复、故障处理</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-maintenance.html">维护与发布</a></td>
+<td>账本、备份、正文保留、更新、回滚与排障</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-diagnostics.html">日志与排障</a></td>
+<td>AI 路由、权限拒绝、不回复原因、回执语义和脱敏边界</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-database.html">数据库与性能维护</a></td>
+<td>存储分工、索引、连接释放、实测基准、安全升级与回滚</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-testing.html">测试与验收</a></td>
+<td>四种身份场景、测试窗口方向、证据要求及未完成项目</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-development.html">接入器开发说明</a></td>
+<td>模块责任、接口与安全约束、开发回归入口</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-solver.html">滑块组件说明</a></td>
+<td>内置运行时来源、依赖、人工回退与敏感数据边界</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-en.html">English adapter guide</a></td>
+<td>Deployment, identity, routing and capability boundaries</td>
+</tr>
+<tr>
+<td><a href="wangshangliao-start-en.html">English beginner guide</a></td>
+<td>Dashboard setup and chat workflows</td>
+</tr>
+</tbody>
+</table>
+<h2>去哪里设置</h2>
+<table>
+<thead>
+<tr>
+<th>设置</th>
+<th>入口与范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>登录、启用群、回复、主动发送、测试窗口、批量成员任务</td>
+<td>机器人页；每个实例独立</td>
+</tr>
+<tr>
+<td>聊天管理员</td>
+<td>有效配置文件的 <code>admins_id</code>；可从已有私聊按名称选择，不按昵称授权</td>
+</tr>
+<tr>
+<td>群客服模型</td>
+<td>插件页 <code>customer_provider_id</code>；保存为 <code>ai_routes.groups[业务群ID]</code> 模型ID字符串</td>
+</tr>
+<tr>
+<td>管理员群管模型</td>
+<td>插件页；实例 <code>ai_routes.admin_provider_id</code></td>
+</tr>
+<tr>
+<td>违规审核模型</td>
+<td>插件页；实例 <code>moderation.semantic.provider_id</code></td>
+</tr>
+<tr>
+<td>人格与知识库</td>
+<td>AstrBot 会话/配置文件；独立审核不继承</td>
+</tr>
+<tr>
+<td>下期奖品、人数、倒计时、门槛、统一邀请积分</td>
+<td>插件页活动控制，或管理员私聊固定命令/自然语言预览确认</td>
+</tr>
+<tr>
+<td>开奖、取消、启停邀请奖励</td>
+<td>授权管理员私聊；保存活动参数不自动开始活动</td>
+</tr>
+<tr>
+<td>每日计划</td>
+<td>管理员私聊预览确认；插件页可查看与暂停，不直接创建或恢复</td>
+</tr>
+<tr>
+<td>自动规范群名片</td>
+<td>插件页群开关，或管理员私聊自然语言预览确认；逐群设置，开启另需已有 <code>rename</code> 授权</td>
+</tr>
+<tr>
+<td>指定成员群名片</td>
+<td>管理员私聊先查成员、生成预览、另发确认；只改群内名片，不改账号昵称</td>
+</tr>
+</tbody>
+</table>
+<p>所有聊天命令均可不带斜杠或“群管”前缀。普通群员的公开命令限群内排名、
+抽奖报名/状态和本人邀请积分；普通私聊固定命令返回“无权限”，普通咨询可走客服。
+聊天管理员、后台账号、上游群角色、动作白名单、主动发送目的地授权是不同权限。</p>
+<h2>当前行为速查</h2>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>预期行为与边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>普通群员发送 <code>排名</code>、<code>参加抽奖</code>、<code>我的邀请</code></td>
+<td>走群内公共命令，不要求管理员；群启用、活动状态等仍需满足</td>
+</tr>
+<tr>
+<td>普通用户私聊 <code>你是谁</code></td>
+<td>私聊客服开关及当前消息门禁允许时进入客服，不获得群管工具</td>
+</tr>
+<tr>
+<td>普通用户私聊 <code>我的权限</code>、<code>我的邀请</code></td>
+<td>当前私聊固定命令仅向管理员开放，返回“无权限”；不能据此认定客服故障</td>
+</tr>
+<tr>
+<td>管理员在群里 @ 机器人</td>
+<td>仍是该群客服，不进入管理员自然语言配置路由</td>
+</tr>
+<tr>
+<td>管理员私聊修改规则、活动参数或自动名片开关</td>
+<td>先预览目标及前后值，再由同一私聊确认；不靠模型判断管理员身份</td>
+</tr>
+<tr>
+<td>当前接收机器人的自动违规处理</td>
+<td>撤回＋5/15/60 分钟递进禁言，后续最高60分钟；<code>manual_kick_only</code> 禁止 AI 和自动规则踢人</td>
+</tr>
+<tr>
+<td>抽奖开场、状态、报名反馈及中奖名单</td>
+<td>抽奖类消息保留；不是所有机器人群回复都在20秒后撤回</td>
+</tr>
+</tbody>
+</table>
+<p>自然语言管理还需可用模型、插件和人格工具白名单允许 <code>wsl_private_management</code>。
+勾选技能不授予管理员身份，也不替代群动作授权。历史文档中的第四次自动踢出
+属于兼容分支，不能用于推断当前接收机器人的启用状态。详细判断与结果含义
+见<a href="wangshangliao-plugin.html">插件说明</a>和<a href="wangshangliao-diagnostics.html">日志与排障</a>。</p>
+<h2>阅读与发布</h2>
+<p>机器人页“使用教程 · PDF”打开本地入门教程。<code>dashboard/scripts/build-wangshangliao-guide.mjs</code>
+生成离线 HTML；<code>scripts/build_wsl_guide_pdf.py</code> 生成中文入门 PDF。
+只更新 Markdown 不会自动更新已部署 HTML/PDF，发布流程见维护说明。</p>
+<p>历史资料：<a href="wangshangliao-testing-history.html">早期测试记录</a>、
+<a href="wangshangliao-review-history.html">2026-09-22 审查记录</a>。
+旧命令、权限范围、实现缺口和部署路径仅代表当时状态。</p>
+</body></html>

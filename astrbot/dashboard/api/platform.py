@@ -83,7 +83,15 @@ async def register_bot_type(
     service: PlatformService = Depends(get_service),
 ):
     return await _run(
-        lambda: service.handle_platform_registration(bot_type, _model_dict(payload))
+        lambda: service.handle_platform_registration(
+            bot_type,
+            _model_dict(payload),
+            **(
+                {"owner": _auth.username if _auth.via == "jwt" else ""}
+                if bot_type == "wangshangliao"
+                else {}
+            ),
+        )
     )
 
 
@@ -137,5 +145,9 @@ async def handle_dashboard_platform_registration(
 ):
     payload = await _json_or_empty(request)
     return await _run(
-        lambda: service.handle_platform_registration(platform_type, payload)
+        lambda: service.handle_platform_registration(
+            platform_type,
+            payload,
+            **({"owner": _username} if platform_type == "wangshangliao" else {}),
+        )
     )

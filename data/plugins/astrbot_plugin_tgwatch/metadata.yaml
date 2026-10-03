@@ -1,0 +1,7 @@
+name: astrbot_plugin_tgwatch
+display_name: Telegram 工作统计
+desc: 独立 Telegram 采集服务的管理员入口、聊天记录查询和定时排行榜。
+version: v0.9.0
+author: local
+support_platforms:
+  - telegram

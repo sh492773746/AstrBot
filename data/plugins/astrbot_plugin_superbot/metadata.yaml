@@ -1,0 +1,7 @@
+name: astrbot_plugin_superbot
+display_name: 大海传媒超级机器人
+desc: 广告、积分、加拿大28模拟及分权群管，含超管群配置模板，复用 AstrBot Telegram 接入。
+version: v1.7.0
+author: local
+support_platforms:
+  - telegram

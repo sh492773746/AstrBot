@@ -1,0 +1,13 @@
+title = "AstrBot fork secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known non-secret media-cache identifier, redaction fixture and public protocol constant"
+regexTarget = "line"
+regexes = [
+  '''cache_key = "mines_trophy_v1" if trophy else "mines_explosion_v1"''',
+  '''API Key=sk-synthetic123456789''',
+  '''SEED_KEY = "fd6a43ae25f74398b61c03c83be37449"''',
+]

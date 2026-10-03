@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>旺商聊接入器</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊原生接入器</h1>
+<p>更新：2026-10-02。入门操作见<a href="wangshangliao-start.html">从零开始使用</a>，
+完整功能与命令见<a href="wangshangliao-plugin.html">插件说明</a>，
+全部资料见<a href="wangshangliao-index.html">文档目录</a>。</p>
+<h2>范围与架构</h2>
+<p>本接入器在 AstrBot 进程内完成业务认证、加密会话恢复、NIM 连接、目录与身份映射、
+文本收发和固定群管理能力。不需要 Rust 服务、DH 工作台、桥接地址或配对令牌。</p>
+<p><img src="images/architecture-layers.svg" alt="接入分层"></p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>负责</th>
+<th>不负责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AstrBot</td>
+<td>有效配置、管理员、会话、模型、人格、知识库、后台认证与日志</td>
+<td>旺商聊协议</td>
+</tr>
+<tr>
+<td>接入器</td>
+<td>登录、传输、可信身份、最终动作授权、幂等、回执与恢复账本</td>
+<td>解析聊天命令或让模型决定权限</td>
+</tr>
+<tr>
+<td>内置群管插件</td>
+<td>固定命令、AI 工具、独立审核、排名、活动和每日计划</td>
+<td>另造管理员系统或绕过执行器请求协议</td>
+</tr>
+<tr>
+<td>插件管理页</td>
+<td>模型/规则/逐群授权、活动参数、计划状态与有界审计</td>
+<td>直接处罚、任意重试或聊天自授权</td>
+</tr>
+</tbody>
+</table>
+<h2>部署</h2>
+<p>使用 Python 3.12+，在项目根目录执行：</p>
+<pre><code class="language-sh">uv sync --extra wsl
+cd dashboard
+pnpm install
+pnpm generate:api
+pnpm build
+</code></pre>
+<p>内置滑块组件需要 Node.js 和 OpenCV/ONNX，按需启动串行本地工作进程，无需 GPU。
+Docker 构建需启用项目的 <code>INSTALL_WSL</code> 构建参数。依赖在目标系统/架构重新安装，
+不能复制其他系统的虚拟环境、EXE、DLL 或 <code>.pyd</code>。部署入口存在不代表所有架构均已实测。</p>
+<p>由部署管理员设置 <code>ASTRBOT_WANGSHANGLIAO_CONFIG</code> 指向受保护 JSON 文件：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>origin</code></td>
+<td>HTTPS 服务根地址</td>
+</tr>
+<tr>
+<td><code>headers</code></td>
+<td>协议请求头映射</td>
+</tr>
+<tr>
+<td><code>metadata</code></td>
+<td>14 个整数</td>
+</tr>
+<tr>
+<td><code>signing_seed</code>、<code>body_key</code>、<code>message_key</code>、<code>server_key</code></td>
+<td>标准 Base64 编码，解码后各32字节</td>
+</tr>
+<tr>
+<td><code>captcha_id</code>、<code>app_key</code>、<code>device_id</code></td>
+<td>有效协议部署参数</td>
+</tr>
+</tbody>
+</table>
+<p>Linux/macOS 文件应为 <code>0600</code>；Windows 使用仅服务账号可读 ACL。参数不得写入教程、
+聊天或截图，也不从浏览器接口返回。缺失为 <code>deployment_missing</code>，不合格为
+<code>deployment_invalid</code>。旧配置缺少 <code>message_key</code> 可以认证，但消息启动报
+<code>message_key_missing</code>，不能把登录成功当收发就绪。</p>
+<p>未设置环境变量时可加载已批准导入的
+<code>data/platform_data/wangshangliao/deployment/</code> 密封配置；显式路径无效时不静默回退。
+导入协议配置不导入旧账号密码或账号会话。</p>
+<p><code>ASTRBOT_YIDUN_SOLVER_URL</code> 未设置或为 <code>builtin</code> 时使用内置求解器；
+空值使用人工流程；外部 HTTP 求解服务为兼容选项。自动失败保留人工验证。
+<code>.venv/bin/python scripts/check_wangshangliao.py</code> 做不联网、不打印凭证的预检，
+预检通过不等于真实平台验收。</p>
+<h2>登录、保存与停用</h2>
+<ol>
+<li>机器人页创建旺商聊实例，选择密码或短信登录，完成滑块及设备短信验证。</li>
+<li>认证成功后选择启用群与配置文件，在十分钟登录事务期限内保存登录并连接。</li>
+<li>等待消息连接“在线”，分别配置私聊/逐群回复、动作授权及主动发送目的地，再保存。</li>
+<li>空启用群列表不处理群消息，仍可按配置处理私聊。</li>
+</ol>
+<p>登录事务绑定后台用户与预分配实例，保存后才持久绑定账号并连接 NIM。
+认证成功、配置保存和消息在线是三个独立状态。后台密码不等于旺商聊密码。
+停用并保存关闭连接与处理任务，保留恢复会话；退出账号删除本地恢复凭据，
+不擦除历史账本。重新登录先停止旧连接，保存后替换账号。<code>reauth_required</code>
+需要重新登录。切换系统时先停止旧回复系统，不让两套自动化同时处理同群。</p>
+<h2>实例配置参考</h2>
+<p>这些是保存配置的字段，不是要求用户直接编辑密封会话；优先使用后台，未知字段会拒绝。</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>默认/范围与含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code>、<code>type</code>、<code>enable</code></td>
+<td>实例身份；类型固定 <code>wangshangliao</code>；启停独立于账号退出</td>
+</tr>
+<tr>
+<td><code>account_id</code>、<code>nickname</code>、<code>login_method</code></td>
+<td>当前业务账号/名称；登录方式 <code>password</code> 或 <code>sms</code></td>
+</tr>
+<tr>
+<td><code>enabled_groups</code></td>
+<td>业务群ID字符串列表；默认空，不接受显示群号</td>
+</tr>
+<tr>
+<td><code>reply_private</code></td>
+<td>默认true；私聊回复</td>
+</tr>
+<tr>
+<td><code>reply_groups</code></td>
+<td>群ID到布尔值；缺省true，但群仍须启用</td>
+</tr>
+<tr>
+<td><code>ai_routes.admin_provider_id</code></td>
+<td>管理模型ID字符串，空值继承当前私聊模型</td>
+</tr>
+<tr>
+<td><code>ai_routes.groups</code></td>
+<td>群ID到客服模型ID字符串的映射，最多100群；不是嵌套对象</td>
+</tr>
+<tr>
+<td><code>proactive_send</code></td>
+<td><code>enabled</code> 默认false，<code>targets</code> 精确路由目的地，最多1000项</td>
+</tr>
+<tr>
+<td><code>moderation</code></td>
+<td>总开关、逐群动作、规则/审核/名片自动化等，见下表</td>
+</tr>
+<tr>
+<td><code>developer_test</code></td>
+<td>来源、群、范围、测试词、1至300秒、1至10次；只保存草稿</td>
+</tr>
+<tr>
+<td><code>session_ref</code></td>
+<td>登录期间的一次引用；不要手工构造或写入示例</td>
+</tr>
+</tbody>
+</table>
+<p>插件 API 提交字段名 <code>customer_provider_id</code>，实际保存为
+<code>ai_routes.groups[&quot;业务群ID&quot;] = &quot;模型ID&quot;</code>；空映射值为继承，不能写
+<code>{&quot;customer_provider_id&quot;: &quot;…&quot;}</code> 作为该映射值。</p>
+<table>
+<thead>
+<tr>
+<th><code>moderation</code> 字段</th>
+<th>默认/范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code>、<code>automation_enabled</code>、<code>recall_enabled</code></td>
+<td>缺省false；分别为能力总开关、自动化、违规撤回</td>
+</tr>
+<tr>
+<td><code>permissions</code></td>
+<td>群ID到动作列表，最多100群；必须显式保存</td>
+</tr>
+<tr>
+<td><code>cooldown_seconds</code></td>
+<td>默认60，整数10至86400秒</td>
+</tr>
+<tr>
+<td><code>mute_keywords</code>、<code>kick_keywords</code>、旧 <code>keywords</code></td>
+<td>各最多50条，每条非空、最多100字符；旧值仅兼容</td>
+</tr>
+<tr>
+<td><code>semantic.enabled</code> / <code>provider_id</code></td>
+<td>默认false/空；独立审核模型</td>
+</tr>
+<tr>
+<td><code>semantic.timeout_seconds</code></td>
+<td>默认12，整数1至30秒</td>
+</tr>
+<tr>
+<td><code>semantic.context_limit</code></td>
+<td>默认20，整数1至50条；仍受近期同群窗口限制</td>
+</tr>
+<tr>
+<td><code>auto_kick</code> / <code>card_auto</code></td>
+<td>群ID到布尔值，缺省false；逐群独立开关</td>
+</tr>
+<tr>
+<td><code>progressive_mute</code></td>
+<td>默认false以兼容旧配置；实例级，开启须同时启用撤回，按5/15/60分钟递进</td>
+</tr>
+<tr>
+<td><code>manual_kick_only</code></td>
+<td>实例级限制；当前接收机器人为true，拒绝AI及自动踢出，不能由AI配置工具修改；与任一true的 <code>auto_kick</code> 不兼容</td>
+</tr>
+<tr>
+<td><code>content_rules_since</code></td>
+<td>业务规则生效时间；后端维护，不通过聊天任意修改</td>
+</tr>
+</tbody>
+</table>
+<p>固定动作白名单：<code>mute</code>、<code>unmute</code>、<code>kick</code>、<code>recall</code>、<code>announce</code>、<code>mute_all</code>、
+<code>unmute_all</code>、<code>rename</code>、<code>cleanup</code>。清理不继承踢出/名片授权，自动名片开关另需 <code>rename</code>。</p>
+<h2>身份与会话</h2>
+<table>
+<thead>
+<tr>
+<th>标识</th>
+<th>用途</th>
+<th>不能替代</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>实例 ID，如 <code>wangshangliao_…</code></td>
+<td>机器人实例及账本分区</td>
+<td>旺商聊用户 UID</td>
+</tr>
+<tr>
+<td>业务用户 UID</td>
+<td>管理员身份、原生 At 的 <code>qq</code>、成员身份</td>
+<td>昵称、手机号、NIM 账号</td>
+</tr>
+<tr>
+<td>显示账号</td>
+<td>客户端展示</td>
+<td>业务 UID</td>
+</tr>
+<tr>
+<td>业务群 ID</td>
+<td>启用群、API 与动作授权</td>
+<td>客户端显示群号</td>
+</tr>
+<tr>
+<td>NIM ID</td>
+<td>传输与目录映射</td>
+<td>聊天管理员 UID</td>
+</tr>
+</tbody>
+</table>
+<p>不按昵称、手打 <code>@名字</code> 或群号猜身份。分页缺失、重复游标、映射冲突时不使用
+不完整目录执行管理动作。群名片优先展示，昵称其次；身份校验仍使用稳定标识。</p>
+<pre><code class="language-text">实例ID:GroupMessage:机器人业务UID/业务群ID
+实例ID:FriendMessage:机器人业务UID/private/对端业务UID/BASE64URL_NIM_ID
+</code></pre>
+<p>私聊末段为 NIM ID 的 URL-safe Base64，不是昵称。私聊、群聊、不同实例、账号与对端隔离。
+使用后台已有会话选择目的地，不伪造 UMO。本地已知私聊不是云端全部联系人。
+普通群 AI 只认当前机器人 NIM 身份的结构化 @，并反 @ 原发送者；只 @ 其他人不触发。
+固定命令例外：整条精确识别，不要求 @、斜杠或“群管”前缀。普通群消息可按框架配置
+保留上下文，不因此主动回复。引用回复降级为文本，保留 At，不发送原生引用气泡。
+图片、语音、文件等媒体收发未纳入当前能力。</p>
+<h2>三路 AI 与权限</h2>
+<table>
+<thead>
+<tr>
+<th>消息</th>
+<th>路由/模型</th>
+<th>人格、知识库</th>
+<th>群管能力</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>群内普通用户或管理员 @</td>
+<td>群客服；逐群保存的模型ID（界面/API名 <code>customer_provider_id</code>）</td>
+<td>沿用该群会话</td>
+<td>无旺商聊群管工具</td>
+</tr>
+<tr>
+<td>普通用户私聊咨询</td>
+<td>私聊客服；当前私聊模型</td>
+<td>沿用私聊配置</td>
+<td>无旺商聊群管工具</td>
+</tr>
+<tr>
+<td>授权管理员私聊</td>
+<td>管理员群管；实例 <code>admin_provider_id</code></td>
+<td>沿用私聊配置</td>
+<td>通过鉴权的固定工具</td>
+</tr>
+<tr>
+<td>群消息内容审核</td>
+<td>实例 <code>moderation.semantic.provider_id</code></td>
+<td>独立审核提示与同群有界上下文</td>
+<td><code>tools=None</code>，只给结构化判断</td>
+</tr>
+</tbody>
+</table>
+<p>空模型选择沿用相应会话当前模型；人格工具白名单须允许 <code>wsl_private_management</code>，
+管理模型须支持工具调用。其他人格工具并非全局禁用，隔离承诺针对旺商聊管理工具。
+普通用户固定私聊命令（含“我的权限”“我的邀请”“帮助”“sid”）只返回“无权限”；
+普通咨询仍受私聊回复开关控制。群内管理员 @ 不升级成私聊管理路由。</p>
+<p>私聊专用固定命令在群内静默消费，不发送“此功能仅限私聊”或帮助引导，
+不执行，也不转给客服 AI；帮助别名和业务规则模式的管理员群内踢出同样静默。
+排名、抽奖报名/状态、本人邀请及允许的群管动作仍沿用原权限和回复。</p>
+<p>首次管理员在有效配置的 <code>admins_id</code> 从已有私聊按名称选择；授权依据仍为 UID。
+后台权限、聊天管理员、平台群角色、动作白名单与主动发送授权互不替代。
+管理员自然语言改设置先预览再同私聊确认；明确要求创建并开启抽奖时，
+确认后才开抽并通知群，只改下期参数不会启动。详细边界见插件说明。</p>
+<h2>主动发送与结果</h2>
+<p>默认关闭。开启总开关后，还必须保存精确群/私聊目的地授权；私聊对端须有可信已知会话。
+<code>private_peer_unknown</code> 时先用真实客户端建立会话，不能靠插入假记录修复。
+向受管机器人测试还需接收端有效测试窗口。普通回复不等于主动发送授权。</p>
+<p>后台鉴权文本入口 <code>POST /api/v1/im/messages</code> 使用已知 <code>umo</code> 与 <code>message</code>
+组件数组；<code>plain</code> 携带文本，<code>at</code> 的 <code>qq</code> 为<strong>字符串业务 UID</strong>，
+不接受 NIM ID、昵称或伪造全员提及。请求/结果遵循接口的操作 ID 与去重契约。
+通过 <code>GET /api/v1/im/operations/{operation_id}?platform_id=实例ID</code> 查询结果，
+不要用重复发送来查是否成功。</p>
+<p>发送需要后台 JWT 或具备 <code>im</code> 范围的受支持 API 凭据，不在文档提供认证绕过方式。
+使用调用方稳定 <code>operation_id</code>（1至256字符）：同一业务操作查询/重试沿用该 ID，
+新业务操作使用新 ID，不能把改正文当旧操作重试。未传 ID 会产生新操作，不适合结果不明时重发。
+示例仅示意参数，不提供实际可发送的路由：</p>
+<pre><code class="language-json">{
+  &quot;umo&quot;: &quot;从已有会话选择的UMO&quot;,
+  &quot;operation_id&quot;: &quot;caller-owned-unique-operation&quot;,
+  &quot;message&quot;: [
+    {&quot;type&quot;: &quot;plain&quot;, &quot;text&quot;: &quot;测试通知 &quot;},
+    {&quot;type&quot;: &quot;at&quot;, &quot;qq&quot;: &quot;已核验成员的业务UID&quot;, &quot;name&quot;: &quot;成员名&quot;}
+  ]
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>含义与处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>accepted</code></td>
+<td>上游已受理，不保证对端看到或动作已回读</td>
+</tr>
+<tr>
+<td><code>verified</code></td>
+<td>对应能力通过后续状态核验</td>
+</tr>
+<tr>
+<td><code>rejected</code> / <code>failed</code></td>
+<td>拒绝或明确失败，先检查原因</td>
+</tr>
+<tr>
+<td><code>unknown</code></td>
+<td>请求可能已执行，不盲目重试</td>
+</tr>
+<tr>
+<td><code>needs_review</code></td>
+<td>处理中断，保留现场人工核查，不自动重新生成</td>
+</tr>
+</tbody>
+</table>
+<h2>持久化、撤回与输出</h2>
+<p>每实例目录为 <code>data/platform_data/wangshangliao/&lt;实例ID的SHA256&gt;/</code>：
+<code>session.key</code>、<code>session.sealed</code> 及消息、群管、名片、活动、每日计划 SQLite 账本。
+密钥和密文同机不对主机管理员保密；备份按凭据管理。
+消息先落库再确认，最多16会话并行、1024活跃会话排队，同会话顺序处理。
+重启不重放已处理或结果未知的业务动作。</p>
+<p>指定群功能回复每段受理20秒后撤回，包括一般命令结果、排名和违规警告。
+抽奖开始、取消、中奖名单通知，以及报名和抽奖状态回复不自动撤回。
+只撤回机器人自己的关联消息，不撤回成员命令、私聊、普通 AI 或任意主动发送；
+任务持久化，逾期五分钟不补撤，失败/未知不盲目重试。
+成员违规消息撤回另需 <code>recall</code> 授权与原始可信消息路由。</p>
+<p>AI 结果转纯文本、保留链接与 At、关闭本平台 AI 结果文字转图片。
+出站文本过滤已配对的 <code>think/thinking/thought/analysis</code> 标签块、
+开头未闭合标签及孤立闭合标签，缓解模型把推理标签当正文发送。
+不是全流式/所有推理过滤，也不清理日志和历史；过滤后可能无可见正文。
+凭证、手机号和邮箱为有限规则遮盖，不是完整 DLP，也不阻止原文进入模型。</p>
+<h2>开发测试与排障</h2>
+<p>受管机器人默认互斥（含停用实例）。在<strong>接收实例</strong>选择来源发送实例和范围后保存，
+还须点击“开启测试”；草稿保存不等于开启。窗口内存生效，最长300秒、最多10次入站，
+每事件最多一个关联回复；重启、停止或换账号失效，反向保持互斥。
+<code>private_ai</code>、私聊命令、群命令、<code>group_ai</code> 和群规则独立。
+<code>group_ai</code> 必须真实结构化 @ 当前机器人；群规则仅用指定群与 <code>WSL_TEST_</code> 关键词。
+窗口不授予管理员、动作或平台角色，不能代替普通外部账号验收。</p>
+<table>
+<thead>
+<tr>
+<th>现象</th>
+<th>优先检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>在线但无回复</td>
+<td>接收账号/方向、回复已保存、真实 @、<code>ignored_bot</code>、有效窗口、有效配置</td>
+</tr>
+<tr>
+<td>私聊“无权限”</td>
+<td>是否固定命令；有效路由配置 <code>admins_id</code>，不是其他配置或昵称</td>
+</tr>
+<tr>
+<td>群排名无回应</td>
+<td>群已启用且允许回复、精确单条命令、入站有可信身份</td>
+</tr>
+<tr>
+<td>页面白屏</td>
+<td>静态插件资源是否生成、浏览器错误、登录代理；不放宽 iframe sandbox</td>
+</tr>
+<tr>
+<td>活动/定时“未找到该路由”</td>
+<td>插件存活与路由注册、后端/页面版本同步；更新 HTML 不增加后端路由</td>
+</tr>
+<tr>
+<td><code>unknown</code> 或积压</td>
+<td>查账本与操作结果，不删库、不重放、不反复处罚</td>
+</tr>
+<tr>
+<td>排名换行或原生 @ 前空格丢失</td>
+<td>当前全量回归已有3项格式失败；见测试文档，不视为已修复</td>
+</tr>
+</tbody>
+</table>
+<p>验证入口见<a href="wangshangliao-testing.html">测试与验收</a>，
+备份见<a href="wangshangliao-maintenance.html">维护说明</a>。
+文件日志/调用追踪只恢复当前文件末尾有界记录，不是全量归档；
+无手工标题的会话以已知名称/账号兜底，不额外调用模型生成标题。</p>
+</body></html>

@@ -1,0 +1,3 @@
+python-telegram-bot>=22.8,<23
+cryptography>=44
+filelock>=3.18

@@ -1,0 +1,4 @@
+httpx[socks]>=0.28.1
+filelock>=3.16
+qrcode[pil]>=7.4
+Pillow>=10.4

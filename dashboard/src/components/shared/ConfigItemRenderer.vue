@@ -1,7 +1,14 @@
 <template>
   <div class="w-100" :class="{ 'config-field--full-width': itemMeta?.full_width }">
     <!-- Special handling for specific metadata types -->
-    <template v-if="itemMeta?._special === 'select_provider'">
+    <template v-if="configKey === 'admins_id' && !pluginName && itemMeta?.type === 'list'">
+      <AdministratorSelector
+        :model-value="modelValue || []"
+        :disabled="Boolean(itemMeta?.readonly)"
+        @update:model-value="emitUpdate"
+      />
+    </template>
+    <template v-else-if="itemMeta?._special === 'select_provider'">
       <ProviderSelector :model-value="modelValue" @update:model-value="emitUpdate" :provider-type="'chat_completion'" />
     </template>
     <template v-else-if="itemMeta?._special === 'select_provider_stt'">
@@ -254,6 +261,7 @@
 <script setup>
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 import ListConfigItem from './ListConfigItem.vue'
+import AdministratorSelector from './AdministratorSelector.vue'
 import FileConfigItem from './FileConfigItem.vue'
 import ObjectEditor from './ObjectEditor.vue'
 import ProviderSelector from './ProviderSelector.vue'

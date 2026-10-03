@@ -402,6 +402,15 @@ class SQLiteDatabase(BaseDatabase):
                         col(ConversationV2.content).ilike(f"%{search_query}%"),
                         col(ConversationV2.content).ilike(f"%{escaped_search_query}%"),
                         _webchat_session_title_match(search_query),
+                        select(UmoAlias.umo)
+                        .where(
+                            col(UmoAlias.umo) == col(ConversationV2.user_id),
+                            or_(
+                                col(UmoAlias.user_alias).ilike(f"%{search_query}%"),
+                                col(UmoAlias.auto_name).ilike(f"%{search_query}%"),
+                            ),
+                        )
+                        .exists(),
                     )
                 )
             keyword_query = str(kwargs.get("keyword_query") or "").strip()
@@ -416,6 +425,15 @@ class SQLiteDatabase(BaseDatabase):
                         col(ConversationV2.content).ilike(f"%{keyword_query}%"),
                         col(ConversationV2.content).ilike(f"%{escaped_keyword_query}%"),
                         _webchat_session_title_match(keyword_query),
+                        select(UmoAlias.umo)
+                        .where(
+                            col(UmoAlias.umo) == col(ConversationV2.user_id),
+                            or_(
+                                col(UmoAlias.user_alias).ilike(f"%{keyword_query}%"),
+                                col(UmoAlias.auto_name).ilike(f"%{keyword_query}%"),
+                            ),
+                        )
+                        .exists(),
                     )
                 )
             message_types = kwargs.get("message_types") or []

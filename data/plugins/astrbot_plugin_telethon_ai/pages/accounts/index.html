@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Telethon AI 账号</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header><h1>AI 账号服务</h1><button id="refresh" title="刷新状态" aria-label="刷新状态">&#8635;</button></header>
+  <p id="status" role="status">正在连接…</p>
+  <div id="overview" class="overview"></div>
+  <nav role="tablist" aria-label="运维视图">
+    <button role="tab" id="tab-accounts" aria-controls="panel-accounts" aria-selected="true" data-panel="accounts">账号</button>
+    <button role="tab" id="tab-authorization" aria-controls="panel-authorization" aria-selected="false" data-panel="authorization">授权</button>
+    <button role="tab" id="tab-groups" aria-controls="panel-groups" aria-selected="false" data-panel="groups">群聊</button>
+    <button role="tab" id="tab-recycle" aria-controls="panel-recycle" aria-selected="false" data-panel="recycle">回收桶</button>
+    <button role="tab" id="tab-diagnostics" aria-controls="panel-diagnostics" aria-selected="false" data-panel="diagnostics">诊断</button>
+    <button role="tab" id="tab-preview" aria-controls="panel-preview" aria-selected="false" data-panel="preview">试聊</button>
+  </nav>
+  <section id="panel-accounts" role="tabpanel" aria-labelledby="tab-accounts">
+    <div class="account-toolbar"><h2>已有账号</h2><div class="actions"><button id="sync-accounts">同步登记</button><button id="add-account">添加账号</button></div></div>
+    <div class="table-wrap" tabindex="0" aria-label="账号状态"><table>
+    <thead><tr><th>Telethon AI 账号</th><th>连接状态</th><th>AstrBot AI 配置</th><th>今日请求（UTC）</th><th>操作</th></tr></thead>
+    <tbody id="accounts"></tbody>
+  </table></div></section>
+  <section id="panel-authorization" role="tabpanel" aria-labelledby="tab-authorization" hidden>
+    <h2>用户与 AI 账号分配</h2><p id="authorization-count"></p>
+    <div class="table-wrap" tabindex="0" aria-label="用户账号授权"><table>
+      <thead><tr><th>开通用户</th><th>分配的 Telethon AI 账号</th><th>管理 Bot（克隆）</th><th>服务状态</th><th>累计额度（剩余 / 总量）</th><th>到期时间</th></tr></thead>
+      <tbody id="authorizations"></tbody>
+    </table></div>
+  </section>
+  <section id="panel-groups" role="tabpanel" aria-labelledby="tab-groups" hidden>
+    <h2>Telethon AI 群授权</h2><p id="group-count"></p>
+    <div class="table-wrap" tabindex="0" aria-label="群聊使用范围"><table>
+      <thead><tr><th>群名称 / 群号</th><th>开通用户</th><th>管理 Bot（克隆）</th><th>Telethon AI 账号</th><th>成员授权</th><th>使用状态</th></tr></thead>
+      <tbody id="groups"></tbody>
+    </table></div>
+    <h2 class="section-heading">基础群管</h2><p id="management-count"></p>
+    <div class="table-wrap" tabindex="0" aria-label="基础群管绑定"><table>
+      <thead><tr><th>群名称 / 群号</th><th>授权 / 所有者</th><th>群管 Bot</th><th>自动执行 Bot</th><th>功能开关</th><th>状态</th></tr></thead>
+      <tbody id="management-groups"></tbody>
+    </table></div>
+  </section>
+  <section id="panel-recycle" role="tabpanel" aria-labelledby="tab-recycle" hidden>
+    <h2>到期回收桶</h2><p id="recycle-count"></p>
+    <div class="table-wrap" tabindex="0" aria-label="到期服务"><table>
+      <thead><tr><th>开通用户</th><th>保留的 AI 账号分配</th><th>管理 Bot（克隆）</th><th>到期时间</th><th>历史群授权</th><th>剩余累计额度</th><th>到期通知</th></tr></thead>
+      <tbody id="recycled"></tbody>
+    </table></div>
+  </section>
+  <section id="panel-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" hidden>
+    <h2>安装能力检查</h2><dl id="checks"></dl>
+    <p id="compatibility-status">正在核对运行接入方式。</p>
+    <h2>最近请求</h2>
+    <div class="table-wrap" tabindex="0" aria-label="最近请求"><table>
+      <thead><tr><th>时间</th><th>账号</th><th>租户</th><th>结果</th></tr></thead><tbody id="recent"></tbody>
+    </table></div>
+    <h2 class="section-heading">用户通知</h2>
+    <div class="table-wrap" tabindex="0" aria-label="用户通知记录"><table>
+      <thead><tr><th>通知时间</th><th>接收用户</th><th>管理 Bot</th><th>通知类型</th><th>投递状态</th></tr></thead>
+      <tbody id="notices"></tbody>
+    </table></div>
+  </section>
+  <section id="panel-preview" role="tabpanel" aria-labelledby="tab-preview" hidden>
+    <h2>模型预览 · 不发送 Telegram</h2>
+    <form id="preview-form">
+      <label>账号<select id="account"></select></label>
+      <label>消息<textarea id="prompt" maxlength="500" required rows="3" placeholder="你叫什么？"></textarea></label>
+      <button id="preview-submit" type="submit">生成预览</button>
+    </form>
+    <output id="reply" aria-live="polite"></output>
+  </section>
+  <dialog id="resume-dialog"><form method="dialog">
+    <h2>解除暂停标记</h2><p id="resume-label"></p>
+    <p>不会启动连接或启用租户服务。</p>
+    <div class="actions"><button value="cancel">取消</button><button value="confirm">确认解除</button></div>
+  </form></dialog>
+  <dialog id="add-dialog">
+    <form id="add-form" autocomplete="off">
+      <h2>添加 Telegram 账号</h2>
+      <div id="login-start">
+        <label>账号别名<input id="login-alias" pattern="[a-z][a-z0-9_]{0,31}" maxlength="32" required placeholder="account_3"></label>
+        <label>手机号<input id="login-phone" type="tel" pattern="\+[1-9][0-9]{6,14}" required placeholder="+国家区号手机号"></label>
+        <label>API ID<input id="login-api-id" type="number" min="1" max="2147483647" required></label>
+        <label>API Hash<input id="login-api-hash" type="password" pattern="[a-fA-F0-9]{32}" required autocomplete="new-password"></label>
+        <label class="check-label"><input id="login-consent" type="checkbox" required>我控制此账号并授权平台托管；新增后保持停用。</label>
+      </div>
+      <label id="login-code-field" hidden>Telegram 验证码<input id="login-code" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="one-time-code"></label>
+      <label id="login-password-field" hidden>两步验证密码<input id="login-password" type="password" maxlength="256" autocomplete="off"></label>
+      <p id="login-status" role="status"></p>
+      <div class="actions"><button id="login-cancel" type="button">取消</button><button id="login-submit" type="submit">发送验证码</button></div>
+    </form>
+  </dialog>
+  <script>
+    window.setTimeout(function () {
+      if (!window.__aiServiceAppLoaded) {
+        document.getElementById("status").textContent = "页面脚本未加载，请重新打开页面并检查资源请求或访问授权。";
+        document.getElementById("refresh").onclick = function () { window.location.reload(); };
+      }
+    }, 8000);
+  </script>
+  <script defer src="./app.js"></script>
+</body>
+</html>

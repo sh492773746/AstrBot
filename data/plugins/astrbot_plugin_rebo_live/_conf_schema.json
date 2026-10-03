@@ -1,0 +1,1 @@
+{"platform_id":{"description":"Telegram 专用机器人平台 ID；主管理员固定为 1000000001，其他用户通过房间授权使用","type":"string","default":""}}

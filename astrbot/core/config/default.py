@@ -376,6 +376,13 @@ CONFIG_METADATA_2 = {
                         "ws_reverse_port": 6199,
                         "ws_reverse_token": "",
                     },
+                    "旺商聊": {
+                        "id": "wangshangliao",
+                        "type": "wangshangliao",
+                        "enable": True,
+                        "account_id": "",
+                        "enabled_groups": [],
+                    },
                     "飞书(Lark)": {
                         "id": "lark",
                         "type": "lark",
@@ -463,13 +470,15 @@ CONFIG_METADATA_2 = {
                         "type": "telegram",
                         "enable": True,
                         "telegram_token": "your_bot_token",
-                        "start_message": "Hello, I'm AstrBot!",
+                        "start_message": "你好！我是 AstrBot。",
                         "telegram_api_base_url": "https://api.telegram.org/bot",
                         "telegram_file_base_url": "https://api.telegram.org/file/bot",
                         "telegram_command_register": True,
                         "telegram_command_auto_refresh": True,
                         "telegram_command_register_interval": 300,
                         "telegram_polling_restart_delay": 5.0,
+                        "telegram_allowed_updates": [],
+                        "telegram_required_plugin": "",
                     },
                     "Discord": {
                         "id": "discord",
@@ -633,7 +642,7 @@ CONFIG_METADATA_2 = {
                         "secret": True,
                     },
                     "start_message": {
-                        "description": "Start 命令回复",
+                        "description": "开始命令回复（/start）",
                         "type": "string",
                         "hint": "用户向 Telegram 机器人发送 /start 命令时回复的内容。",
                         "show_key": True,
@@ -804,10 +813,21 @@ CONFIG_METADATA_2 = {
                         "hint": "可选。微信客服账号名(不是 ID)。可在 https://kf.weixin.qq.com/kf/frame#/accounts 获取",
                     },
                     "telegram_token": {
-                        "description": "Bot Token",
+                        "description": "机器人令牌（Bot Token）",
                         "type": "string",
                         "hint": "如果你的网络环境为中国大陆，请在 `其他配置` 处设置代理或更改 api_base。",
                         "secret": True,
+                    },
+                    "telegram_allowed_updates": {
+                        "description": "Telegram 更新类型订阅",
+                        "type": "list",
+                        "items": {"type": "string"},
+                        "hint": "留空保持默认行为。总控实例填写 message、pre_checkout_query、managed_bot。",
+                    },
+                    "telegram_required_plugin": {
+                        "description": "接收更新前必须就绪的插件",
+                        "type": "string",
+                        "hint": "普通机器人留空。总控实例填写 astrbot_plugin_tenant_control；插件未就绪时暂停轮询。",
                     },
                     "mattermost_url": {
                         "description": "Mattermost URL",
@@ -891,6 +911,12 @@ CONFIG_METADATA_2 = {
                         "description": "卡片模板 ID",
                         "type": "string",
                         "hint": "可选。钉钉互动卡片模板 ID。启用后将使用互动卡片进行流式回复。",
+                    },
+                    "telegram_dedicated_reporting": {
+                        "description": "专用汇报机器人隔离",
+                        "type": "bool",
+                        "hint": "阻止消息进入通用插件和 AI。仅专用插件处理消息；专用插件停用时保持静默。",
+                        "show_key": True,
                     },
                     "telegram_command_register": {
                         "description": "命令注册",

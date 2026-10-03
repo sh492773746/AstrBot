@@ -642,16 +642,55 @@ class Context:
             return self._config
         return self.astrbot_config_mgr.get_conf(umo)
 
+    async def send_message_result(
+        self,
+        session: str | MessageSesion,
+        message_chain: MessageChain,
+        *,
+        operation_id: str | None = None,
+    ) -> dict:
+        """Send through an adapter that exposes durable delivery outcomes.
+
+        Args:
+            session: Target unified message origin.
+            message_chain: Outgoing components.
+            operation_id: Stable caller identifier, or a new operation when absent.
+
+        Returns:
+            Adapter result, without equating platform lookup with delivery.
+
+        Raises:
+            ValueError: If the platform does not support delivery outcomes.
+        """
+        if isinstance(session, str):
+            session = MessageSesion.from_str(session)
+        platform = next(
+            (
+                p
+                for p in self.platform_manager.platform_insts
+                if p.meta().id == session.platform_name
+            ),
+            None,
+        )
+        if platform is None or not getattr(platform, "supports_operation_ids", False):
+            raise ValueError("delivery_results_unsupported")
+        return await platform.send_by_session(
+            session, message_chain, operation_id=operation_id
+        )
+
     async def send_message(
         self,
         session: str | MessageSesion,
         message_chain: MessageChain,
+        *,
+        operation_id: str | None = None,
     ) -> bool:
         """根据 session(unified_msg_origin) 主动发送消息。
 
         Args:
             session: 消息会话。通过 event.session 或者 event.unified_msg_origin 获取。
             message_chain: 消息链。
+            operation_id: Optional stable send identity for supporting platforms.
 
         Returns:
             是否找到匹配的平台。
@@ -671,7 +710,14 @@ class Context:
 
         for platform in self.platform_manager.platform_insts:
             if platform.meta().id == session.platform_name:
-                await platform.send_by_session(session, message_chain)
+                if operation_id is not None and getattr(
+                    platform, "supports_operation_ids", False
+                ):
+                    await platform.send_by_session(
+                        session, message_chain, operation_id=operation_id
+                    )
+                else:
+                    await platform.send_by_session(session, message_chain)
                 settings = self.get_config(umo=str(session)).get(
                     "provider_ltm_settings",
                     {},

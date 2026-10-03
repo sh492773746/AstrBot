@@ -62,6 +62,30 @@ class SessionManagementService:
 
         aliases = await self.db_helper.get_umo_aliases()
         umos.update(str(alias.umo) for alias in aliases if alias.umo)
+        # Include received private conversations even before a model creates history.
+        from pathlib import Path
+
+        import aiosqlite
+
+        from astrbot.core.platform.sources.wangshangliao.storage import instance_dir
+
+        manager = getattr(self.core_lifecycle, "platform_manager", None)
+        config = getattr(manager, "astrbot_config", {})
+        for bot in config.get("platform", []):
+            if bot.get("type") != "wangshangliao" or not bot.get("id"):
+                continue
+            path = instance_dir(bot["id"]) / "messages.sqlite3"
+            if not path.is_file():
+                continue
+            async with aiosqlite.connect(
+                f"{Path(path).as_uri()}?mode=ro", uri=True
+            ) as db:
+                async with db.execute(
+                    "SELECT DISTINCT account,team FROM inbox WHERE team LIKE 'private/%' AND account=?",
+                    (str(bot.get("account_id", "")),),
+                ) as cursor:
+                    for account, team in await cursor.fetchall():
+                        umos.add(f"{bot['id']}:FriendMessage:{account}/{team}")
         return sorted(umos)
 
     async def get_umo_alias_map(self, umos: list[str]) -> dict:
