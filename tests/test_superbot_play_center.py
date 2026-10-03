@@ -49,16 +49,12 @@ async def test_hub_queries_are_clicker_scoped_and_never_edit_hub(text_service):
     await s.text.center.tick()
     panel = s.store.db.execute("SELECT * FROM game_panels").fetchone()
     kwargs = s.bot.send_message.await_args.kwargs
-    assert len(kwargs["reply_markup"].inline_keyboard) == 3
+    assert len(kwargs["reply_markup"].inline_keyboard) == 1
     assert {
         button.text for row in kwargs["reply_markup"].inline_keyboard for button in row
     } == {
-        "🎡 积分转盘",
-        "🎰老虎机PvP",
         "🎲 加拿大28",
-        "🎲 积分快三",
         "🤝 双人对赌",
-        "💣 扫雷接龙",
     }
     assert "reply_parameters" not in kwargs
     s.bot.edit_message_text = AsyncMock()
@@ -146,11 +142,11 @@ async def test_k3_hub_button_rejects_disabled_group(text_service):
     await s.text.message(update(s, "玩法"), "玩法")
     await s.text.center.tick()
     panel = s.store.db.execute("SELECT * FROM game_panels").fetchone()
-    with pytest.raises(Rejected, match="快三总开关已关闭"):
+    with pytest.raises(Rejected, match="本群此玩法当前不可用"):
         await s.text.center.action(click(s, panel, "k3"))
     with s.store.tx() as db:
         s.store.put(db, "modules", {**s.store.get("modules"), "k3": True})
-    with pytest.raises(Rejected, match="本群积分快三未启用"):
+    with pytest.raises(Rejected, match="本群此玩法当前不可用"):
         await s.text.center.action(click(s, panel, "k3"))
 
 

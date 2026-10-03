@@ -1226,6 +1226,18 @@ class TextGame:
                                 url=f"tg://user?id={uid}",
                             )
                         )
+            if getattr(self.runtime, "group_keyboard", None) and row["result"] in {
+                "points",
+                "checkin",
+                "activation",
+                "history",
+                "flow",
+                "profit",
+            }:
+                from .availability import refresh
+
+                await refresh(self.runtime, chat)
+                kwargs["reply_markup"] = self.runtime.group_keyboard.render(chat)[0]
             message = await self.runtime.bot.send_message(
                 chat_id=chat,
                 text=text,

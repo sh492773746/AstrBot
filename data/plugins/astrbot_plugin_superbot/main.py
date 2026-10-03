@@ -69,8 +69,6 @@ MENU = {
 
 GROUP_SHORTCUTS = {
     "games": ("🎮 玩法大全", "rules", "game"),
-    "play": ("加拿大28玩法规则", "rules", "game"),
-    "bets": ("我的模拟下注", "bets", "game"),
     "points": ("公开展示我的积分", "points", "points"),
     "checkin": ("群内签到领积分", "points", "points"),
 }
@@ -133,6 +131,7 @@ class Main(Star):
                 self.config.get("chat_provider_id", ""),
                 self.config.get("embedding_provider_id", ""),
                 chat_only_tenant=self.config.get("chat_only_tenant", False),
+                sync_knowledge=not bool(self.store.get("profile_id")),
             )
             self.keno = (
                 Keno(self.config.get("keno_proxy", ""))
@@ -514,22 +513,25 @@ class Main(Star):
 
     async def sync_group_commands(self):
         """Publish only enabled public commands in each registered group."""
+        from .availability import refresh, snapshot
+
         for group in self.store.db.execute(
             "SELECT chat,enabled FROM mod_groups ORDER BY chat"
         ).fetchall():
-            modules = self.store.get("modules", {})
+            await refresh(self, group["chat"])
+            available = snapshot(self, group["chat"])
+            games = any(
+                available[key]
+                for key in ("wheel", "slots", "mines", "k3", "activate", "duel")
+            )
             commands = [
                 BotCommand(command, label)
                 for command, (label, _, module) in GROUP_SHORTCUTS.items()
-                if modules.get(module)
+                if (games if module == "game" else available.get(module, False))
             ]
-            enabled = self.community.policy(group["chat"])["config"]["enabled"]
-            if (
-                group["enabled"]
-                and modules.get("moderation")
-                and getattr(self, "avatar", None)
-                and self.avatar.enabled()
-            ):
+            if group["enabled"]:
+                commands.append(BotCommand("help", "本群使用帮助"))
+            if group["enabled"] and available["avatar"]:
                 commands.append(BotCommand("avatar", "制作专属头像"))
             if group["enabled"] and self.store.get("modules", {}).get("moderation"):
                 commands += [
@@ -539,7 +541,7 @@ class Main(Star):
                         ("rules", "rules", "查看本群群规"),
                         ("notes", "notes", "查看常用说明"),
                     )
-                    if enabled[key]
+                    if available.get(key, False)
                 ]
             signature = tuple(command.command for command in commands)
             if self.group_command_versions.get(group["chat"]) == signature:
@@ -665,6 +667,8 @@ class Main(Star):
             and chat.type in {"group", "supergroup", "channel"}
             and membership_update
         ):
+            if hasattr(self, "navigation_permissions"):
+                self.navigation_permissions.pop(str(chat.id), None)
             from .permission_notice import notify
 
             await notify(self, chat, membership_update.new_chat_member)
@@ -1063,7 +1067,11 @@ class Main(Star):
             if avatar_handled:
                 self.chat_sessions.pop(chat_key, None)
                 raise ApplicationHandlerStop
-        if command in {"/chat", "/exit"} or text == "客服":
+        if text in {"客服", "💬 客服"}:
+            self.chat_sessions.pop(chat_key, None)
+            await self.ui.action(update, {"action": "support"})
+            raise ApplicationHandlerStop
+        if command in {"/chat", "/exit"}:
             if not private:
                 await self.bot.send_message(
                     chat_id=update.effective_chat.id,
@@ -1078,6 +1086,11 @@ class Main(Star):
                 raise ApplicationHandlerStop
             self.chat_sessions.pop(chat_key, None)
             if command == "/chat" or text == "客服":
+                if getattr(self, "tenants", None) and not self.tenants.resource_context(
+                    uid, "chat"
+                ):
+                    await self.ui.action(update, {"action": "support_ai"})
+                    raise ApplicationHandlerStop
                 if getattr(self, "tenants", None) and not self.tenants.resource_allowed(
                     uid, None, "chat"
                 ):

@@ -905,6 +905,9 @@ async def test_native_update_gate_and_revoked_admin(env, monkeypatch):
     assert "客服" in bot.send_message.await_args.kwargs["text"]
     with pytest.raises(ApplicationHandlerStop):
         await plugin.receive(update("客服"), None)
+    assert not plugin.chat_sessions
+    with pytest.raises(ApplicationHandlerStop):
+        await plugin.receive(update("/chat"), None)
     bot.send_message.reset_mock()
     await plugin.receive(update("你好，介绍一下自己"), None)
     bot.send_message.assert_not_awaited()
@@ -1094,6 +1097,10 @@ async def test_profile_isolated_and_repeated_setup(env):
         doc for doc in documents if not doc.doc_name.endswith("-player-services.md")
     ]
     kb.upload_document.side_effect = RuntimeError("Embedding unavailable")
+    calls = kb.upload_document.await_count
+    await prepare(context, store, "dedicated", "chat", "embed", sync_knowledge=False)
+    assert kb.upload_document.await_count == calls
+    kb.delete_document.assert_not_awaited()
     with pytest.raises(RuntimeError, match="Embedding unavailable"):
         await prepare(context, store, "dedicated", "chat", "embed")
     kb.delete_document.assert_not_awaited()

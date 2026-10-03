@@ -83,6 +83,14 @@ async def action(ui, update, data, token=""):
             fold_sections=True,
         )
     if name == "tenant_join":
+        policy = tenants.policy()
+        if not policy["public"] and uid not in policy["pilot_owners"]:
+            return await ui.render(
+                update,
+                "当前尚未对公众开放，请联系平台管理员。\n"
+                "加群不会自动绑定或开启功能；已有群不受影响。",
+                [("联系平台管理员", {"url": f"tg://user?id={store.owner}"})] + back,
+            )
         challenge = tenants.invite(uid)
         return await ui.render(
             update,
@@ -747,10 +755,14 @@ async def action(ui, update, data, token=""):
             ],
         )
     if name == "tenant_group":
+        from .availability import refresh
+
+        permissions = await refresh(runtime, chat)
         return await ui.render(
             update,
-            f"🏪 **{group['title']}**\n群：{chat}\n本群服务：{'开启' if group['enabled'] else '关闭'}\n"
+            f"🏪 **正在管理：{group['title']}**\n群：{chat}\n以下修改仅对本群生效。\n本群服务：{'开启' if group['enabled'] else '关闭'}\n"
             f"经营权限：{'正常' if owner['status'] == 'active' else '暂停待平台核查'}\n{owner['error']}\n"
+            f"入口权限：{permissions['reason'] or '已核实（操作时仍会复查）'}\n"
             "积分与订单按群独立。付费AI／制图默认未授权；赔率、概率和抽水由平台统一控制。",
             [
                 (label, {"action": key, "chat": chat})
@@ -760,6 +772,7 @@ async def action(ui, update, data, token=""):
                     ("玩法设置", "tenant_games"),
                     ("广告位与订单", "tenant_ads"),
                     ("收款设置", "tenant_address"),
+                    ("本群业务联系", "support_contact_edit"),
                     ("异常记录", "tenant_errors"),
                 ]
             ]
@@ -978,6 +991,20 @@ async def input_text(ui, update, dialog):
     payload = dialog.get("payload", {})
     ui.store.clear_dialog(uid)
     try:
+        if kind == "business_contact":
+            from .support_menu import contact_url
+
+            value = contact_url(text)
+            return await ui.render(
+                update,
+                f"确认设置本群业务联系人：{value}\n仅对所选群生效。",
+                [
+                    (
+                        "确认保存",
+                        {**payload, "action": "support_contact_save", "value": value},
+                    )
+                ],
+            )
         if kind == "advertisement":
             body, contact = text.rsplit("\n", 1)
             return await ui.render(

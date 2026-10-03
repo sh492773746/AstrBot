@@ -209,7 +209,7 @@ async def test_game_catalog_alias_has_only_games(keyboard):
         for row in args["reply_markup"].inline_keyboard
         for b in row
     }
-    assert actions == {"wheel", "slots", "activate", "duel", "mines", "k3"}
+    assert actions == {"activate", "duel"}
     assert "玩法大全" in args["text"]
 
 

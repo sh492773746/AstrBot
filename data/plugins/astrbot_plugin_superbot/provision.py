@@ -17,6 +17,7 @@ async def prepare(
     chat_provider,
     embedding_provider,
     chat_only_tenant=False,
+    sync_knowledge=True,
 ):
     """Create only this bot's persona, reviewed knowledge and configuration route.
 
@@ -77,7 +78,7 @@ async def prepare(
     documents = await kb.kb_db.list_documents_by_kb(kb.kb.kb_id)
     names = {doc.doc_name for doc in documents}
     current_names = set()
-    for filename in ("player-help.md", "player-services.md"):
+    for filename in (("player-help.md", "player-services.md") if sync_knowledge else ()):
         content = (root / filename).read_bytes()
         file_name = (
             "superbot-" + hashlib.sha256(content).hexdigest()[:12] + "-" + filename
@@ -88,6 +89,8 @@ async def prepare(
     # Index every replacement before retiring official manuals or the old stub.
     # Preserve independently supplied customer documents.
     for document in documents:
+        if not sync_knowledge:
+            break
         if document.doc_name in current_names:
             continue
         if any(

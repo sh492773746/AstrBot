@@ -59,25 +59,29 @@ class GroupKeyboard:
         ).fetchone()
         if not group or not group["enabled"]:
             return ReplyKeyboardRemove(), [], "本群功能已停用，群键盘已收起。"
-        modules = self.store.get("modules", {})
+        from .availability import snapshot
+
+        available = snapshot(self.runtime, chat)
         rows = []
-        if modules.get("game"):
+        games = any(
+            available[key]
+            for key in ("wheel", "slots", "mines", "k3", "activate", "duel")
+        )
+        if games:
             rows.append(["🎮 玩法大全"])
-        if modules.get("points"):
+        if available["points"]:
             rows.append(["💰 积分", "🎁 签到"])
-        if modules.get("game"):
+        if available["activate"] or available["k3"]:
             rows.extend([["📜 历史"], ["🧾 流水", "📊 输赢"]])
-        if modules.get("moderation"):
-            config = self.runtime.community.policy(str(chat))["config"]["enabled"]
+        if self.store.get("modules", {}).get("moderation"):
             community = [
                 label
                 for key, label in (("rules", "📋 群规"), ("notes", "📝 常用说明"))
-                if config[key]
+                if available[key]
             ]
             if community:
                 rows.append(community)
-            avatar = getattr(self.runtime, "avatar", None)
-            if avatar and avatar.enabled():
+            if available["avatar"]:
                 rows.append(["🎨 制作头像"])
         rows.append(["客服", "帮助"])
         title = " ".join(str(group["title"] or chat).split())[:60]
@@ -122,6 +126,9 @@ class GroupKeyboard:
             ).fetchall()
             sent_count = 0
             for group in groups:
+                from .availability import refresh
+
+                await refresh(self.runtime, group["chat"])
                 now = self.store.clock()
                 if group["next"] and group["next"] > now:
                     continue
@@ -221,6 +228,9 @@ class GroupKeyboard:
         if not 0 <= self.store.clock() - message.date.timestamp() <= 60:
             return True
         await self.runtime.community.member(uid, chat, require_moderation=False)
+        from .availability import refresh
+
+        await refresh(self.runtime, chat)
         _, labels, _ = self.render(chat)
         if word in {"帮助", "❓ 帮助", "📖 玩法规则", "/help"} and "帮助" in labels:
             await self.runtime.group_game.render(

@@ -102,6 +102,10 @@ class PlayCenter:
         ):
             return True
         await self.runtime.community.member(uid, chat, require_moderation=False)
+        if hub:
+            from .availability import refresh
+
+            await refresh(self.runtime, chat)
         if self.store.db.execute(
             "SELECT 1 FROM game_panels WHERE chat=? AND source=?",
             (chat, update.message.message_id),
@@ -234,6 +238,14 @@ class PlayCenter:
         if not self.store.get("modules", {}).get("game"):
             raise Rejected("玩法功能已关闭。")
         if panel["kind"] == "hub":
+            from .availability import refresh, snapshot
+
+            await refresh(self.runtime, chat)
+
+            if action in {key for _, key in MENU} and not snapshot(
+                self.runtime, chat
+            ).get(action, False):
+                raise Rejected("本群此玩法当前不可用，请重新打开玩法大全。")
             if self.store.clock() - panel["created"] > 86400:
                 raise Rejected("面板已过期，请发送“玩法”重新打开。")
             self.idle.touch(chat, panel["message"], "hub")
@@ -520,18 +532,29 @@ class PlayCenter:
         """
         key = f"{panel['id']}:{panel['duel'] or 0}"
         if panel["kind"] == "hub":
+            from .availability import snapshot
+
+            available = snapshot(self.runtime, panel["chat"])
             buttons = [
                 Button(label, callback_data=f"pc:{key}:{action}")
                 for label, action in MENU
+                if available[action]
             ]
+            descriptions = {
+                "activate": "加拿大28：进入房间后文字下注",
+                "k3": "积分快三：三颗原生骰子开奖，与加拿大28房间互斥",
+                "duel": "双人对赌：自定义彩头，不扣积分",
+                "wheel": "积分转盘：选择投入，按抽中倍率返还",
+                "slots": "老虎机PvP：同桌同额；多人赢家获总池90%，单人按倍率返还",
+                "mines": "扫雷接龙：各选投入，最后幸存者获总池90%",
+            }
+            details = "\n".join(
+                descriptions[action] for _, action in MENU if available[action]
+            )
             return (
-                "<b>🎮 大海传媒 · 玩法大全</b>\n\n请选择游戏。\n"
-                "🎲 加拿大28：进入房间后文字下注\n"
-                "🎲 积分快三：三颗原生骰子开奖，与加拿大28房间互斥\n"
-                "🤝 双人对赌：自定义彩头，不扣积分\n"
-                "🎡 积分转盘：选择投入，抽取倍率并返还积分\n"
-                "🎰老虎机PvP：同桌同额，多人赢家独得总池90%；单人按倍率返还\n"
-                "💣 扫雷接龙：各选投入，轮流选格，最后幸存者获总池90%\n"
+                "<b>🎮 大海传媒 · 玩法大全</b>\n\n"
+                + (details if buttons else "本群暂无可用玩法，请联系本群管理员。")
+                + "\n"
                 "<blockquote expandable>积分按当前群独立。\n积分、签到及记录查询使用底部群键盘；点击输入框旁的键盘图标收起或展开。\n"
                 "对赌发起：回复对方发送 dd 自定义彩头。\n"
                 "选择面板闲置30秒撤回，有效点击重新计时；功能须由本群管理员开启。</blockquote>",

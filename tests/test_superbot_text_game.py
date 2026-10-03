@@ -137,6 +137,9 @@ async def test_slash_number_atomic_acceptance(text_service, text):
 def text_service(community):  # noqa: F811
     s = community
     s.runtime.application = SimpleNamespace(running=True)
+    s.runtime.navigation_permissions = {
+        "-1001": {"ready": True, "expires": s.clock[0] + 30, "reason": ""}
+    }
     s.runtime.game = Game(s.store)
     s.group = s.runtime.group_game = GroupGame(s.runtime)
     s.text = s.group.text_game

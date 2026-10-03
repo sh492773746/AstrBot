@@ -117,7 +117,9 @@ class UI:
                     if row:
                         payload.setdefault("version", row[0])
         buttons_flat = [
-            Button(label, callback_data=self.store.callback(uid, chat, payload))
+            Button(label, url=payload["url"])
+            if "url" in payload
+            else Button(label, callback_data=self.store.callback(uid, chat, payload))
             for label, payload in buttons
         ]
         rows = [buttons_flat[i : i + 2] for i in range(0, len(buttons_flat), 2)]
@@ -188,6 +190,10 @@ class UI:
                 text=text,
                 reply_markup=markup,
             )
+        from .onboarding import invitation
+
+        text, buttons = invitation(self.runtime)
+        await self.render(update, text, buttons, fold_sections=False)
 
     async def action(self, update, payload, token=""):
         """Render queries or execute confirmed deterministic actions.
@@ -199,6 +205,10 @@ class UI:
         """
         uid = str(update.effective_user.id)
         action = payload["action"]
+        if action.startswith("support"):
+            from .support_menu import action as support_action
+
+            return await support_action(self, update, payload)
         if action.startswith("tenant_"):
             from .tenant_ui import action as tenant_action
 
@@ -443,6 +453,9 @@ class UI:
                 buttons + back,
             )
         if action == "help":
+            from .onboarding import invitation
+
+            invitation_text, invitation_buttons = invitation(self.runtime)
             buttons = [("我的订单与积分", {"action": "account"})]
             if modules.get("moderation") and hasattr(self.runtime, "community"):
                 buttons.append(("群规与说明", {"action": "cm_public_groups"}))
@@ -450,8 +463,10 @@ class UI:
                 buttons.append(("领取积分", {"action": "points"}))
             return await self.render(
                 update,
-                (Path(__file__).parent / "docs/player-help.md").read_text(),
-                buttons + back,
+                (Path(__file__).parent / "docs/player-help.md").read_text()
+                + "\n\n"
+                + invitation_text,
+                buttons + invitation_buttons + back,
                 fold_sections=True,
             )
         if action == "grant_accept":
