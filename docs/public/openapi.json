@@ -7506,6 +7506,7 @@
                 "private_commands",
                 "private_ai",
                 "group_commands",
+                "group_ai",
                 "group_rules"
               ]
             }

@@ -129,6 +129,7 @@ class PilotTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
                 env={"PATH": "/usr/bin:/bin"},
+                cwd=Path(__file__).resolve().parents[1],
             )
 
         self.assertEqual(run("account", "example-account").returncode, 0)

@@ -91,6 +91,9 @@ dashboard/bun.lock
 .env.*
 !.env.example
 **/.astrbot-plugin/
+!astrbot/builtin_stars/wangshangliao_moderation/.astrbot-plugin/
+astrbot/builtin_stars/wangshangliao_moderation/.astrbot-plugin/*
+!astrbot/builtin_stars/wangshangliao_moderation/.astrbot-plugin/i18n/
 integrations/**/var/
 integrations/**/data/
 integrations/**/dist/

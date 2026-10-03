@@ -22,7 +22,7 @@ def prepare(root: Path, archive: Path) -> None:
     os.umask(0o077)
     for directory in ("data/config", "data/plugins", "private", "control"):
         (root / directory).mkdir(parents=True, exist_ok=True)
-    config = json.loads(Path(__file__).with_name("vip-dhbot.json").read_text())
+    config = json.loads(Path(__file__).with_name("controller.example.json").read_text())
     password = AUTH["generate_dashboard_password"]()
     config["dashboard"].update(
         {

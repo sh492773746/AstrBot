@@ -2,6 +2,8 @@
 
 <div align="center">
 
+本分支收录本地平台接入与群业务定制。功能范围、安装要求和数据排除说明见[定制指南](docs/local-customizations.md)。
+
 <a href="https://github.com/AstrBotDevs/AstrBot/blob/master/README.md">English</a> ｜
 <a href="https://github.com/AstrBotDevs/AstrBot/blob/master/README_zh-TW.md">繁體中文</a> ｜
 <a href="https://github.com/AstrBotDevs/AstrBot/blob/master/README_ja.md">日本語</a> ｜

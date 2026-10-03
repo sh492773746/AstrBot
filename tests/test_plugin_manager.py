@@ -370,6 +370,22 @@ def _assert_dependency_install_event_matches(
 
 # --- Fixtures ---
 
+@pytest.fixture(autouse=True)
+def preserve_imported_plugin_modules():
+    """Keep full-reload tests from invalidating other collected test modules."""
+    prefixes = ("data.plugins", "astrbot.builtin_stars")
+    original = {name: module for name, module in sys.modules.items()
+                if name.startswith(prefixes)}
+    yield
+    for name in list(sys.modules):
+        if name.startswith(prefixes) and name not in original:
+            sys.modules.pop(name, None)
+    sys.modules.update(original)
+    for name, module in original.items():
+        parent, _, child = name.rpartition(".")
+        if parent in sys.modules:
+            setattr(sys.modules[parent], child, module)
+
 
 @pytest.fixture
 def plugin_manager_pm(tmp_path, monkeypatch):

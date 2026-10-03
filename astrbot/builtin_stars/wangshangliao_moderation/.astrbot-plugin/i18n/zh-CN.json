@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "display_name": "旺商聊群管",
+    "desc": "旺商聊上下文审核、群管理与自动处罚。"
+  },
+  "pages": {
+    "management": {
+      "title": "旺商聊管理"
+    }
+  }
+}

@@ -2325,9 +2325,10 @@ class TestBuildMainAgent:
             )
 
         assert result is not None
-        assert [
-            part.text for part in result.provider_request.extra_user_content_parts
-        ] == [f"[Video Attachment: name video.mp4, path {video_path}]"]
+        parts = [part.text for part in result.provider_request.extra_user_content_parts]
+        assert parts[0] == f"[Video Attachment: name video.mp4, path {video_path}]"
+        assert len(parts) == 2
+        assert parts[1].startswith("[Knowledge Base Status]: No relevant context")
 
     @pytest.mark.asyncio
     async def test_build_main_agent_with_quoted_video_attachment(

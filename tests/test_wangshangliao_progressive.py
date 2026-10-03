@@ -17,7 +17,7 @@ from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
 @pytest.fixture
 def bot(tmp_path, monkeypatch):
-    for module in (automatic, content_rules):
+    for module in (automatic, content_rules, policy):
         monkeypatch.setattr(module, "instance_dir", lambda _: tmp_path)
     adapter = SimpleNamespace(
         account="1",

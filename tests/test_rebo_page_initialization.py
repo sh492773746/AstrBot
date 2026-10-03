@@ -15,7 +15,6 @@ async def test_page_feedback(mode):
     root = Path("data/plugins/astrbot_plugin_rebo_live/pages/settings")
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(
-            executable_path="/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
             headless=True,
             args=["--no-sandbox"],
         )

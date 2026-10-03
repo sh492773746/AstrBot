@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "display_name": "Wangshangliao Moderation",
+    "desc": "Contextual moderation, group management and automatic sanctions."
+  },
+  "pages": {
+    "management": {
+      "title": "Wangshangliao Management"
+    }
+  }
+}

@@ -40,7 +40,8 @@ async def test_context_only_selection_uses_capability_not_plugin_name(monkeypatc
     ordinary = SimpleNamespace(extras_configs={})
     monkeypatch.setattr(stage.star_handlers_registry, "get_handlers_by_event_type", lambda _: [enabled, ordinary])
     extras = {"_context_only": True}
-    event = SimpleNamespace(get_extra=extras.get, set_extra=extras.__setitem__)
+    event = SimpleNamespace(get_extra=extras.get, set_extra=extras.__setitem__,
+                            get_platform_name=lambda: "test")
     await stage.WakingCheckStage.process(None, event)
     assert extras["activated_handlers"] == [enabled]
     assert event.is_wake is False
