@@ -1,0 +1,39 @@
+[Unit]
+Description=AstrBot isolated tenant deployment worker
+After=docker.service astrbot-tenant-gateway.service
+Requires=docker.service astrbot-tenant-gateway.service
+
+[Service]
+Type=simple
+User=astrworker
+Group=astrtenant-state
+SupplementaryGroups=docker
+WorkingDirectory=/opt/astrbot-prod/integrations/tenant-control
+Environment=PYTHONPATH=/opt/astrbot-prod:/opt/astrbot-prod/.venv/lib/python3.12/site-packages
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=ASTRBOT_ROOT=/var/lib/astrbot-tenant-worker
+Environment=CONTROL_DB_GROUP=astrtenant-state
+Environment=TENANT_ROOT=/var/lib/astrbot-tenants
+Environment=ASTRBOT_SOURCE_ROOT=/opt/astrbot-runtime/tenant-source
+Environment=ASTRBOT_IMAGE=sha256:b2e2da32593e9155bcc4c561857f98b6d0f21e4c71623612e258b90d461f42ef
+Environment=TENANT_PROVIDER_TEMPLATE=/opt/astrbot-runtime/tenant-source/provider.json
+Environment=TENANT_PROVIDER_PROXY_URL=http://host.docker.internal:18734/v1
+Environment=TENANT_PROVIDER_HEALTH_URL=http://172.17.0.1:18734/health
+LoadCredential=worker.json:/etc/astrbot-tenant-worker/worker.json
+ExecStart=/opt/astrbot-runtime/python312/bin/python3.12 -m tenant_control --db /var/lib/astrbot-tenant-state/control.db worker
+Restart=on-failure
+RestartSec=10
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/astrbot-tenant-state /var/lib/astrbot-tenants /var/lib/astrbot-tenant-worker
+InaccessiblePaths=/opt/astrbot-prod/data /etc/astrbot-tenant-gateway
+
+[Install]
+WantedBy=multi-user.target

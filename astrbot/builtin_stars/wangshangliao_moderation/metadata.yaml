@@ -1,0 +1,7 @@
+name: wangshangliao_moderation
+desc: Wangshangliao moderation commands and permission-controlled automation.
+author: AstrBot
+version: 1.0.0
+
+support_platforms:
+  - wangshangliao

@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wangshangliao beginner guide</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">Documentation</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a><a href="wangshangliao-start-en.pdf" download>Download PDF</a><button onclick="window.print()">Print</button></nav><h1>Wangshangliao Beginner Guide</h1>
+<h2>Current Starting Point (October 22, 2026)</h2>
+<p>Configure features directly in the Wangshangliao plugin: <strong>Group Management →
+Activation / Rules</strong>, and <strong>Activities &amp; Finance → Player Lottery / Invitation
+Rewards / Invitation Settlement</strong>. Settlement includes the ledger, registrations
+and cashback settings; the former domain and standalone service are removed,
+without a redirect.
+A total-control dashboard login is required. Old Access cashiers do not inherit
+dashboard access; never share the owner password. <code>菜单</code> shows common actions, and
+<code>规则</code>, <code>禁言名单</code> or <code>解禁 @成员</code> work directly. Explicit <code>完整菜单</code> opens the old
+tree; old numbers below are compatibility references. Payment confirmation and
+the payer's personal <code>确认本群扣费</code> consent remain mandatory.</p>
+<p>Scheduled Messages is under <strong>Group Management → Rules → Keyword Replies and
+Scheduled Messages</strong>. Each keyword reply supports one static JPG/PNG/WebP image,
+up to 5MB, sent before optional text. Assets stay private and deduplicate only within
+this robot/group, without public image hosting or cross-group reuse. Keyword images
+are managed in the form; ask the operator to attach them if you lack dashboard
+access. No keyword-image DM inbox command is introduced. Text edits retain images.
+Three staggered posts use three independent plans at minute 00/20/40 each hour,
+each repeating every 60 minutes, not one plan sending three images together.
+Applying these times changes a draft only; explicitly enable each plan, preview and
+confirm save. Each plan accepts up to three static JPG, PNG or WebP files,
+at most5MB per original. Each occurrence sends one image in upload order, wrapping
+to the first. Replace, reorder or delete images; text is optional.
+When text is included, the image is sent first. Text follows only after the image
+is acknowledged; an unconfirmed image prevents the text from being sent.
+Choose daily times or an interval window in Beijing time, enable, preview and
+confirm. No AI calls are involved. Rotation advances only after acknowledged
+delivery; ambiguous or partial delivery pauses without automatic replay.
+Keyword replies and scheduled text allow up to 2,000 characters. Long Chinese or
+emoji text uses native size-bounded segments; only a fully acknowledged logical
+message succeeds. If text becomes uncertain after image delivery, neither the text
+nor the already-sent image is replayed; the schedule pauses for review.
+A roster lookup that finishes more than ten seconds after the planned time skips
+that occurrence rather than sending a delayed notice.
+In administrator DMs, send <code>群列表</code>, <code>选择群 序号</code>, then direct <code>关键词回复</code> or
+<code>定时发言</code>. Legacy <code>定时广告</code> is compatible; nested menus are optional.
+The page accepts file selection, paste and drop, with progress and bounded waits.
+To add a picture by DM, select the group, send <code>定时发言</code> for plan numbers, then
+<code>广告图片 1</code> and one static image. The bot returns a preview; send the supplied
+<code>确认广告 token</code> to save. Confirm each picture before adding the next, up to three.
+Unrequested pictures never become configuration. Cancellation, group changes,
+expiry or revoked permission invalidate pending intake. No AI is involved.
+Upload failure: check format, the 5MB limit, robot/group and permission; wait for
+controls to recover and check for an existing asset/save receipt before reselecting,
+previewing and confirming. Unknown results pause for reconciliation, never duplicate
+upload or confirmation. For a wrong group, cancel before selecting and uploading again.
+For missing permission, send <code>我的权限</code>, ask the owner to verify native roles and the
+operator to check this group's grants. Never share the dashboard password.</p>
+<p><img src="images/scheduled-image-editor-mobile.png" alt="Scheduled-image upload, replacement and ordering in the isolated 390px Chinese UI, not a phone acceptance test"></p>
+<blockquote>
+<p><a href="wangshangliao-rules-ai-en.html">Rules and AI ownership</a> is the current configuration
+contract. Support is account-scoped with explicitly designated editors; group
+owners no longer edit warm-group modes, topic, hours or knowledge. Business
+keywords and ads are deterministic and require preview/confirmation. Legacy
+menu9 mode/knowledge writes below are superseded.</p>
+</blockquote>
+<p>Updated October 22, 2026. This guide describes the integrated public mode using
+existing AstrBot accounts, not a separate public worker.
+<a href="wangshangliao-index.html">Index</a> · <a href="wangshangliao-command-tree-en.html">Command tree</a> ·
+<a href="wangshangliao-ai-index.html">AI reading and topic index</a> ·
+<a href="wangshangliao-architecture-permissions-en.html">Architecture and permissions</a> ·
+<a href="wangshangliao-acceptance-20261015-en.html">Dated acceptance evidence</a>.</p>
+<p>Later on October 20, three connected accounts verified three isolated real warnings
+in test group 1459282 across two fixtures of one and two, not full three-step escalation.
+The real <code>@大蛤</code>, mention target and original recalls passed; independent peer
+warning-recall notifications arrived 12.112/12.115/12.125 seconds after acceptance.
+Rules, temporary native roles and windows were restored. This is not mute-escalation,
+group-AI, complete-function or phone-rendering acceptance; see
+<a href="wangshangliao-membership-testing-en.html">scoped evidence</a>.</p>
+<h2>1. Sign In</h2>
+<p>Select an existing Wangshangliao bot under <strong>Bots</strong>, or create a new instance for
+a different account. Complete the official password/SMS verification flow,
+save changes and wait for <strong>Online</strong>. Authentication alone does not save the
+configuration or establish the message connection. An existing instance can
+only reauthenticate its original account.</p>
+<p>For an existing integrated instance, <strong>Save login and connect</strong> updates connection
+information without resaving effective group permissions, rules or switches.
+Older pages may include read-only state or default group settings in the save
+request; refresh the updated page before completing one new login. A failed save after successful security
+verification does not mean the security code was incorrect.</p>
+<p>Verified account names are display labels, not permission identifiers. Do not
+repeatedly retry a rejected login or infer a ban from a generic error. Never
+paste passwords, verification codes, cookies or tokens into chat or logs.</p>
+<p>Account login stays under <strong>Bots</strong>. Rules, group control, activities, schedules,
+audit and reference tables are under <strong>Plugins → Wangshangliao Management</strong>.
+Occupied activation slots and operating groups are separate counts: paused or
+departed activated bindings can still occupy a slot.</p>
+<h3>Dashboard Navigation Changes (October 22, 2026)</h3>
+<table>
+<thead>
+<tr>
+<th>Previous location</th>
+<th>Current location</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Groups → Activation &amp; Rules: activation, managers, admission upgrade</td>
+<td>Groups → Activation</td>
+</tr>
+<tr>
+<td>Groups → Activation &amp; Rules: moderation, whitelist, keyword replies, scheduled ads</td>
+<td>Groups → Rules</td>
+</tr>
+<tr>
+<td>Activities: lottery</td>
+<td>Activities &amp; Finance → Player Lottery</td>
+</tr>
+<tr>
+<td>Activities: invitation rewards</td>
+<td>Activities &amp; Finance → Invitation Rewards</td>
+</tr>
+<tr>
+<td>Audit: historical counts and receipts</td>
+<td>Runtime &amp; Logs → Audit, plus current platform mutes</td>
+</tr>
+</tbody>
+</table>
+<p>Activation saves do not overwrite rules; Rules saves do not alter activation,
+pause state or managers. Keyword replies and scheduled ads still require
+preview/confirmation and never call AI. Invitation point rewards save independently
+of lottery settings and never reprice historical credits.</p>
+<p>Player Lottery accepts a name, claim contact, total CNY amount and 1–100 participants.
+Choose equal or lucky split. The verified-invitation threshold appears only when
+<strong>Require verified invitations</strong> is checked; unchecked draws have no invite gate.
+Members send <strong><code>参与玩家福利抽奖</code></strong>; the old <code>参加抽奖</code> alias remains valid.
+New activities freeze all packet shares at opening, using the configured participant
+count. Ordinary shares differ by at most one cent; lucky shares are randomly split
+in advance, each at least one cent. Ordinary result lists retain their random order;
+lucky result lists show amounts from largest to smallest without changing anybody's
+allocation. Both packet modes publish results only after the countdown expires.
+Filling every slot or using the administrator's immediate-draw command cannot
+publish packet results early. At expiry, eligible entrants receive only existing
+shares. Unclaimed shares are not redistributed.
+For 100 CNY in 10 ordinary packets, five entrants receive 10 CNY each and 50 CNY remains
+unclaimed; one entrant receives 10 CNY and 90 CNY remains unspent. No entrants or a
+cancellation leaves the entire pool unspent.
+Optional remarks accept up to 500 characters across multiple lines, such as avatar
+or nickname requirements. Opening notices, status and results show the frozen
+remarks. Administrators verify these conditions; there is no automated avatar or
+nickname assessment.
+Settings and shares freeze; results and unclaimed amounts persist before
+announcement, and unknown receipts never cause a redraw. Late delivery receipts
+cannot reopen or finish an activity already cancelled by robot-departure cleanup.
+<strong>These are pending payout
+and unspent records, not Alipay integration, real debits, payments, bank refunds or
+settlement ledger entries.</strong> Already-open activities and historical allocations are
+not recalculated, and legacy prize draws remain compatible.</p>
+<p>Current mutes come from the platform, not historical penalty timestamps.
+Unmute previews one member and rechecks identity, native privileges and action grants
+before submission. It neither clears history nor releases everyone.
+An unavailable directory is not an empty list; unknown receipts are not retried.</p>
+<p><img src="images/player-lottery-desktop.png" alt="Player lottery, Chinese isolated API acceptance fixture">
+<img src="images/player-lottery-mobile.png" alt="Remarks and unclaimed amounts in the isolated 390px Chinese UI, not a phone acceptance test">
+<img src="images/current-mutes-mobile.png" alt="Current mute confirmation, Chinese mobile acceptance fixture"></p>
+<h2>2. Activate A Group</h2>
+<ol>
+<li>A current native group owner or administrator invites the bot.</li>
+<li>That verified inviter sends <code>开通</code> in the group; friendship is unnecessary.</li>
+<li>After activation, make the bot a native group administrator.</li>
+<li>Send <code>菜单</code> or <code>规则</code> to check state. Advertising and flood rules default on,
+but execution still requires native privileges and separate action grants.</li>
+</ol>
+<p>Ordinary-member invitations trigger controlled departure. Never substitute the
+owner, approver or notification sender for the real inviter. Unknown sources
+remain unopened and require operator investigation. Dashboard claim codes are
+single-use, digest-only and valid for ten minutes; they do not bypass invitation
+or inviter-role verification. Reinvitation cannot steal existing ownership.</p>
+<p>Without native bot privileges, group features instruct the user to make the
+bot a group administrator first. Repeating commands does not grant that role.</p>
+<h2>3. Navigate And Send Commands</h2>
+<p><code>菜单</code> or <code>帮助</code> shows five common categories. Send direct commands without
+navigating numbered steps, and prefer plugin forms for configuration.
+Only explicit <code>完整菜单</code> opens the compatibility tree; follow its current labels.
+<code>0</code> goes back and <code>取消</code> discards unsubmitted input. Mutations show a preview
+and require fresh confirmation. Navigation expires after ten idle minutes;
+exiting does not reverse an accepted operation.</p>
+<p>Group and private chats share command names; <code>管理 </code> is an optional prefix.
+Target inputs remain command-specific: group blacklisting requires a native reply/mention.
+Group commands bind the current group without friendship or bot mentions.
+Privately select only a group activated by or explicitly delegated to the caller:</p>
+<pre><code class="language-text">群列表
+选择群 1
+成员列表
+规则
+添加关键词 WORD
+热群状态
+关键词回复
+定时发言
+定时状态
+</code></pre>
+<p>Send one command per message. Member numbers belong to the current group's
+snapshot, expire in ten minutes and cannot be reused across conversations,
+accounts or groups. Menu visibility never grants authority. See the
+<a href="wangshangliao-plugin.html">complete command inventory</a>.</p>
+<h2>4. Manage Rules And Activities</h2>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Examples</th>
+<th>Checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Managers</td>
+<td><code>管理员列表</code>, <code>添加管理员 2</code>, <code>移除管理员 2</code></td>
+<td>Preview, then <code>确认授权 TOKEN</code>; at most 20, never remove the last manager</td>
+</tr>
+<tr>
+<td>Moderation switches</td>
+<td><code>开启广告审核</code>, <code>关闭广告审核</code>, <code>开启防刷屏</code>, <code>关闭防刷屏</code></td>
+<td>Per-group state and revision checks</td>
+</tr>
+<tr>
+<td>Keywords</td>
+<td><code>添加关键词 WORD</code>, <code>删除关键词 1</code></td>
+<td>Literal text, no executable code or custom regular expressions</td>
+</tr>
+<tr>
+<td>Group blacklist</td>
+<td><code>黑名单</code>, <code>黑名单列表</code>, <code>移除黑名单</code>; private <code>添加黑名单 NAME</code>, <code>选择黑名单 INDEX</code>, <code>确认黑名单 TOKEN</code></td>
+<td>Same robot/group only; verified native administrator and single native reply/mention; no immediate punishment on addition; every trusted actual rejoin mutes without kicking; loaded/configuration verified, no new actual rejoin test this round</td>
+</tr>
+<tr>
+<td>Blacklist rejoin mute duration</td>
+<td><code>黑名单禁言时长 N分钟</code> / <code>黑名单禁言时长 N小时</code> / <code>黑名单禁言时长 N天</code>, then personal <code>确认黑名单 token</code></td>
+<td>Default 29 days/41,760 minutes; converted value must be 1..41760 whole minutes; select a group first in DMs; future rejoins for this robot/group only, no existing-mute reset or retrospective sanctions</td>
+</tr>
+<tr>
+<td>Removal</td>
+<td><code>踢出 2</code></td>
+<td>Native privileges, action grants and fresh confirmation</td>
+</tr>
+<tr>
+<td>Announcements</td>
+<td><code>公告 TEXT</code></td>
+<td>Separate grant and native privileges</td>
+</tr>
+<tr>
+<td>Schedules</td>
+<td><code>定时禁言 23:00 08:00</code></td>
+<td>Preview and <code>确认定时 TOKEN</code>; future boundaries only</td>
+</tr>
+<tr>
+<td>Lotteries</td>
+<td><code>抽奖设置</code>, <code>开启抽奖</code>, <code>立即开奖</code></td>
+<td>Group managers in either channel; ordinary members enroll themselves</td>
+</tr>
+</tbody>
+</table>
+<p>Advertising recalls and warns three times, then escalates through 5/15/60-minute
+mutes without automatic removal. Ordinary images, stickers, videos and merged
+forwards are not recalled or muted solely for their media type.
+Supported authenticated media messages count toward flood thresholds; media is not
+downloaded or interpreted, and text, voice and file names are not guessed to be
+images or videos. Administrators and protected bots remain
+exempt; messages predating rule activation are not penalized.</p>
+<p>Flood rules detect three texts/supported media messages from one
+member in five seconds, eight in ten seconds, or five repeated texts in thirty seconds, mute first, then recall the matching
+burst without waiting for AI. Accepted does not mean confirmed successful;
+uncertain operations must be reconciled, not blindly repeated.</p>
+<p>Before three accepted advertising recalls, a failed or unknown recall earns no
+warning and causes no mute. After that grace, recalls and mutes are independent
+and authorization is checked again. An unknown mute freezes later automatic mutes,
+but does not itself disable separately authorized recalls. Manual recalls and
+mutes never increment automatic penalty counts.</p>
+<p>Split-contact rules exclude already recalled evidence and evidence with an
+accepted, verified, unknown or sending recall receipt. This applies to solicitation
+text, broadcast cues, earlier numbers and the current number. Native notices must
+match this account, group, message, original client and native sender; a rejected
+receipt is not proof of recall. These evidence checks do not add abuse/image
+recognition, longer mutes, or automatic removal.</p>
+<p>Card batches and banned/cancelled-member cleanup are dashboard-only. They are
+not friend deletion. Authorization, membership, state and revisions are
+rechecked immediately before submission.</p>
+<h3>Current Blacklist Workflow (October 23, 2026)</h3>
+<p><strong>The exclusivity/removal fix loaded with the full restart at22:59:23 Beijing time,
+October23,2026</strong> (PID4071721, NRestarts=0). All22 protected surfaces/config matched
+at22:59:51; Python1,794 passed/2 skipped, UI177 unit/9 browser passed.
+No real member changes or sanctions occurred;12 existing needs_review records
+remain without retry. No real full-chain load test occurred; see the
+<a href="wangshangliao-maintenance.html">maintenance record</a> for limited performance
+measurements. Dist synchronization remains owner-controlled.
+New additions are exclusive by bot/group/UID:
+require removal from the other list first, never transfer/delete automatically.
+Keep historical overlaps with blacklist precedence; remove each separately.
+Blacklist removal neither unmutes nor deletes a whitelist entry. The loading and
+configuration evidence below predates this fix.</p>
+<p>Code loaded after the full restart at <strong>20:02:56 Beijing time, October 23, 2026</strong>
+(PID3317496, NRestarts=0). At20:10:45, test-group online duration read/preview/
+confirmation/readback passed from41,760 to60 and back to41,760 minutes; previews
+did not write and the default was restored. <strong>No new actual rejoin/mute acceptance
+was performed.</strong> Offline and configuration checks do not prove native sanctions.
+The 16:53:53 Beijing-time loading and
+subsequent three-kick test belong to the earlier policy only.
+Scope is one receiving robot and one group. In groups, the caller needs a verified
+native owner/admin role and this group's management authorization. Natively reply
+to one target with <code>黑名单</code>, or actually mention one target and send <code>黑名单</code>.
+This records the entry only, <strong>without immediately punishing</strong> a current member,
+by either kicking or muting.
+Group removal uses the same native target with <code>移除黑名单</code>; typed names, raw UIDs,
+fake mentions and multiple targets are invalid. Use <code>黑名单列表</code> to read the list;
+<code>黑名单</code> without a verified target returns corrective instructions.</p>
+<p>Privately send each command separately, using the actual search result and preview:</p>
+<pre><code class="language-text">群列表
+选择群 1
+添加黑名单 MEMBER_NAME
+选择黑名单 1
+确认黑名单 &lt;CURRENT_PREVIEW_TOKEN&gt;
+</code></pre>
+<p>For removal, use <code>移除黑名单 CURRENT_NAME/SAVED_OLD_NAME/EXACT_UID</code> to find saved
+entries, including departed/renamed members; whitelist removal uses
+<code>移除白名单 CURRENT_NAME/SAVED_OLD_NAME/EXACT_UID</code>. Select, preview and personally
+confirm. The corresponding list-row removal icon also opens a preview before
+confirmation, without requiring the target still to be a member.
+<strong>Addition still searches the real current roster by name, never blindly by UID</strong>;
+exact UID lookup only locates an existing entry for removal.
+Disambiguate same-name members, never reuse
+old indices. Existing total-control users can use <strong>Group Management → Rules →
+Blacklist Settings</strong>: read/search, preview, then personally confirm commit. Reads/previews
+do not write; ordinary managers do not inherit dashboard access.</p>
+<p><strong>Every trusted actual rejoin directly mutes and retains the member, never kicks</strong>,
+starting with the first rejoin and using this robot/group's confirmed duration.
+The default is <strong>29 days = 41,760 minutes</strong>; the converted setting must be
+<strong>1..41760 whole minutes</strong>. Group commands use the current group. In DMs, send
+each command separately, for example to restore the default:</p>
+<pre><code class="language-text">群列表
+选择群 1
+黑名单禁言时长 29天
+确认黑名单 &lt;CURRENT_DURATION_PREVIEW_TOKEN&gt;
+</code></pre>
+<p><code>黑名单禁言时长 60分钟</code> and <code>黑名单禁言时长 24小时</code> are also valid examples.
+Check the robot, group and converted minutes, then personally confirm the preview
+before saving. Zero, negative, excessive or sub-minute values are invalid.
+This is a group setting, not a member-selection operation. Dashboard
+<strong>Group Management → Rules → Blacklist Settings</strong> (<code>群管理 → 规则 → 黑名单设置</code>)
+also requires preview and confirmation for duration edits.
+Changes affect <strong>only new rejoins after confirmation</strong>, never reset existing
+mutes or punish current members retrospectively. Ordinary messages, duplicate
+notices, repeated additions and restarts never renew a mute. Changing group,
+cancellation, revocation or revision changes require a new preview.
+Unknown receipts pause for review without retry or erasure.
+Owners/admins/bots remain protected except an exactly authorized isolated fixture,
+never a general production exception. Whitelisting does not override blacklisting.
+Ordinary automatic kicking remains prohibited and ordinary mutes retain the 24-hour
+cap. <strong>Removal does not unmute; unmute does not remove the entry.</strong></p>
+<p>For missing access, send <code>我的权限</code> and ask the owner/operator to check native roles
+and this robot/group's grants. The first two online reads were protective409
+refusals because the bot was a member, with no writes; specific permission hints
+are now provided. After access is restored, re-search for member actions or
+re-preview duration edits, never reuse an old token.
+Wrong group: <code>取消</code>, then <code>群列表</code>, <code>选择群 INDEX</code>,
+search and preview again with a fresh token. AI explains only, never reads live lists,
+executes or confirms.
+<strong>Old → new:</strong> first three successful rejoin kicks, then fixed 29-day mutes →
+direct mute on every actual rejoin with a configurable duration. Historical counts
+no longer select phases; receipts remain unchanged. Dashboard Blacklist →
+Blacklist Settings. The user's “看得见” confirms the corresponding phone display
+only, not that the future 29-day expiry occurred. No new kicks or actual mutes
+occurred this round. The20:24:00 protection review matched other protected surfaces
+and retained test tenant217→220 plus audited concurrent Dingfeng dashboard
+versions4/5. Raw tenants hashes differ; formal groups are not claimed never to
+have changed. Earlier three-kick results keep their date and original scope in
+the <a href="wangshangliao-maintenance.html">maintenance record</a>.
+Regenerated guide/index/PDF files are not synchronized to dist; final synchronization
+and served-hash verification remain with the owner.
+See <a href="wangshangliao-rules-ai-en.html">Rules and AI ownership</a>.</p>
+<h2>5. Private Messages And Friends</h2>
+<p>After trusted identity verification, <code>我的邀请</code> lists enabled cashback group names
+and numbered sender-only records, without UIDs. Accounting questions should go
+to the configured cashier contact.
+Activity points and the cash ledger are separate businesses.</p>
+<p>First-use greetings are durably deduplicated and are not bulk-resent to existing
+friends. Since October 18, 2026, delivery is <strong>text menu → instructions image →
+conversation-examples image</strong>, using the supplied Dahai logo. Both fixed native
+assets have digest-verified originals and thumbnails; URLs are not used as native
+asset identifiers. Manually sending <code>菜单</code> returns links to both current images.
+A verified native administrator invitation sends this set to that group before
+activation, explaining that the inviter must send <code>开通</code> and grant the bot native
+administrator rights. Successful activation retains a same-generation fallback
+without duplicate greetings. Friendship is unnecessary; unproven or ordinary-member
+invitations receive no guide set. Guidance grants no permissions.
+Group welcomes are deduplicated by bot account, business group and membership
+generation, with at most twenty queued jobs and one worker. Pause, revocation,
+departure and unload stop unsent items; uncertain deliveries are not replayed.
+New-artwork rendering, a genuinely new friend's first welcome and end-to-end
+mobile arrival time still require separate mobile acceptance. Downloads or
+server receipts alone do not establish that the phone displayed either image.</p>
+<p>Welcome cooldowns await asynchronously outside the account send lock, so they
+do not hold that lock and block unrelated sends. After acquiring the lock, the
+sender rechecks the latest send time, account and authority. Welcome text and
+native images share at least three-second spacing. Only an explicit busy result
+before a welcome is claimed or sent is deferred for later serial processing
+with fresh checks. Uncertain deliveries are never automatically replayed; local
+encoding failures are definite failures, not delivery receipts. Polling,
+upstream response time and required cooldowns still affect arrival time;
+immediate delivery is not promised.</p>
+<p>Automatic friend approval stays serial: requests at least three seconds apart,
+approval actions at least thirty seconds apart. Reads use bounded backoff;
+uncertain writes require reconciliation, and existing safety pauses are not
+automatically lifted. All friend-deletion interfaces remain removed.</p>
+<h3>Review A Friend-Approval Safety Pause</h3>
+<p>The acceptance account checked on October 16, 2026 still has <code>enabled=false</code>,
+<code>paused=business_rejected</code> and one unresolved approval. Neither this fix nor
+deployment cleared that pause or resubmitted the approval.</p>
+<ol>
+<li>In <strong>Plugins → Wangshangliao Management</strong>, select the exact bot, open
+<strong>Friend Requests</strong> and refresh. Compare the original request and member
+identity with the official client and operation logs, never just nicknames.</li>
+<li>Only an explicit operator decision should use <strong>Verify And Resume</strong>.
+The dashboard supplies the current account-configuration and approval
+versions and reads back the original outcome. Missing records, identity
+conflicts, pending requests and provider backoff keep the hold in place;
+no approval mutation is repeated.</li>
+<li>Successful reconciliation does not switch an already disabled approval
+setting on. Enabling it requires a separate operator decision. Do not clear
+the database, rewrite states or toggle repeatedly to bypass unresolved work.</li>
+</ol>
+<p>For the minimum mobile check, use a genuinely new controlled contact. Prove
+that its request identifier was absent from the earlier snapshot, is incoming
+and currently pending, and matches the business UID and NIM identity. Manual
+acceptance in the official client can test welcome delivery without lifting
+the automatic-approval hold. Record acceptance, welcome text and both native
+images' arrival times; confirm one welcome set and open both images on the phone.
+Existing-contact delivery is only a delivery check, not first-friend acceptance;
+opening the link is not native-image acceptance. Never delete a friend to
+manufacture a new request.</p>
+<h2>6. Read-Only AI And Financial Boundaries</h2>
+<p>Private <code>/chat</code> starts consultation; <code>/exit</code> or fifteen idle minutes ends it.
+Guidance explicitly states that <code>0</code> returns one level rather than exiting.
+<code>取消</code> exits the menu and also ends consultation in private chats. Menu visibility
+is not management permission, and another sender's numeric reply cannot take
+over the caller's workflow. Unverified users may view the menu and use
+budget-gated read-only consultation, but cannot access financial data or manage
+groups. Verified ordinary users may query only their own records, not others'
+quotas, group rules, manager grants or settlement registration. Guidance explains
+individual unmute as a scoped manager command, never an AI operation. Manual
+member mute and whole-group mute/unmute remain retired; automatic penalties,
+flood protection and daily mute/unmute schedules remain governed by settings.
+Flood protection triggers at three messages in five seconds, eight in ten seconds,
+or five equal normalized texts in thirty seconds, separately for each sender,
+account and group. Both native and receive timestamps must satisfy the window.
+Since October 22, 2026, the audit view also distinguishes unsubmitted moderation
+failures from submitted actions with an unverified receipt. Sanitized reasons
+appear in the existing sanction and recall columns. Other administrators' recalls
+remain separately attributed; old unknown operations are not cleared or replayed.
+Group conversation is off by default and requires a separate per-group opt-in.
+All roles have no tools, MCP,
+subagents, code execution or management actions. Ledger data, secrets and
+others' private messages are not model inputs.</p>
+<p>Trial defaults to 20 calls/day with a CNY3/calendar-month model budget.
+Plus is 2000/day, 30 days, 20 USDT; Pro is 5000/day, 30 days, 50 USDT.
+Paid cost ceilings are 70% of recorded CNY receipts, not a live exchange rate.
+The separate site trial pool defaults to CNY20 per Beijing calendar month; paid
+cycles never consume it. In &quot;AI → Plans and quota&quot;, the former site monthly
+cap becomes the safety base, with a separate trial-budget field. The effective
+site ceiling is base plus granted paid-cycle budgets overlapping the month.
+A zero base blocks all AI; a zero trial budget stops only free trials.
+Upgrade/expiry never reclassifies existing costs, and monthly rollover does not
+replenish an individual paid-cycle budget.</p>
+<p><img src="images/ai-budget-pools.png" alt="Separate trial, paid and site safety budgets in the Chinese dashboard"></p>
+<p>Daily counts reset at midnight Asia/Shanghai, not on restart; expiry returns to
+trial without resetting that day's usage. Verified superadmins bypass counts
+only, not monetary budgets. One inflight request/person,
+five-second spacing, two service requests and a 45-second timeout bound usage.
+<strong>Public AI remains paused pending verified supplier hard-budget enforcement.</strong>
+An isolated cost test does not open this gate.
+On October 20, the current DeepSeek binding has confirmed finite supplier quota
+metadata and local budgets. Group <code>1516387</code>'s 15:47:56 Beijing autonomous-reply
+receipt is historical, not current AI enablement. Supplier quota exhaustion/rejection was not tested.</p>
+<p>Only dashboard grants paid plans to verified managers, after contact details,
+actual receipts and a preview/confirmation. Renewals append30 days; upgrades
+start immediately and preserve queued prepaid periods afterward.
+Private <code>我的套餐</code>/<code>我的额度</code> reads the caller's pool; <code>套餐说明</code> shows the upgrade contact.
+One trusted manager shares one pool across bots, private calls and consented
+group AI. The opener or dashboard nominee must personally preview and confirm
+<code>确认本群扣费</code>. Only dashboard changes payers; revocation/departure stops group AI
+without transferring charges. Exhaustion and80%/100% cost alerts are private-only.
+Counts are ceilings subject to cost budgets; the separate site guard defaults
+to100000 calls/day. Missing site monthly cap or verified billing bounds blocks calls.
+Managers use <code>热群状态</code>, <code>开启热群</code> and <code>关闭热群</code> for their own group only.
+<code>/chat</code> starts consultation and <code>/exit</code> ends it. Use <code>我的套餐</code> for the caller's
+plan, <code>本群额度</code> for the selected group's quota, and personal
+<code>确认本群扣费</code> followed by the actual confirmation for payer consent.
+Old menu numbers are unnecessary.
+Mode changes do not automatically enable the master switch.
+Individual unmute uses a native <code>解禁 @MEMBER</code> / <code>解除禁言 @MEMBER</code>,
+or private <code>解禁 INDEX</code> after selecting an authorized group and fetching <code>禁言名单</code>.
+The private wizard lists authorized groups first, then only currently muted
+members. General member-list indices are invalid; failed or incomplete reads
+stop the operation without falling back to everyone. Current mute state is
+checked again before submission. <code>禁言名单</code> reads the current mute list.
+Current group authority, native bot administrator status and the <code>unmute</code> grant
+are required. Menu selection previews and confirms; violation records remain.
+Manual member mute and whole-group mute/unmute still use the official app; old public chat
+commands only explain this and never execute. Automatic penalties and schedules remain.
+Customer Service, Admin Guidance and Group AI independently select existing AstrBot
+profiles, personas and models under AI in the dashboard. Account/group overrides apply to all three group modes:
+native @, autonomous participation and idle topics, never private consultation.
+Persona text, paired style examples, temperature, top_p, bounded tokens and history are supported,
+without inheriting global knowledge bases or tools. Personal knowledge remains
+in the explicitly opened <code>完整菜单</code> compatibility tree. Group knowledge is
+dashboard-maintained with separate ownership and default-off group references.
+Built-in safety prompts remain; changing models still requires matching
+budget verification. Saving a profile does not enable AI.</p>
+<h3>Independent Administrator Guidance</h3>
+<p>The new <strong>AI → Admin Guidance</strong> entry saves the global <code>admin_guidance</code> profile.
+Its first explicit save enables role routing; until then, existing read-only
+consultation is unchanged. Existing customer/group selections are not copied or
+rewritten. Invalid saved profiles fail closed rather than falling back.</p>
+<p><img src="images/admin-guidance-config.png" alt="Independent administrator configuration in the Chinese isolated UI fixture"></p>
+<table>
+<thead>
+<tr>
+<th>Verified identity</th>
+<th>Private AI route</th>
+<th>Guidance boundary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unverified, ordinary user, or self-claimed administrator</td>
+<td>Customer Service</td>
+<td>Public business support and own fixed-query entry points, no administrator configuration steps</td>
+</tr>
+<tr>
+<td>Explicit manager on this bot account, verified against a recent complete native roster</td>
+<td>Admin Guidance</td>
+<td>Fixed commands and menus only for the caller's assigned groups; select a group first</td>
+</tr>
+<tr>
+<td>Separately granted private cashier</td>
+<td>Admin Guidance</td>
+<td>Assigned groups' fixed <code>结账</code> workflow, not group rules or finance-admin corrections</td>
+</tr>
+<tr>
+<td>Separately granted private financial administrator</td>
+<td>Admin Guidance</td>
+<td>Assigned groups' finance guidance, including permitted corrections/reversals; no ledger access or AI confirmation</td>
+</tr>
+<tr>
+<td>Only framework admin, quota exemption or a paid plan</td>
+<td>Customer Service</td>
+<td>None grants group-management or cashier authority</td>
+</tr>
+<tr>
+<td>Dashboard login or CF Access web finance identity</td>
+<td>Not a chat routing credential</td>
+<td>Never automatically mapped to native chat permissions</td>
+</tr>
+</tbody>
+</table>
+<p>Combined roles remain distinct for each account and group. Private AI keeps
+command execution disabled; routing reads authorization metadata without undoing
+that restriction. Customer/admin histories and different permission scopes have
+separate native conversation keys. Revocation, selection, pause, membership or
+profile changes suppress unsent calls and late replies; later requests use the
+new scope without importing old administrative history. Existing cost admission,
+concurrency and timeouts remain; neither group AI nor financial actions are enabled.
+Selected profiles do not automatically supply global KBs, tools or skills;
+business knowledge still requires separately reviewed scoped integration.</p>
+<p>Dashboard separately controls native-mention replies, autonomous replies, idle topics, 5–1440-minute
+idle spacing, optional group subcaps (default0 adds no extra cap), Beijing-hour windows and topic. Both group
+AI and autonomous/idle posting default off. <code>mentions</code> remains independent of
+<code>autonomous</code>. Mentions use the current question and bounded configured history
+from the verified sender's new mention conversation only; zero history excludes
+prior exchanges. No other members, groups, accounts, private chats or old group
+consultation history are reused or migrated. All three modes share the group
+persona, not per-user histories. Autonomous mode may send at most twelve filtered recent group messages
+to the model to decide whether and what to reply to. Silence still costs usage.
+Candidates live only in memory for at most120 seconds; native conversations retain
+only the selected target and accepted reply. Ledger and others' private messages
+are excluded. Equal start/end hours permit all-day participation, not nonstop posts.
+Autonomous candidate buffers are unchanged. All group output is plain text without
+<code>【群聊AI】</code> or <code>【客服咨询】</code> prefixes; private read-only AI is unchanged.
+With the user's authorization, these mention-routing, per-member history and
+prefix-removal changes were loaded by a full <code>astrbot.service</code> restart on
+October 20, 2026 at 09:47:09 UTC (17:47:09 Beijing), not a plugin reload.
+New management labels are deployed. Group <code>1516387</code> now has group-AI version5
+with <code>enabled/mentions/autonomous/idle</code> all <code>false</code>; loading does not enable it.
+No test messages or model calls were made for deployment, so loading is not
+new-version real-group acceptance.
+Unknown outcomes require review; paused/departed/unprivileged groups stop.</p>
+<h3>Isolated Native Warm-Group Acceptance</h3>
+<p>The server-only <code>test_group_ai</code> action connects the existing <code>group_ai</code> test
+window to the real executor without enabling production AI or fabricating a
+production payer's consent. It is fixed to receiver <code>43506527</code>, sender <code>31846829</code>
+and group <code>1459282</code>. A complete native roster must contain exactly the existing
+three accounts, with the sender as owner and receiver as administrator. TestLab
+may grant that role temporarily with preview/confirmation, then restore it.</p>
+<p>Open a window with only <code>group_ai</code>, at most 300 seconds and 1–3 inbound messages.
+The existing <code>open-service</code> endpoint accepts <code>action: test_group_ai</code> with
+<code>payload: {operation_id: WSL_TEST_WARM_&lt;32 lowercase hex digits&gt;, action: ...}</code>.
+Actions are <code>open</code>, <code>status</code>, <code>send_1</code>, <code>send_2</code>, <code>send_3</code> and <code>close</code>. The sends
+are fixed native mentions covering everyday conversation, previous-turn memory
+and a read-only PC28 query; arbitrary text, groups and functions are rejected.
+Repeated sends return the original receipt; uncertain receipts are never retried.
+The normal 60-second group cooldown remains.
+For a tool-only recheck, a fresh window may start with <code>send_3</code>; the earlier
+questions then remain unavailable. Accounting persists across windows without
+resetting used requests.</p>
+<p>Only native inbox evidence admitted by the exact window can reach this test AI.
+Command/keyword handling, cooldown, failure or revocation never falls back to
+production AI. Current server-managed warm-group profile/persona bindings are
+used, with conversation history isolated by run ID. Persistent test accounting is
+under <code>data/plugin_data/wangshangliao_open/group-ai-tests/</code>: at most CNY 0.5 per
+month, shared across windows, independently priced and settled per model request.
+Actual supplier charges still apply. The shared two-request concurrency limit,
+45-second turn deadline and at most two separately billed model calls per turn
+remain. A test turn occupies both shared slots and is refused while any production
+request is in flight, preventing the independent ledger from bypassing per-payer
+in-flight limits. Unknown model/delivery outcomes block reopening pending manual review.
+PC28 reads share the existing service's cache, per-IP request limiter and 429
+backoff; this network-safety metadata is not a production user's bill.</p>
+<p>Keep native input, receiver outbox receipt, sender's independent inbox witness,
+test charges and before/after production snapshots. Close the window and restore
+temporary native roles afterwards. No connector restart, production AI switch,
+production payer or financial-ledger mutation is part of this acceptance.</p>
+<p>Group managers cannot manage other groups, global models or financial records.
+AstrBot admin status grants no public-group authority. Dashboard identity and
+historical CF Access financial identity are separate. The old standalone
+settlement domain and its Access entry have been removed; settlement now uses
+Dashboard authorization inside the plugin. Old Access allowlists do not grant
+Dashboard login. Private <code>结账</code> requires a separate total-control grant bound to
+the receiving account, group and verified sender; ordinary group management
+does not grant financial access. Both use the <a href="wangshangliao-cashback-en.html">same ledger and qualification
+checks</a>. AI cannot access financial data or execute
+financial operations; neither entry transfers money automatically.</p>
+<h2>7. Lifecycle And Troubleshooting</h2>
+<p>Losing the bot's native administrator role retains configuration/data while
+pausing group functionality. Restoring privileges does not replay old sanctions.
+Confirmed removal cancels tasks and confirmations and clears that bot/group's
+working data, not financial records, original ownership, minimal audit or
+uncertain receipts. Disconnects, API errors and temporary directory omissions
+never trigger deletion.</p>
+<p>For save conflicts, refresh and review instead of resubmitting a stale preview.
+Missing selectable groups require checking the receiving bot, verified caller
+and explicit group grants, never nickname-based permission repair.
+The October 20 post-load read-only check shows all four group-AI switches in
+<code>1516387</code>'s version5 configuration off, unchanged across loading. Business-group
+operation and AI switches are distinct; earlier operating snapshots do not imply current AI enablement.
+See <a href="wangshangliao-acceptance-20261015-en.html">dated evidence and outstanding gates</a>
+and <a href="wangshangliao-maintenance.html">maintenance</a>.</p>
+</body></html>

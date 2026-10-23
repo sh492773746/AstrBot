@@ -1,0 +1,205 @@
+# 旺商聊日志与排障
+
+同步日期：2026-10-23。现行职责及权限见
+[当前架构与权限](zh/platform/wangshangliao-architecture-permissions.md)。
+公共模式所有AI工具停用；逐群开启并通过预算门禁后，群@、自主接话和冷场话题
+统一按`profiles.resolve("group", account, group)`走群配置及账号／单群覆盖，不走私聊咨询人格。
+群输出均为纯文本，不加`【群聊AI】`或`【客服咨询】`前缀；私聊只读AI行为不变。下文旧`admin_private`、
+`management_enabled`和语义模型路由只解释历史／兼容日志，不能据此恢复工具。
+用户授权「加载核实」后，上述群@路由、成员历史隔离及去前缀已于2026-10-20 09:47:09 UTC
+（北京时间17:47:09）随`astrbot.service`完整重启加载，非插件重载；新管理页标签已发布。
+群`1516387`最新群AI配置为version 5，`enabled/mentions/autonomous/idle`均为`false`，
+加载前后未变；旧自主回复记录仅为历史，加载本身不等于新版本实群效果验收。
+
+接入器与插件共用 AstrBot 日志管线，不额外建立一套日志服务，也不修改现有
+日志级别、保留周期或轮转设置。只读AI、固定命令、名片任务、活动和定时任务
+使用统一前缀 `Wangshangliao`。
+独立结账服务通过专用`cashier.sock`的`/v1/diagnostics`转发有界结构化元数据，
+AstrBot侧前缀为`Cashier standalone`。旧公共`control.sock`已停用，这不是结账桥停用。
+
+## 查看入口
+
+- WebUI：**数据与日志 → 日志**，查找 `Wangshangliao`，再按 `instance=` 缩小机器人范围。
+- **数据与日志 → 对话／统计／追踪**：实际AI问答、调用量及元数据追踪使用AstrBot原生入口，
+  不另建插件对话页。对话ID关联统计与追踪；群@和自主接话分别隔离，
+  @新键为`platform:GroupMessage:account/group/wsl-ai/account/group/mention/verifiedUid/peer`，
+  只读该键下配置允许的本人历史，不跨成员、群、账号或私聊，不迁移或复用旧群客服咨询历史。
+  共享群人格不等于共享成员历史；自主／冷场保留原`/wsl-ai/account/group`来源和自主候选缓存，
+  不把固定命令、财务输入、系统提示、知识片段或旁观消息整批内容存为AI对话。
+  退出咨询后后台记录仍可查看，下一次`/chat`不会加载上次上下文；旧临时历史不回填。
+  模型门禁阻断时不会为填充页面发起调用；未成功送达的回复不记为成功对话。
+- 默认主日志：`data/logs/astrbot.log`；若已自定义日志路径，以设置为准。
+- 本机 systemd 部署可运行 `journalctl -u astrbot.service --since '10 minutes ago' --no-pager`，
+  再筛选 `Wangshangliao`。日志级别高于 INFO 时，不会显示正常路由和权限拒绝记录。
+- 结账日志同时筛选`Cashier standalone`；桥接不可用、拒绝或结果不明时不重投，
+  已清洗批次回落到独立`wangshangliao-cashier.service`的journal，
+  前缀为`Cashier journal fallback`。转发队列最多128条、批次最多16条，
+  满载汇总`queue_overflow`；不能只查AstrBot日志就断言结账进程没有错误。
+- 多个群与机器人共用进程，不要只凭时间相近判断同一次操作，应结合关联字段。
+
+## 字段说明
+
+| 字段 | 含义 |
+| --- | --- |
+| `instance` | 机器人实例标识，不是用户昵称 |
+| `stage` / `outcome` | 处理阶段及真实返回状态 |
+| `correlation` | 消息或任务标识的 SHA-256 前 16 位；同一原始消息可关联路由、审核和处罚 |
+| `route` | 由当前调用点给出的固定标签，如`private`、`group`及登录步骤；`admin_private`等旧标签不代表现行工具授权 |
+| `action` | 服务端固定操作名，不记录用户输入的自由文本 |
+| `group` / `actor` / `session` | 群、用户、会话标识的哈希；缺失为 `-` |
+| `error` | 白名单错误类别，不是异常原文 |
+| `duration_ms` | 调用点测量的阶段耗时；未测量为 `-`，不是所有链路的端到端耗时 |
+| `provider_code` | 登录上游的有界数字返回码；不可用为 `-`，不记录原始错误消息 |
+| `count` | 本条汇总的事件数量，正常记录为 1 |
+
+后台名片任务以任务 ID 为关联值；新确认消息与预览消息有不同的消息关联值。
+因此 `correlation` 不是跨全部会话、全部发送分片的全局调用链 ID。
+
+## 定时图片为空白气泡，但文字正常
+
+2026-10-23确认定时图片外壳曾为`{"b": "..."}`，官方客户端精确识别的形状为
+`{"b":"..."}`。定时图片发送现已采用紧凑JSON，与现有文字及固定引导图一致。
+检查原生消息包装时不能仅依赖容忍空格的`json.loads`；资产上传成功、服务器受理、
+机器人独立收件均不等于官方手机已显示图片。保留原回执，不将accepted／unknown
+重置后重发；修复后以新的测试操作核验先图后文，并另行确认手机显示。
+部署及证据见[维护说明](wangshangliao-maintenance.md)同名日期章节。
+本轮用户随后已确认「现在正常了」，并完成无引用本地测试图清理；
+该手机确认作为后续证据保留，不覆盖之前空白图片的失败记录。
+
+## 常见问题定位
+
+当前公共群先核对「群管理」的运行数量、暂停开关、管理员名单及机器人平台角色。
+`开通`要求真实邀请者是当前平台群主／管理员，来源不明和旧邀请冲突都不授权。
+`open_activation / unconfirmed`不是成功开通，需核对成员和结果，不连续重发。
+`private_onboarding / delivery_unconfirmed`保留首次发送标记，不自动补发；
+用户仍可发`菜单`。好友异常暂停只走后台核对恢复，不能靠开关消除未知结果。
+`/chat`无模型调用时先查供应商硬预算门禁，不去勾选旧工具。
+群@核对本群`enabled`和`mentions`，普通文字自主接话另查`autonomous`，
+冷场发话另查`idle`；还需扣费人确认、原生管理员角色、时段及额度。
+`mentions`与`autonomous`独立；群@人格不符时核对群配置及账号／单群覆盖，不修改私聊咨询配置。
+@上下文核对已核验UID、peer、账号、群和历史轮数，0不带入往轮问答，不恢复旧群客服历史排障。
+自主接话开启时允许筛选后的有界普通群聊上下文进入模型，不应承诺全部旁观内容永不传模型。
+好友申请读取至少间隔3秒、自动同意至少间隔30秒；常规审批扫描60秒、
+欢迎观察10秒，瞬时读取故障按3／15／75／300秒退避，平台`Retry-After`可更长。
+这些是最小间隔及扫描门槛，不是投递时效保证。
+
+2026-10-20警告姓名及自动撤回修正已随上述完整后端重启加载：原生`actions.py`不再强制`auto_recall=False`
+或使用调用方`userName`／ID标签。新警告只用本账号本群权威完整名单精确核验的真昵称原生@；
+身份可信但缺昵称只发正文，身份冲突仍不发送，`auto_recall=True`按真实发送回执安排12秒撤回。
+该加载阶段没有发送测试消息或调用模型；不要为排障擅自重启或补发旧警告。
+619项通过早于缺昵称回退细化，不能据此判断最新回退或运行进程已通过。
+重启后离线专项308项通过及当时0条新撤回意图／0条待处理不等于原生实测。
+随后三账号在`1459282`通过两个隔离fixture（1＋2次）完成3条真实警告核验：
+`userNick`的`@大蛤`和目标身份一致，不优先取群名片`testfork`；
+原违规消息撤回、警告接收和自撤回均有对端证据，作者／执行人匹配本地回执。
+警告受理至对端撤回通知为12.112／12.115／12.125秒，不是手机实际消失时间。
+规则、临时管理员角色恢复为原普通成员，窗口关闭；正式群、财务及正常处罚计数未变，
+原生收发回执和最小审计保留。实测0模型调用、无额外NIM连接、未重启服务。
+不涵盖禁言升级、全功能或手机画面；证据见
+`/opt/backups/wsl-warning-live-20261020-I5Z5qf/result.json`。
+首条核验脚本将SHA-256误作JSON解析，只读恢复既有回执后才继续剩余两条，
+没有重发第一条，原失败记录保留；完整边界见[测试与验收](zh/platform/wangshangliao-testing.md)。
+
+| 日志组合 | 意义与处理 |
+| --- | --- |
+| 旧`ai_route / customer_only` | 历史客服路由，不表示当前群内会启动AI |
+| 旧`ai_route / management_enabled` | 历史管理工具路由；当前所有聊天AI工具已停用，不据此判断权限 |
+| 旧`ai_route / management_unavailable` | 历史工具不可用；当前不要通过勾选旧工具修复 |
+| 旧`ai_route / management_history_isolated` | 历史会话隔离记录，不是当前写入入口 |
+| `model_route / configured` | 采用该路配置的独立模型 |
+| `model_route / session_default` | 未单独配置，沿用会话模型 |
+| `model_route / session_fallback` | 指定模型不可用，保留会话模型；检查模型配置 |
+| `reply_gate / reply_disabled` | 当前私聊或目标群的实际回复开关关闭 |
+| `reply_gate / not_eligible` | 当前消息不具备普通回复条件 |
+| `reply_gate / managed_account_blocked` | 本机托管机器人互聊保护，需使用有效且对应方向的测试窗口 |
+| `reply_gate / test_window_rejected` | 测试窗口不允许当前回复，核对有效期、次数、来源及范围 |
+| `reply_gate / empty_reply` | 回复为空或仅含不发送的引用组件 |
+| `dispatch_gate / stale_or_unknown_time` | 历史或时间不明消息被忽略，避免重放命令 |
+| `command / silent` | 命令按既有约定静默处理，例如群内发送私聊专用命令 |
+| `admin_tool / rejected` | 权限、参数或确认校验未通过，不是成功写入 |
+| `error=confirmation_invalid` | 确认过期、不属于本会话或不是精确确认，重新预览 |
+| `error=configuration_conflict` | 预览后配置已变化，重新预览，不能强制覆盖 |
+| `error=nim_push_backpressure` | 32包接收缓冲持续拥塞超过5秒，连接停止并重新同步；检查数据库或网络阻塞，不跳过游标 |
+| `semantic / rule_fallback` | 审核失败，继续既有规则兜底；类别区分模型超时、响应无效、模型缺失或其他运行失败 |
+| `progressive_result` | 撤回和禁言分别记录回执，不能因一个成功认定两个都成功 |
+| `card_item` / `card_job` | 成员写入结果及后台任务状态，不包含原名或新名 |
+| `schedule / paused` | 计划已暂停，核对权限、时间边界及实际结果后处理 |
+| `lottery_tick / blocked` | 抽奖后台处理异常，先查活动状态，不要重复创建 |
+| `invitation_scan / rejected` | 邀请核验失败；`permission_denied` 表示活动管理员权限已撤回 |
+| `login / failed`、`action=request_sms` | 获取短信未完成；先核对返回码与倒计时，不能据此认定账号封禁 |
+| `login`、`action=verify_sms` | 短信验证登录结果；不是重新发送短信 |
+| `login`、`route=change_device_verify` | 密码登录触发的换设备核验；与独立短信请求分开定位 |
+
+## 状态不能混淆
+
+- `preview`：仅生成预览，未保存或执行。
+- `saved`：配置已保存，不代表活动已开始；抽奖启动以 `started` 及活动状态为准。
+- `schedule_confirmation_required`：仍需完成定时规则的确认。
+- `accepted`：上游受理，不是最终状态核验完成。
+- `verified`：已核验；名片和其他异步操作应以任务查询结果为准。
+- `unknown`、`not_confirmed`、`needs_review`：保留现场并查询结果，**不要重发管理操作**。
+- `command_reply / send_returned`：回复调用已返回，不保证实际送达；看 `reply_result` 和接入器发送账本。
+
+正常路由与预期权限拒绝通常记为 INFO；原生`receive/received`、
+`process/started`、`process/completed`和`recall/observed`记为DEBUG，
+INFO日志缺少这些逐条记录不证明没有入站。异常、失败回退、未知回执通常记为 WARNING。
+接入器原有需要人工介入的终止类错误仍为 ERROR。
+重复后台错误在 60 秒内聚合，缓存最多保留 512 个失败窗口；窗口淘汰或后续
+失败触发过期清理时补记被抑制的数量。没有后续事件或进程退出时，不保证输出
+最终汇总；日志不是精确的持久计费或处罚计数账本。管理工具返回、逐次处罚回执
+和登录操作结果不聚合，避免不同登录步骤与平台返回码被合并。
+
+## 隐私边界
+
+这些结构化日志不记录聊天正文、AI 提示词、模型回复全文、工具参数全文、
+确认口令、成员名片、账号密码、Token 或 Cookie；自由异常文本不直接写入。
+哈希用于排障关联，不是匿名化证明，不应公开提供可关联用户的完整日志。
+AstrBot 其他模块、第三方插件或 DEBUG/trace 日志可能另有正文记录，
+**不能据此认为整个日志文件均已脱敏**。对外提交前仍需筛选和人工检查。
+
+日志只负责观察，不会改变管理员身份、群授权、模型选择、处罚次数或开启自动踢群。
+2026-10-20本轮仅静态读取及内存mock核验，没有发起网络请求、运行服务检查脚本或写库，
+不代替真实用户的四种身份会话验收。
+
+## 已知接收与后台限制
+
+- `nim.py:messages`直接UTF-8解码选定属性；无效字节会抛`UnicodeDecodeError`，
+  不在`adapter.py:consume_nim_pushes`的`ProtocolError`隔离分支内。
+  内存样本已复现异常外溢；外层将其记为`connection_failed`并重连。
+  若上游重放同一异常包，可能反复重连，当前解码计数也不能完整表示这类故障。
+  不通过跳过同步游标、伪造ACK或删除账本处理；本轮未修改此代码。
+- `friend_auto.py:poll`的单账号未捕获异常会将共享worker置为不活跃并退出，
+  后续账号的审批与欢迎观察也停止。内存mock已复现此隔离限制；
+  先核对`Friend approval worker failed; no automatic retry`及本地存储错误，
+  不把账号开关、清库或重发申请当作worker恢复措施。
+- `settings.py:save`仍在协程内执行同步SQLite事务，`busy_timeout=10000`。
+  写锁竞争可能阻塞共享事件循环；这是静态确认的阻塞路径，不是本轮测得的线上延迟。
+  不因为存在`AsyncDatabase`就宣称整个插件已异步化。
+
+## 2026-10-20运行快照
+
+加载时点快照：09:47:09 UTC（北京时间17:47:09）完整重启`astrbot.service`后PID为772193，
+`NRestarts=0`；结账服务仍为PID212703。09:49:14 UTC只读复核账号`43506527`在线，
+9个已启用平台状态／连接状态、全部群AI稳定行和`ai_profiles`行均与加载前一致；
+群`1516387`的version 5四项群AI开关均关闭，队列`pending=0`、`rejected=0`、`review=[]`。
+受保护指纹与加载前完全相同，管理页SHA与待发布产物一致；真实管理页390／1440px无JS错误、
+溢出或写入尝试，启动日志110行无ERROR／traceback标记。证据见
+`/opt/backups/wsl-load-20261020-78MTwE/`的`before.json`、`after.json`及`browser.json`。
+
+后续三账号警告实测汇总于10:42:50 UTC（北京时间18:42:50）完成，
+三账号在线、启用实例集合完整且运行、队列清空，两个服务PID及`NRestarts=0`未变。
+这只描述该实测结束时点，不是本文编辑时重新探测的持续健康证明。
+
+以下是早先群AI开启阶段的历史快照，不代表上述当前开关或新版本实群验收。
+只读依据为`/opt/backups/wsl-group-ai-20261020-format/runtime.json`及
+`/opt/backups/wsl-ai-enable-20261020T0724Z/enable.json`，不是本轮实时探测。
+记录时选定群`enabled/mentions/autonomous=true`、`idle=false`、就绪原因列表为空，
+修复后自主接话发送为`accepted`，原生会话记录2条消息和1421 token；
+快照也保留此前失败调用，不能只选成功样本。
+预算快照记录供应商硬限已确认、限额1000 USD、应用月预算20 USD；
+启用脚本模型调用数为0且未测试供应商额度耗尽。
+没有本轮发送测试消息或手机显示确认，队列零积压仅代表记录时点和所列账号。
+
+2026-10-11修复启动同步的缓冲死锁：同步回执等待期间就开始按既有流程落库和ACK，
+同步水位仍在此前消息持久化后才提交。缓冲仍限制32包，拥塞等待最多5秒；
+未在线前不派发业务命令，不丢弃历史消息，也不伪造或跳过同步游标。

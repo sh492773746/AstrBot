@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0">
+<div id="captcha"></div><button id="trigger" hidden>Verify</button>
+<script>
+'use strict';
+const requestID = __REQUEST_ID__;
+const parentOrigin = __PARENT_ORIGIN__;
+const send = (type, value = '') => parent.postMessage({ source: 'lajiao-captcha', requestID, type, value }, parentOrigin);
+let started = false;
+addEventListener('message', async event => {
+  const data = event.data;
+  if (started || event.source !== parent || event.origin !== parentOrigin
+      || data?.source !== 'lajiao-form' || data.requestID !== requestID) return;
+  started = true;
+  let failure = 'verification_sdk_failed';
+  try {
+    const config = data.config;
+    if (!config?.required || !config.region || !config.prefix || !config.scene_id) throw new Error('invalid_config');
+    window.AliyunCaptchaConfig = { region: config.region, prefix: config.prefix };
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      const timer = setTimeout(() => reject(new Error('timeout')), 20000);
+      script.src = 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js';
+      script.onload = () => { clearTimeout(timer); resolve(); };
+      script.onerror = () => { clearTimeout(timer); reject(new Error('load_failed')); };
+      document.head.append(script);
+    });
+    failure = 'verification_init_failed';
+    window.initAliyunCaptcha({
+      SceneId: config.scene_id, mode: 'popup', element: '#captcha', button: '#trigger',
+      slideStyle: { width: Math.min(360, Math.max(200, innerWidth - 32)), height: 40 },
+      language: 'cn',
+      success: value => send('success', String(value || '')),
+      fail: () => send('retry'),
+      onClose: () => send('cancelled'),
+      getInstance: instance => setTimeout(() => {
+        try {
+          if (typeof instance?.show === 'function') instance.show();
+          else document.getElementById('trigger').click();
+        } catch (_) { send('failed', 'verification_init_failed'); }
+      }, 120),
+    });
+  } catch (_) { send('failed', failure); }
+});
+send('ready');
+</script>
+</body>
+</html>

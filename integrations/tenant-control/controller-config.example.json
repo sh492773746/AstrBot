@@ -1,0 +1,28 @@
+{
+  "admins_id": [],
+  "platform": [
+    {
+      "id": "tenant-control",
+      "type": "telegram",
+      "enable": true,
+      "telegram_token": "SET_NEW_ROTATED_TOKEN_IN_ASTRBOT",
+      "telegram_allowed_updates": [
+        "message",
+        "pre_checkout_query",
+        "managed_bot",
+        "callback_query"
+      ],
+      "telegram_required_plugin": "astrbot_plugin_tenant_control",
+      "telegram_command_register": false,
+      "telegram_command_auto_refresh": false
+    }
+  ],
+  "plugin_set": ["astrbot_plugin_tenant_control"],
+  "provider_settings": {"enable": false},
+  "wake_prefix": ["/"],
+  "dashboard": {
+    "enable": false,
+    "host": "127.0.0.1",
+    "port": 6186
+  }
+}

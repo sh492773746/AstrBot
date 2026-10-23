@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Native Wangshangliao UI fixture</title></head>
+<body><div id="app"></div><script type="module">
+import { createApp } from 'vue';
+import { createPinia } from 'pinia';
+import vuetify from '/src/plugins/vuetify.ts';
+import { setupI18n } from '/src/i18n/composables.ts';
+import Fixture from './WangshangliaoFixture.vue';
+import '/src/scss/style.scss';
+const app = createApp(Fixture);
+app.use(createPinia());
+app.use(vuetify);
+await setupI18n();
+app.mount('#app');
+</script></body></html>

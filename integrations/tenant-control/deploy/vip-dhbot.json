@@ -1,0 +1,40 @@
+{
+  "admins_id": [],
+  "platform": [
+    {
+      "id": "VIP_DHBot",
+      "type": "telegram",
+      "enable": false,
+      "telegram_token": "",
+      "telegram_allowed_updates": [
+        "message",
+        "pre_checkout_query",
+        "managed_bot",
+        "callback_query"
+      ],
+      "telegram_required_plugin": "astrbot_plugin_tenant_control",
+      "telegram_command_register": false,
+      "telegram_command_auto_refresh": false
+    }
+  ],
+  "plugin_set": ["astrbot_plugin_tenant_control"],
+  "disable_builtin_commands": true,
+  "disable_metrics": true,
+  "provider": [],
+  "provider_sources": [],
+  "provider_settings": {"enable": false},
+  "provider_stt_settings": {"enable": false},
+  "provider_tts_settings": {"enable": false},
+  "wake_prefix": ["/"],
+  "timezone": "UTC",
+  "log_level": "INFO",
+  "log_file_enable": false,
+  "dashboard": {
+    "enable": false,
+    "username": "astrvip",
+    "host": "127.0.0.1",
+    "port": 6186,
+    "trust_proxy_headers": false,
+    "password_change_required": true
+  }
+}

@@ -1,0 +1,8 @@
+name: astrbot_plugin_tenant_control
+display_name: Tenant Control
+desc: Stars subscriptions and managed tenant bots on AstrBot-owned Telegram transport.
+version: v0.5.1
+author: local
+astrbot_version: ">=4.28.1,<5"
+support_platforms:
+  - telegram

@@ -1,0 +1,42 @@
+name: Telegram Watch
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install uv
+        run: pip install uv
+      - name: Prepare collector as an independent sibling project
+        run: cp -R integrations/telegram-chat-collector ../telegram-chat-collector
+      - name: Install locked dependencies
+        run: |
+          uv sync --dev
+          uv sync --project ../telegram-chat-collector --locked
+      - name: Check and test
+        run: |
+          uv run ruff format --check data/plugins/astrbot_plugin_tgwatch integrations/telegram-chat-collector
+          uv run ruff check data/plugins/astrbot_plugin_tgwatch integrations/telegram-chat-collector
+          uv run --project ../telegram-chat-collector pytest ../telegram-chat-collector/tests -q
+          uv run pytest data/plugins/astrbot_plugin_tgwatch/tests -q
+      - name: Package deployable sources without runtime data
+        run: |
+          mkdir -p dist
+          cd data/plugins/astrbot_plugin_tgwatch
+          zip ../../../dist/astrbot_plugin_tgwatch.zip main.py metadata.yaml _conf_schema.json requirements.txt README.md
+          cd ../../..
+          tar --exclude='__pycache__' --exclude='.pytest_cache' --exclude='.ruff_cache' -czf dist/telegram-chat-collector.tar.gz -C integrations telegram-chat-collector
+      - uses: actions/upload-artifact@v7
+        with:
+          name: telegram-watch-distribution
+          path: dist/
