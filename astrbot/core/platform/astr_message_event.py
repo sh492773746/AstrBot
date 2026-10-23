@@ -137,6 +137,26 @@ class AstrMessageEvent(abc.ABC):
         """
         return self.platform_meta.id
 
+    async def prepare_waking_check(self, config: dict, handler_registry) -> bool:
+        """Apply an adapter-owned gate before command matching or context admission.
+
+        Args:
+            config: Effective session configuration.
+            handler_registry: Registry used by the waking stage for command filters.
+
+        Returns:
+            Whether normal waking checks may continue.
+        """
+        return True
+
+    async def handle_builtin_help(self) -> bool:
+        """Allow an adapter's active extension to own the builtin help response.
+
+        Returns:
+            Whether the event was consumed instead of using generic help.
+        """
+        return False
+
     def get_message_str(self) -> str:
         """获取消息字符串。"""
         return self.message_str

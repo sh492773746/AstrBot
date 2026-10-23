@@ -44,8 +44,29 @@ class StarRequestSubStage(Stage):
                 )
                 continue
             logger.debug(f"plugin -> {md.name} - {handler.handler_name}")
+            component_context = None
             try:
                 wrapper = call_handler(event, handler.handler, **params)
+                component_id = handler.extras_configs.get("component_id")
+                if component_id:
+                    from astrbot.core.star.component_runtime import (
+                        ExecutionContext,
+                        RuntimeRejected,
+                        component_runtime,
+                    )
+
+                    def authorize():
+                        completion = getattr(event, "processing_completion", None)
+                        if completion is not None and completion.cancelled():
+                            raise RuntimeRejected("component_event_stopped")
+
+                    component_context = ExecutionContext(
+                        scope=(str(event.get_self_id()), str(event.get_group_id())),
+                        authorize=authorize,
+                        operation=lambda wrapper=wrapper: wrapper,
+                        claimed=bool(event.get_extra("_component_claimed")),
+                    )
+                    wrapper = component_runtime.iterate(component_id, component_context)
                 async for ret in wrapper:
                     yield ret
                 if event.is_stopped():
@@ -64,6 +85,17 @@ class StarRequestSubStage(Stage):
                     e,
                     traceback_text,
                 )
+                if component_context is not None:
+                    spec = component_runtime.registry.specs.get(component_id)
+                    if (
+                        spec is not None
+                        and not spec.critical
+                        and not component_context.claimed
+                        and not event.get_extra("_component_claimed")
+                        and not event.is_stopped()
+                    ):
+                        event.clear_result()
+                        continue
 
                 if not event.is_stopped() and event.is_at_or_wake_command:
                     ret = f":(\n\n在调用插件 {md.name} 的处理函数 {handler.handler_name} 时出现异常：{e}"

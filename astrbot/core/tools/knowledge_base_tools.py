@@ -41,12 +41,26 @@ async def retrieve_knowledge_base(
     query: str,
     umo: str,
     context: Context,
+    *,
+    session_origin: str | None = None,
 ) -> str | None:
-    """Retrieve knowledge base context for the given query."""
+    """Retrieve configured knowledge without sharing role-scoped selections.
+
+    Args:
+        query: Search text, not a requested knowledge-base identifier.
+        umo: Native address used to resolve the effective configuration.
+        context: Framework knowledge-base and configuration services.
+        session_origin: Optional isolated key for session-specific selection.
+
+    Returns:
+        Retrieved context, or None when no relevant public material is found.
+    """
     kb_mgr = context.kb_manager
     config = context.get_config(umo=umo)
 
-    session_config = await sp.session_get(umo, "kb_config", default={})
+    session_config = await sp.session_get(
+        session_origin or umo, "kb_config", default={}
+    )
     if session_config and "kb_ids" in session_config:
         kb_ids = session_config.get("kb_ids", [])
         if not kb_ids:
@@ -137,6 +151,19 @@ class KnowledgeBaseQueryTool(FunctionTool[AstrAgentContext]):
             query=query,
             umo=context.context.event.unified_msg_origin,
             context=context.context.context,
+            **(
+                {
+                    "session_origin": context.context.event.get_ai_conversation_origin(
+                        context.context.context
+                    )
+                }
+                if callable(
+                    getattr(
+                        type(context.context.event), "get_ai_conversation_origin", None
+                    )
+                )
+                else {}
+            ),
         )
         if not result:
             return "No relevant knowledge found."

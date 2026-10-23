@@ -2,14 +2,18 @@
 
 import asyncio
 import copy
+import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from astrbot.core.platform.sources.wangshangliao import wire
 from astrbot.core.platform.sources.wangshangliao.adapter import WangshangliaoAdapter
 from astrbot.core.platform.sources.wangshangliao.nim import NimClient
+from scripts import check_wangshangliao_invitations as invitation_check
 
 
 def inviter_reply(pairs):
@@ -135,6 +139,9 @@ def make_adapter():
             ],
         }
     )
+    record = invitation_record(member=2, state="MEMBER_STATE_GOOD")
+    record["applicant"]["nimId"] = 22
+    adapter.business.request.return_value = {"list": [record], "lastId": ""}
     return adapter
 
 
@@ -151,9 +158,12 @@ async def test_adapter_resolves_business_id_from_verified_peer_not_nickname():
         "inviter_name": "Inviter",
         "inviter_nim_id": "11",
         "status": "attributed",
+        "apply_id": "91",
+        "apply_time": "2026-10-01T11:21:00Z",
+        "nim_conflict": False,
     }
     assert result["scope"] == "current_members"
-    assert result["source"] == "nim_team_member_inviter"
+    assert result["source"] == "business_current_member_inviter"
     assert result["complete"]
     assert result["queried_count"] == 3
     assert adapter.ledger.db is None
@@ -166,12 +176,14 @@ async def test_adapter_resolves_business_id_from_verified_peer_not_nickname():
 @pytest.mark.asyncio
 async def test_adapter_unknown_inviter_is_not_invented_or_assigned_to_administrator():
     adapter = make_adapter()
+    adapter.business.request.return_value = {"list": [], "lastId": ""}
     adapter.nim.get_team_inviters.return_value = {"22": "unknown-former-peer"}
     result = await adapter.get_group_inviters("5", "2")
     assert result["items"][0]["inviter_id"] == ""
     assert result["items"][0]["inviter_name"] == ""
-    assert result["items"][0]["inviter_nim_id"] == "unknown-former-peer"
-    assert result["items"][0]["status"] == "inviter_not_in_roster"
+    assert result["items"][0]["inviter_nim_id"] == ""
+    assert result["items"][0]["status"] == "unattributed"
+    assert result["items"][0]["nim_conflict"] is True
     adapter.nim.get_team_inviters.assert_awaited_once_with("55", ["22"])
 
 
@@ -192,13 +204,13 @@ async def test_adapter_invalid_scope_never_queries(change):
     adapter = make_adapter()
     nim = adapter.nim
     if change == "disabled":
-        adapter.config["enable"] = False
+        adapter._transport_config["enable"] = False
     elif change == "offline":
         adapter.connection_state = "reconnecting"
     elif change == "wrong_account":
         adapter.business.fields[3] = 9
     elif change == "wrong_group":
-        adapter.config["enabled_groups"] = ["6"]
+        adapter._transport_config["enabled_groups"] = ["6"]
     elif change == "stopping":
         adapter.stopping.set()
     else:
@@ -215,7 +227,7 @@ async def test_adapter_rechecks_scope_after_directory_read():
     roster = adapter.refresh_member_mapping.return_value
 
     async def refresh(_group):
-        adapter.config["enabled_groups"] = []
+        adapter._transport_config["enabled_groups"] = []
         return roster
 
     adapter.refresh_member_mapping.side_effect = refresh
@@ -253,6 +265,7 @@ async def test_adapter_caps_query_and_marks_large_roster_incomplete():
     members = [{"userId": str(i + 1), "nimId": str(i + 101)} for i in range(201)]
     adapter.refresh_member_mapping.return_value["groupMemberInfo"] = members
     adapter.nim.get_team_inviters.return_value = {}
+    adapter.business.request.return_value = {"list": [], "lastId": ""}
     result = await adapter.get_group_inviters("5")
     assert result["member_count"] == 201
     assert result["queried_count"] == 200
@@ -274,6 +287,10 @@ async def test_exact_joined_batch_queries_beyond_first_two_hundred():
     ]
     adapter.refresh_member_mapping.return_value["groupMemberInfo"] = members
     adapter.nim.get_team_inviters.return_value = {"400": "101"}
+    record = invitation_record(member=300, state="MEMBER_STATE_GOOD")
+    record["applicant"]["nimId"] = 400
+    record["inviter"]["nimId"] = 101
+    adapter.business.request.return_value = {"list": [record], "lastId": ""}
     result = await adapter.get_group_inviters("5", members=["300"])
     assert result["complete"] and result["member_count"] == 300
     assert result["queried_count"] == 1
@@ -301,6 +318,111 @@ async def test_inviter_batch_requires_all_requested_members_to_be_joined():
     with pytest.raises(wire.ProtocolError, match="invitation_member_not_found"):
         await adapter.get_group_inviters("5", members=["2", "99"])
     adapter.nim.get_team_inviters.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rejoin_uses_new_business_inviter_not_retained_nim_owner():
+    adapter = make_adapter()
+    old = copy.deepcopy(adapter.business.request.return_value["list"][0])
+    departed = copy.deepcopy(old)
+    departed.update(
+        applyId="92",
+        applyTime="2026-10-01T12:00:00Z",
+        groupApplyType="KICK_MEMBER",
+        state="MEMBER_STATE_KICKED",
+        inviter=None,
+    )
+    new = copy.deepcopy(old)
+    new.update(applyId="93", applyTime="2026-10-01T12:01:00Z")
+    new["inviter"].update(userId=3, nimId=33)
+    adapter.business.request.return_value = {
+        "list": [new, old, departed],
+        "lastId": "1790000000",
+    }
+    result = await adapter.get_group_inviters("5", "2")
+    assert result["items"][0]["inviter_id"] == "3"
+    assert result["items"][0]["apply_id"] == "93"
+    assert result["items"][0]["nim_conflict"] is True
+    assert adapter.ledger.db is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "state"),
+    [
+        ("APPLY", "MEMBER_STATE_GOOD"),
+        ("KICK_MEMBER", "MEMBER_STATE_KICKED"),
+        ("LEAVE", "MEMBER_STATE_LEFT"),
+        ("INVITATION", "MEMBER_STATE_INVITED"),
+        ("INVITATION", "MEMBER_STATE_MANAGER_REJECT"),
+        ("FUTURE_EVENT", "MEMBER_STATE_GOOD"),
+    ],
+)
+async def test_newer_departure_or_natural_join_cancels_old_sdk_attribution(kind, state):
+    adapter = make_adapter()
+    old = adapter.business.request.return_value["list"][0]
+    newer = copy.deepcopy(old)
+    newer.update(
+        applyId="92",
+        applyTime="2026-10-01T12:00:00Z",
+        groupApplyType=kind,
+        state=state,
+        inviter=None,
+    )
+    adapter.business.request.return_value["list"] = [old, newer]
+    row = (await adapter.get_group_inviters("5", "2"))["items"][0]
+    assert row["status"] == "unattributed"
+    assert row["inviter_id"] == row["inviter_nim_id"] == ""
+    assert row["apply_id"] == "92"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["member_peer", "inviter_peer", "same_time", "self"])
+async def test_current_inviter_ambiguous_or_mismatched_proof_is_not_assigned(change):
+    adapter = make_adapter()
+    records = adapter.business.request.return_value["list"]
+    if change == "member_peer":
+        records[0]["applicant"]["nimId"] = 999
+    elif change == "inviter_peer":
+        records[0]["inviter"]["nimId"] = 999
+    elif change == "self":
+        records[0]["inviter"].update(userId=2, nimId=22)
+    else:
+        duplicate_time = copy.deepcopy(records[0])
+        duplicate_time["applyId"] = "92"
+        duplicate_time["inviter"].update(userId=3, nimId=33)
+        records.append(duplicate_time)
+    row = (await adapter.get_group_inviters("5", "2"))["items"][0]
+    assert row["status"] == "evidence_conflict"
+    assert row["inviter_id"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "apply_time",
+    ["", None, "invalid", "2026-10-01T12:00:00", "2999-01-01T00:00:00Z"],
+)
+async def test_unorderable_business_record_never_falls_back_to_nim(apply_time):
+    adapter = make_adapter()
+    adapter.business.request.return_value["list"][0]["applyTime"] = apply_time
+    with pytest.raises(wire.ProtocolError, match="invitation_response"):
+        await adapter.get_group_inviters("5", "2")
+    adapter.nim.get_team_inviters.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_business_client_replaced_during_inviter_read_discards_evidence():
+    adapter = make_adapter()
+    response = adapter.business.request.return_value
+
+    async def replace(_route, _parameters):
+        adapter.business = SimpleNamespace(fields=[0, 0, 0, 1])
+        return response
+
+    adapter.business.request.side_effect = replace
+    with pytest.raises(wire.ProtocolError, match="invitation_scope"):
+        await adapter.get_group_inviters("5", "2")
+    adapter.nim.get_team_inviters.assert_not_awaited()
 
 
 def invitation_record(apply_id="91", group=5, member=99, state="MEMBER_STATE_INVITED"):
@@ -342,6 +464,7 @@ async def test_pending_records_do_not_require_membership_or_nim_query():
     item = result["items"][0]
     assert item == {
         "apply_id": "91",
+        "event_type": "INVITATION",
         "state": "MEMBER_STATE_INVITED",
         "pending": True,
         "apply_time": "2026-10-01T11:21:00Z",
@@ -407,13 +530,15 @@ async def test_pending_filter_keeps_applied_and_invited_not_history_or_self_appl
     assert all(item["pending"] is True for item in result["items"])
     adapter.invitation_read_at.clear()
     result = await adapter.get_group_invitation_records("5", pending_only=False)
-    assert len(result["items"]) == 5
+    assert len(result["items"]) == 6
+    assert result["items"][-1]["event_type"] == "APPLY"
     assert [item["pending"] for item in result["items"]] == [
         True,
         True,
         False,
         False,
         None,
+        True,
     ]
     assert not result["complete"]
 
@@ -449,13 +574,13 @@ async def test_record_read_invalid_scope_never_sends(change):
     adapter = make_adapter()
     business = adapter.business
     if change == "disabled":
-        adapter.config["enable"] = False
+        adapter._transport_config["enable"] = False
     elif change == "offline":
         adapter.connection_state = "reconnecting"
     elif change == "wrong_account":
         adapter.business.fields[3] = 9
     elif change == "wrong_group":
-        adapter.config["enabled_groups"] = ["6"]
+        adapter._transport_config["enabled_groups"] = ["6"]
     elif change == "stopping":
         adapter.stopping.set()
     else:
@@ -475,13 +600,13 @@ async def test_record_read_discards_result_after_scope_changes(change):
 
     async def read(_route, _params):
         if change == "disabled":
-            adapter.config["enable"] = False
+            adapter._transport_config["enable"] = False
         elif change == "offline":
             adapter.connection_state = "reconnecting"
         elif change == "wrong_account":
             adapter.business.fields[3] = 9
         elif change == "wrong_group":
-            adapter.config["enabled_groups"] = []
+            adapter._transport_config["enabled_groups"] = []
         elif change == "stopping":
             adapter.stopping.set()
         else:
@@ -531,7 +656,6 @@ async def test_record_arguments_are_validated_before_read(kwargs):
         {"list": [invitation_record(member=0)]},
         {"list": [invitation_record(member="nickname")]},
         {"list": [invitation_record(member="9" * 21)]},
-        {"list": [invitation_record(str(i + 1)) for i in range(201)]},
         {"list": [{}] * 4097},
     ],
 )
@@ -550,3 +674,122 @@ async def test_record_provider_error_does_not_fall_back_to_nim_or_retry():
         await adapter.get_group_invitation_records("5")
     assert adapter.business.request.await_count == 1
     adapter.nim.get_team_inviters.assert_not_called()
+
+
+@pytest.fixture
+def invitation_cli(tmp_path, monkeypatch):
+    """Provide an enabled transport with no legacy business-group settings.
+
+    Returns:
+        A mock client installer and list of observed read-only requests.
+    """
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data/cmd_config.json").write_text(
+        json.dumps(
+            {
+                "platform": [
+                    {"id": "fixture", "type": "wangshangliao", "enable": True}
+                ],
+                "dashboard": {"username": "fixture", "jwt_secret": "x" * 32},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(invitation_check, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["check-invitations", "--bot", "fixture", "--group", "5", "--records"],
+    )
+    requests = []
+    client_type = httpx.AsyncClient
+
+    def install(settings, status=200, invitations=None):
+        """Install a transport serving plugin scope and invitation responses."""
+        if invitations is None:
+            invitations = {"status": "ok", "data": {"items": []}}
+
+        def handle(request):
+            requests.append(request)
+            assert request.method == "GET"
+            assert request.headers["Authorization"].startswith("Bearer ")
+            if request.url.path.endswith("/settings"):
+                return httpx.Response(status, json=settings)
+            assert request.url.path.endswith("/invitations")
+            return httpx.Response(200, json=invitations)
+
+        monkeypatch.setattr(
+            invitation_check.httpx,
+            "AsyncClient",
+            lambda **kwargs: client_type(
+                transport=httpx.MockTransport(handle), **kwargs
+            ),
+        )
+
+    return install, requests
+
+
+@pytest.mark.asyncio
+async def test_invitation_cli_uses_current_plugin_scope_not_transport(invitation_cli):
+    install, requests = invitation_cli
+    install(
+        {
+            "status": "ok",
+            "data": {"bots": [{"id": "fixture", "enabled_groups": ["5"]}]},
+        }
+    )
+    assert await invitation_check.main() == 0
+    assert len(requests) == 2
+    assert requests[1].url.params["source"] == "records"
+    assert requests[1].url.params["group_id"] == "5"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("groups", [[], ["6"], ["15"], "15", None, [5]])
+async def test_invitation_cli_rejects_unselected_or_malformed_scope(
+    invitation_cli, groups
+):
+    install, requests = invitation_cli
+    install(
+        {
+            "status": "ok",
+            "data": {"bots": [{"id": "fixture", "enabled_groups": groups}]},
+        }
+    )
+    with pytest.raises(SystemExit) as error:
+        await invitation_check.main()
+    assert error.value.code == 2
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "settings"),
+    [
+        (503, {"status": "error"}),
+        (200, []),
+        (200, {"status": "ok", "data": None}),
+        (200, {"status": "ok", "data": {"bots": "invalid"}}),
+    ],
+)
+async def test_invitation_cli_scope_unavailable_never_queries_records(
+    invitation_cli, status, settings
+):
+    install, requests = invitation_cli
+    install(settings, status)
+    assert await invitation_check.main() == 1
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_invitation_cli_rejects_malformed_invitation_result(invitation_cli):
+    install, requests = invitation_cli
+    install(
+        {
+            "status": "ok",
+            "data": {"bots": [{"id": "fixture", "enabled_groups": ["5"]}]},
+        },
+        invitations=[],
+    )
+    assert await invitation_check.main() == 1
+    assert len(requests) == 2

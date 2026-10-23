@@ -1,4 +1,4 @@
-"""Render the generated local beginner guide to a searchable Chinese PDF."""
+"""Render the bilingual local guides to searchable offline PDFs."""
 
 import asyncio
 import os
@@ -16,19 +16,27 @@ async def main():
             args=["--no-sandbox"],
         )
         page = await browser.new_page()
-        await page.goto((root / "wangshangliao-start.html").as_uri())
-        await page.evaluate("document.fonts.ready")
-        await page.pdf(
-            path=str(root / "wangshangliao-start.pdf"),
-            format="A4",
-            print_background=True,
-            prefer_css_page_size=True,
-            display_header_footer=True,
-            header_template="<span></span>",
-            footer_template='<div style="width:100%;text-align:center;font-size:9px;color:#777"><span class="pageNumber"></span> / <span class="totalPages"></span></div>',
-        )
+        for name in (
+            "wangshangliao-start",
+            "wangshangliao-start-en",
+            "wangshangliao-rules-ai",
+            "wangshangliao-rules-ai-en",
+            "wangshangliao-component-runtime",
+            "wangshangliao-component-runtime-en",
+        ):
+            await page.goto((root / (name + ".html")).as_uri())
+            await page.evaluate("document.fonts.ready")
+            await page.pdf(
+                path=str(root / (name + ".pdf")),
+                format="A4",
+                print_background=True,
+                prefer_css_page_size=True,
+                display_header_footer=True,
+                header_template="<span></span>",
+                footer_template='<div style="width:100%;text-align:center;font-size:9px;color:#777"><span class="pageNumber"></span> / <span class="totalPages"></span></div>',
+            )
+            print("PDF generated:", root / (name + ".pdf"))
         await browser.close()
-    print("PDF generated:", root / "wangshangliao-start.pdf")
 
 
 if __name__ == "__main__":

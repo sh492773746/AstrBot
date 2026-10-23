@@ -1,7 +1,7 @@
 import pytest
 
 @pytest.fixture(autouse=True)
-def configured_accounts(monkeypatch):
+def configured_accounts(monkeypatch, wsl_active_policy):
     from astrbot.core import astrbot_config
     monkeypatch.setitem(astrbot_config, "platform", [{"type": "wangshangliao", "account_id": account} for account in ("1", "2", "3")])
 

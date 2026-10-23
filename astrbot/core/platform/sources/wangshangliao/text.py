@@ -1,8 +1,13 @@
 """Plain-text presentation for a platform without rich-text support."""
 
-import re
-
 from markdown_it import MarkdownIt
+
+from astrbot.utils.text_redaction import (
+    redact_reply as redact_reply,
+)
+from astrbot.utils.text_redaction import (
+    strip_reasoning_markup as strip_reasoning_markup,
+)
 
 PLAIN_TEXT_INSTRUCTION = (
     "旺商聊只支持纯文本。请用空行、空格、简短的【标题】和编号组织回复。"
@@ -12,75 +17,6 @@ PLAIN_TEXT_INSTRUCTION = (
     "不要在回复中泄露密码、验证码、API Key、Token 或其他认证凭证；"
     "手机号和邮箱使用掩码展示。不要复述工具结果中的认证信息。"
 )
-
-_REASONING_TAGS = ("think", "thinking", "thought", "analysis")
-
-
-def strip_reasoning_markup(text: str, *, strip: bool = True) -> str:
-    """Remove model reasoning accidentally returned as visible plain text.
-
-    Some providers expose reasoning as structured metadata, while others still
-    wrap it in XML-like tags in the assistant text. Wangshangliao only sends
-    plain text, so these blocks must be removed at the final platform boundary.
-    """
-    for tag in _REASONING_TAGS:
-        paired = re.compile(
-            rf"<{tag}\b[^>]*>.*?</{tag}\s*>",
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        text = paired.sub("", text)
-        # A truncated stream must not expose the remainder of a reasoning block.
-        text = re.sub(
-            rf"^\s*<{tag}\b[^>]*>.*$",
-            "",
-            text,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        text = re.sub(
-            rf"</{tag}\s*>",
-            "",
-            text,
-            flags=re.IGNORECASE,
-        )
-    return text.strip() if strip else text
-
-
-def redact_reply(text: str, *, preserve_whitespace: bool = False) -> str:
-    """Mask recognizable secrets and contact details in outgoing text.
-
-    Args:
-        text: Reply text, not the incoming message or persistent configuration.
-
-    Returns:
-        Redacted text. Unlabelled arbitrary secrets cannot be reliably detected.
-    """
-    text = strip_reasoning_markup(text, strip=not preserve_whitespace)
-    text = re.sub(
-        r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
-        "[REDACTED PRIVATE KEY]",
-        text,
-    )
-    text = re.sub(
-        r"\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", text, flags=re.I
-    )
-    text = re.sub(r"\bsk-[A-Za-z0-9_-]{12,}", "[REDACTED]", text)
-    text = re.sub(
-        r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED]", text
-    )
-    text = re.sub(
-        r"""(?ix)((?<![\w])(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|token|password|passwd|secret|验证码|密码|密钥)["']?\s*[:=：]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,，;；&<>]+)""",
-        r"\1[REDACTED]",
-        text,
-    )
-    text = re.sub(
-        r"(?<![\w])(?:\+?86[- ]?)?(1[3-9]\d)(\d{4})(\d{4})(?!\d)", r"\1****\3", text
-    )
-    text = re.sub(
-        r"(?<![\w.+-])([A-Za-z0-9])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})(?![\w])",
-        r"\1***@\2",
-        text,
-    )
-    return text
 
 
 def plain_text(text: str) -> str:

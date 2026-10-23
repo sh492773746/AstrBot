@@ -17,7 +17,8 @@ def make_adapter():
         group_directory_state={},
         member_refresh_locks={},
         member_refresh_at={},
-        diagnostics=SimpleNamespace(emit=Mock()),
+        member_snapshots={},
+        diagnostics=SimpleNamespace(emit=Mock(), observe=Mock()),
         business=SimpleNamespace(),
     )
     adapter.refresh_member_mapping = (

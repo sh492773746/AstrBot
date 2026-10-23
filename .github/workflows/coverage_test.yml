@@ -23,12 +23,14 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
       
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install uv
-          uv sync --dev
+          uv sync --dev --extra wsl
           uv run python -m playwright install --with-deps chromium --only-shell
 
       - name: Run tests
@@ -38,7 +40,7 @@ jobs:
           mkdir -p data/temp
           export TESTING=true
           export ZHIPU_API_KEY=${{ secrets.OPENAI_API_KEY }}
-          uv run pytest --cov=astrbot -v -o log_cli=true -o log_level=DEBUG
+          uv run pytest tests --cov=astrbot --cov-report=xml -v -o log_cli=false -o log_level=DEBUG
 
       - name: Upload results to Codecov
         if: github.repository == 'AstrBotDevs/AstrBot'

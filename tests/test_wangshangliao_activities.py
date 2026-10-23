@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import json
+import sqlite3
 from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -81,12 +82,13 @@ async def setup(tmp_path, monkeypatch):
                     "inviter_state": roster[inviter]["accountState"]
                     if inviter in roster
                     else "",
+                    "apply_id": "verified-record",
                 }
             )
         return {
             "group_id": group,
             "complete": True,
-            "source": "nim_team_member_inviter",
+            "source": "business_current_member_inviter",
             "items": items,
         }
 
@@ -126,6 +128,66 @@ async def configure(setup, *, capacity=15):
     return caller
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["prize", "contact", "both"])
+async def test_empty_activity_draft_cannot_start_or_post(setup, missing):
+    service, adapter, _, _, _, _ = setup
+    with activity_store.database(adapter) as db:
+        db.execute(
+            "INSERT INTO lottery_settings(account,group_id,prize,contact) VALUES(?,?,?,?)",
+            (
+                adapter.account,
+                "5",
+                "" if missing in {"prize", "both"} else "Test",
+                "" if missing in {"contact", "both"} else "Admin",
+            ),
+        )
+    reply = await service.command(event(adapter), "5", "开启抽奖", "")
+    assert "请先私聊设置" in reply
+    adapter.send_reply_text.assert_not_awaited()
+    with activity_store.database(adapter) as db:
+        assert db.execute("SELECT COUNT(*) FROM lotteries").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM invite_credits").fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["owner", "group", "account", "disabled"])
+async def test_busy_activity_configuration_cannot_survive_revocation(
+    setup, tmp_path, change
+):
+    service, adapter, _, _, _, config = setup
+    with closing(activity_store.database(adapter)):
+        pass
+    blocker = sqlite3.connect(tmp_path / "activities.sqlite3")
+    blocker.execute("BEGIN IMMEDIATE")
+    work = asyncio.create_task(
+        service.command(event(adapter), "5", "抽奖奖励", "test-prize")
+    )
+    try:
+        await asyncio.sleep(0.03)
+        assert not work.done()
+        if change == "owner":
+            config["admins_id"] = []
+        elif change == "group":
+            adapter.config["enabled_groups"] = []
+        elif change == "account":
+            adapter.account = "another"
+        else:
+            adapter.config["_business_active"] = False
+        blocker.rollback()
+        with pytest.raises(ProtocolError):
+            await asyncio.wait_for(work, 3)
+        assert blocker.execute("SELECT COUNT(*) FROM lottery_settings").fetchone() == (
+            0,
+        )
+        adapter.send_reply_text.assert_not_awaited()
+    finally:
+        blocker.rollback()
+        blocker.close()
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+
+
 def latest(adapter):
     with closing(activity_store.database(adapter)) as db:
         return dict(
@@ -143,8 +205,11 @@ def credits(adapter):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["", "revoked", "expired", "changed", "other_session", "unknown", "exception"])
-async def test_natural_lottery_preview_confirmation_and_actual_start(
+@pytest.mark.parametrize(
+    "failure",
+    ["", "revoked", "expired", "changed", "other_session", "unknown", "exception"],
+)
+async def test_retired_natural_lottery_never_starts_or_changes_settings(
     setup, tmp_path, monkeypatch, failure
 ):
     from astrbot.builtin_stars.wangshangliao_moderation import dashboard
@@ -159,25 +224,33 @@ async def test_natural_lottery_preview_confirmation_and_actual_start(
     caller = await configure(setup)
     caller.message_str = "请创建测试抽奖"
     drafts = AdminConfigDrafts(service.context, None, service)
-    proposal = json.dumps({
-        "target": "lottery_start", "group": "测试群",
-        "changes": {"lottery": {"prize": "测试无实物奖励", "contact": "测试管理员", "winners": 1}},
-    })
+    proposal = json.dumps(
+        {
+            "target": "lottery_start",
+            "group": "测试群",
+            "changes": {
+                "lottery": {
+                    "prize": "测试无实物奖励",
+                    "contact": "测试管理员",
+                    "winners": 1,
+                }
+            },
+        }
+    )
     preview = json.loads(await drafts.preview(caller, proposal))
-    assert preview["status"] == "preview"
-    assert "开启抽奖" in preview["changes"]["operation"]
-    assert "确认后开启报名" in preview["display_text"]
-    assert "1 分钟到时开奖" in preview["display_text"]
-    assert "3 -> 1" in preview["display_text"]
+    assert preview == {"status": "rejected", "reason": "ai_management_retired"}
     with closing(activity_store.database(adapter)) as db:
         assert db.execute("SELECT COUNT(*) FROM lotteries").fetchone()[0] == 0
-        assert db.execute("SELECT prize FROM lottery_settings").fetchone()[0] == "18元猪脚饭"
-    token = preview["confirmation"].split()[-1]
+        assert (
+            db.execute("SELECT prize FROM lottery_settings").fetchone()[0]
+            == "18元猪脚饭"
+        )
+    token = "retired-confirmation"
     caller.message_str = f"确认设置 {token}"
     if failure == "revoked":
         config["admins_id"] = []
     elif failure == "expired":
-        drafts.drafts[drafts._key(caller)]["expires"] = 0
+        token = "expired-confirmation"
     elif failure == "changed":
         await service.command(caller, "5", "中奖人数", "2")
     elif failure == "other_session":
@@ -187,23 +260,70 @@ async def test_natural_lottery_preview_confirmation_and_actual_start(
     elif failure == "exception":
         adapter.send_reply_text.side_effect = ProtocolError("send_unknown")
     result = json.loads(await drafts.confirm(caller, token))
-    if failure in {"revoked", "expired", "changed", "other_session"}:
+    assert result == {"status": "rejected", "reason": "ai_management_retired"}
+    with closing(activity_store.database(adapter)) as db:
+        assert db.execute("SELECT COUNT(*) FROM lotteries").fetchone()[0] == 0
+        assert db.execute("SELECT prize FROM lottery_settings").fetchone()[0] == (
+            "18元猪脚饭"
+        )
+    adapter.send_reply_text.assert_not_awaited()
+    assert not drafts.drafts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["owner", "account", "settings"])
+async def test_retired_ai_activity_confirmation_never_waits_for_writer(
+    setup, tmp_path, monkeypatch, change
+):
+    from astrbot.builtin_stars.wangshangliao_moderation import dashboard
+    from astrbot.builtin_stars.wangshangliao_moderation.ai_config import (
+        AdminConfigDrafts,
+    )
+
+    service, adapter, _, _, _, config = setup
+    monkeypatch.setattr(dashboard, "instance_dir", lambda _: tmp_path)
+    adapter.config["account_id"] = adapter.account
+    caller = await configure(setup)
+    drafts = AdminConfigDrafts(service.context, None, service)
+    preview = json.loads(
+        await drafts.preview(
+            caller,
+            json.dumps(
+                {
+                    "target": "activities",
+                    "group": "5",
+                    "changes": {"lottery": {"prize": "new-prize"}},
+                }
+            ),
+        )
+    )
+    assert preview == {"status": "rejected", "reason": "ai_management_retired"}
+    token = "retired-confirmation"
+    caller.message_str = f"确认设置 {token}"
+    blocker = sqlite3.connect(tmp_path / "activities.sqlite3")
+    blocker.execute("BEGIN IMMEDIATE")
+    work = asyncio.create_task(drafts.confirm(caller, token))
+    try:
+        await asyncio.sleep(0.05)
+        assert work.done()
+        if change == "owner":
+            config["admins_id"] = []
+        elif change == "account":
+            adapter.account = "another"
+        else:
+            blocker.execute("UPDATE lottery_settings SET prize='external-change'")
+        blocker.commit()
+        result = json.loads(await asyncio.wait_for(work, 3))
         assert result["status"] == "rejected"
-        with closing(activity_store.database(adapter)) as db:
-            assert db.execute("SELECT COUNT(*) FROM lotteries").fetchone()[0] == 0
-        assert adapter.send_reply_text.await_count == 0
-        return
-    assert result["status"] == ("not_confirmed" if failure else "started")
-    row = latest(adapter)
-    assert row["id"] == result["lottery_id"]
-    assert row["status"] == ("notice_unknown" if failure else "open")
-    assert row["prize"] == "测试无实物奖励" and row["winners"] == 1
-    assert adapter.send_reply_text.await_count == 1
-    assert adapter.send_reply_text.await_args.kwargs["auto_recall"] is False
-    assert json.loads(await drafts.confirm(caller, token))["status"] == "rejected"
-    assert adapter.send_reply_text.await_count == 1
-    # Unknown or active announcements must not be recreated by a new proposal.
-    assert json.loads(await drafts.preview(caller, proposal))["status"] == "rejected"
+        assert blocker.execute("SELECT prize FROM lottery_settings").fetchone()[0] == (
+            "external-change" if change == "settings" else "18元猪脚饭"
+        )
+        adapter.send_reply_text.assert_not_awaited()
+    finally:
+        blocker.rollback()
+        blocker.close()
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -258,6 +378,37 @@ async def test_concurrent_duplicate_signup_and_capacity(setup):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("display", ["card", "profile", "sender", "uid"])
+async def test_signup_uses_verified_roster_display_names_when_envelope_is_blank(
+    setup, display
+):
+    service, adapter, roster, _, _, _ = setup
+    caller = await configure(setup)
+    await service.command(caller, "5", "开启抽奖", "")
+    user = event(adapter, "2", private=False)
+    roster["2"]["groupMemberNick"] = "Verified Group Card"
+    roster["2"]["userNick"] = "Verified Profile"
+    user.get_sender_name = lambda: ""
+    if display != "card":
+        roster["2"]["groupMemberNick"] = ""
+    if display in {"sender", "uid"}:
+        roster["2"]["userNick"] = ""
+    if display == "sender":
+        user.get_sender_name = lambda: "Envelope Sender"
+    expected = {
+        "card": "Verified Group Card",
+        "profile": "Verified Profile",
+        "sender": "Envelope Sender",
+        "uid": "2",
+    }[display]
+    assert await service.command(user, "5", "参加抽奖", "") == "参加抽奖成功。"
+    with closing(activities.database(adapter)) as db:
+        entry = db.execute("SELECT * FROM lottery_entries").fetchone()
+        assert entry["member"] == "2" and entry["peer"] == "902"
+        assert entry["name"] == expected
+
+
+@pytest.mark.asyncio
 async def test_settings_frozen_after_open_and_deadline_rejects_signup(setup):
     service, adapter, _, _, now, _ = setup
     caller = await configure(setup)
@@ -291,14 +442,94 @@ async def test_existing_command_dispatch_public_queries_and_private_selection(se
     commands = Commands(activities=service)
     public = event(adapter, "2", private=False, admin=False)
     assert await commands.run(public, "抽奖状态") == "尚未开启抽奖。"
-    assert "0 人" in await commands.run(public, "我的邀请")
+    assert "尚未开启邀请统计" in await commands.run(public, "我的邀请")
     assert await commands.run(public, "设置邀请奖励 5") is None
     private = event(adapter)
-    assert "目标群未启用" in await commands.run(private, "抽奖奖励 奖品")
+    assert "尚未选择已启用群" in await commands.run(private, "抽奖奖励 奖品")
     await commands.run(private, "群列表")
     await commands.run(private, "选择群 1")
     assert "已设置" in await commands.run(private, "抽奖奖励 奖品")
     assert await commands.run(event(adapter, "2"), "开启抽奖") == "无权限"
+
+
+@pytest.mark.asyncio
+async def test_applied_invitation_record_overrides_provisional_nim_attribution(setup):
+    service, adapter, roster, mapping, now, _ = setup
+    caller = event(adapter)
+    assert "已开启" in await service.command(caller, "5", "开启邀请统计", "")
+    roster["10"] = member(10)
+    mapping["10"] = "2"
+    now[0] += 36
+    await service.scan_invitations(adapter, "5")
+    assert credits(adapter) == [
+        {
+            "account": "1",
+            "group_id": "5",
+            "member": "10",
+            "inviter": "2",
+            "member_peer": "910",
+            "inviter_peer": "902",
+            "amount": 0,
+            "recorded": 1036.0,
+        }
+    ]
+    with closing(activity_store.database(adapter)) as db:
+        db.execute(
+            "UPDATE invite_attributions SET source='nim_provisional' "
+            "WHERE account=? AND group_id=? AND member=?",
+            ("1", "5", "10"),
+        )
+        db.commit()
+    mapping["10"] = "3"
+    now[0] += 301
+    await service.scan_invitations(adapter, "5")
+    assert credits(adapter)[0]["inviter"] == "3"
+    with closing(activity_store.database(adapter)) as db:
+        evidence = dict(
+            db.execute(
+                "SELECT source,event_id FROM invite_attributions "
+                "WHERE account=? AND group_id=? AND member=?",
+                ("1", "5", "10"),
+            ).fetchone()
+        )
+    assert evidence == {
+        "source": "business_apply_log",
+        "event_id": "verified-record",
+    }
+
+
+@pytest.mark.asyncio
+async def test_native_join_operator_alone_is_not_invitation_evidence(setup):
+    service, adapter, roster, _, now, _ = setup
+    caller = event(adapter)
+    assert "已开启" in await service.command(caller, "5", "开启邀请统计", "")
+    roster["10"] = member(10)
+    await adapter.ledger.ingest(
+        "1",
+        "5",
+        "team-invite",
+        {
+            "kind": "team_invite",
+            "inviter_peer": "902",
+            "member_peers": ["910"],
+        },
+    )
+    await adapter.ledger.mark("1", "5", "team-invite", "invite_notification")
+    now[0] += 36
+    await service.scan_invitations(adapter, "5")
+    assert credits(adapter) == []
+    adapter.get_group_inviters.assert_awaited_once_with("5", members=["10"])
+    async with adapter.ledger.db.execute(
+        "SELECT state,payload FROM inbox WHERE account=? AND team=? AND message=?",
+        ("1", "5", "team-invite"),
+    ) as cursor:
+        state, payload = await cursor.fetchone()
+    assert state == "invite_notification"
+    assert json.loads(payload) == {
+        "kind": "team_invite",
+        "inviter_peer": "902",
+        "member_peers": ["910"],
+    }
 
 
 @pytest.mark.asyncio
@@ -328,6 +559,20 @@ async def test_removed_or_changed_members_do_not_win_and_empty_draw_finishes(set
     assert row["status"] == "finished"
     assert json.loads(row["results"]) == [] and row["total"] == 0
     assert "暂无中奖用户" in adapter.send_reply_text.await_args.args[2]
+
+
+@pytest.mark.asyncio
+async def test_disabled_business_does_not_draw_overdue_lottery(setup):
+    service, adapter, _, _, now, _ = setup
+    caller = await configure(setup)
+    await service.command(caller, "5", "开启抽奖", "")
+    now[0] += 61
+    adapter.config["_business_active"] = False
+    before = dict(latest(adapter))
+    sent = adapter.send_reply_text.await_count
+    await service.tick(adapter)
+    assert dict(latest(adapter)) == before
+    assert adapter.send_reply_text.await_count == sent
 
 
 @pytest.mark.asyncio
@@ -446,7 +691,62 @@ async def test_baseline_then_native_invitation_reward_exactly_once(setup):
     result = await service.command(
         event(adapter, "2", private=False), "5", "我的邀请", ""
     )
-    assert "1 人" in result and "5.25 积分" in result
+    assert (
+        "累计有效邀请：1 人" in result
+        and "当前在群：1 人" in result
+        and "目前已退群：0 人" in result
+        and "5.25 积分" in result
+    )
+    roster.pop("6")
+    now[0] += 36
+    await service.tick(adapter)
+    result = await service.command(
+        event(adapter, "2", private=False), "5", "我的邀请", ""
+    )
+    assert "当前在群：0 人" in result and "目前已退群：1 人" in result
+    overview = await service.command(event(adapter), "5", "邀请统计", "")
+    assert (
+        "Member 2：邀请 1 人｜在群 0 人｜退群 1 人" in overview
+        and "累计有效邀请：1 人" in overview
+    )
+    roster["6"] = member("6")
+    now[0] += 36
+    await service.tick(adapter)
+    restored = await service.command(
+        event(adapter, "2", private=False), "5", "我的邀请", ""
+    )
+    assert "当前在群：1 人" in restored and "目前已退群：0 人" in restored
+
+
+@pytest.mark.asyncio
+async def test_member_can_only_read_own_confirmed_invitee_names(setup):
+    service, adapter, roster, mapping, now, _ = setup
+    caller = event(adapter)
+    assert "已开启" in await service.command(caller, "5", "开启邀请统计", "")
+    roster["6"] = member("6")
+    mapping["6"] = "2"
+    now[0] += 36
+    await service.tick(adapter)
+
+    details = await service.command(
+        event(adapter, "2", private=False), "5", "我的邀请明细", ""
+    )
+    assert "我邀请的成员" in details
+    assert "Member 6（在群）" in details
+
+    roster.pop("6")
+    now[0] += 36
+    await service.tick(adapter)
+    details = await service.command(
+        event(adapter, "2", private=False), "5", "我的邀请明细", ""
+    )
+    assert "Member 6（已退群）" in details
+
+    explanation = await service.command(
+        event(adapter, "2", private=False), "5", "邀请统计说明", ""
+    )
+    assert "统计开启后首次入群" in explanation
+    assert "机器人账号" in explanation
 
 
 @pytest.mark.asyncio
@@ -507,12 +807,37 @@ async def test_pause_resume_rebaselines_and_preserves_credits(setup):
     await service.command(caller, "5", "开启邀请奖励", "")
     now[0] += 36
     await service.tick(adapter)
-    assert credits(adapter) == []
+    # The invite happened while rewards were paused, so it remains a
+    # tracked invitation with a zero reward instead of being repriced later.
+    assert [(row["member"], row["amount"]) for row in credits(adapter)] == [("6", 0)]
     roster["7"] = member("7")
     mapping["7"] = "2"
     now[0] += 36
     await service.tick(adapter)
-    assert [r["member"] for r in credits(adapter)] == ["7"]
+    assert {r["member"]: r["amount"] for r in credits(adapter)} == {
+        "6": 0,
+        "7": 500,
+    }
+
+
+@pytest.mark.asyncio
+async def test_paused_rewards_continue_refreshing_credited_member_presence(setup):
+    service, adapter, roster, mapping, now, _ = setup
+    caller = await enable_rewards(setup)
+    roster["6"] = member("6")
+    mapping["6"] = "2"
+    now[0] += 36
+    await service.tick(adapter)
+    assert [r["member"] for r in credits(adapter)] == ["6"]
+    await service.command(caller, "5", "暂停邀请奖励", "")
+    roster.pop("6")
+    now[0] += 36
+    await service.tick(adapter)
+    result = await service.command(
+        event(adapter, "2", private=False), "5", "我的邀请", ""
+    )
+    assert "当前在群：0 人" in result and "目前已退群：1 人" in result
+    assert [r["member"] for r in credits(adapter)] == ["6"]
 
 
 @pytest.mark.asyncio
@@ -569,7 +894,9 @@ async def test_old_or_unverified_signup_does_not_enroll(setup):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("elapsed", [1, 360, 899])
-async def test_mobile_signup_uses_transport_time_throughout_fifteen_minutes(setup, elapsed):
+async def test_mobile_signup_uses_transport_time_throughout_fifteen_minutes(
+    setup, elapsed
+):
     from astrbot.core.platform.sources.wangshangliao.adapter import message_timestamp
 
     service, adapter, _, _, now, _ = setup
@@ -578,10 +905,15 @@ async def test_mobile_signup_uses_transport_time_throughout_fifteen_minutes(setu
     await service.command(caller, "5", "开启抽奖", "")
     now[0] += elapsed
     user = event(adapter, "2", private=False)
-    stamp = message_timestamp(SimpleNamespace(created_at=0), {7: str(int(now[0] * 1000))})
+    stamp = message_timestamp(
+        SimpleNamespace(created_at=0), {7: str(int(now[0] * 1000))}
+    )
     user.get_extra = lambda _: {"created_at": stamp}
     assert await service.command(user, "5", "参加抽奖", "") == "参加抽奖成功。"
-    assert await service.command(user, "5", "参加抽奖", "") == "你已参加本次抽奖，请勿重复报名。"
+    assert (
+        await service.command(user, "5", "参加抽奖", "")
+        == "你已参加本次抽奖，请勿重复报名。"
+    )
 
 
 @pytest.mark.asyncio
@@ -657,9 +989,212 @@ async def test_new_account_and_group_never_see_old_rewards_or_lotteries(setup):
     adapter.account = "11"
     result = await service.command(event(adapter), "5", "抽奖状态", "")
     assert result == "尚未开启抽奖。"
-    assert "0.00" in await service.command(
+    assert "尚未开启邀请统计" in await service.command(
         event(adapter, "2", private=False), "5", "我的邀请", ""
     )
+
+
+@pytest.mark.asyncio
+async def test_tracking_without_rewards_records_verified_invites_and_presence(setup):
+    service, adapter, roster, mapping, now, _ = setup
+    caller = event(adapter)
+    started = await service.command(caller, "5", "开启邀请统计", "")
+    assert "统计已开启" in started and "统计起点：" in started
+    with closing(activity_store.database(adapter)) as db:
+        assert (
+            db.execute("SELECT tracking_started_at FROM invite_rules").fetchone()[0]
+            == now[0]
+        )
+    roster["6"] = member("6")
+    mapping["6"] = "2"
+    now[0] += 36
+    await service.tick(adapter)
+    assert [
+        (row["member"], row["inviter"], row["amount"]) for row in credits(adapter)
+    ] == [("6", "2", 0)]
+    own = await service.command(event(adapter, "2", private=False), "5", "我的邀请", "")
+    assert "累计有效邀请：1 人" in own
+    assert "累计奖励：0.00 积分" in own
+    assert "每人奖励：管理员未设置奖励" in own
+    assert "奖励状态：" not in own
+    assert "统计起点：" not in own
+    assert "为什么没统计" not in own
+
+
+@pytest.mark.asyncio
+async def test_public_invitation_summary_is_concise_for_zero_and_paused_rewards(setup):
+    service, adapter, _, _, _, _ = setup
+    caller = event(adapter)
+    await service.command(caller, "5", "开启邀请统计", "")
+    user = event(adapter, "2", private=False)
+    for action in ("我的邀请", "邀请奖励"):
+        text = await service.command(user, "5", action, "")
+        assert "累计有效邀请：0 人" in text
+        assert "每人奖励：管理员未设置奖励" in text
+        for removed in ("统计起点", "奖励状态", "为什么没统计", "未统计到邀请"):
+            assert removed not in text
+    assert await service.command(user, "5", "我的邀请明细", "") == "🎟️ 暂无已确认邀请。"
+    await service.command(caller, "5", "设置邀请奖励", "5")
+    await service.command(caller, "5", "开启邀请奖励", "")
+    text = await service.command(user, "5", "我的邀请", "")
+    assert "每人奖励：5.00 积分" in text
+    assert "奖励状态" not in text
+    await service.command(caller, "5", "暂停邀请奖励", "")
+    text = await service.command(user, "5", "我的邀请", "")
+    assert "每人奖励：管理员未设置奖励" in text
+
+
+@pytest.mark.asyncio
+async def test_cashback_queries_use_live_group_rate_and_sender_only(setup, tmp_path):
+    from astrbot.builtin_stars.wangshangliao_moderation.cashback import CashbackService
+    from astrbot.builtin_stars.wangshangliao_moderation.cashback_runtime import (
+        CashbackRuntime,
+    )
+
+    service, adapter, _, _, _, _ = setup
+    context = SimpleNamespace(
+        platform_manager=SimpleNamespace(platform_insts=[adapter])
+    )
+    adapter.config["type"] = "wangshangliao"
+    cash = CashbackService(context, tmp_path / "cash", adapter.config["id"])
+    runtime = CashbackRuntime(context)
+    runtime.service = cash
+    service.cashback = runtime
+    owner = "owner@example.com"
+    cash.store.bootstrap([{"email": owner, "name": "Cash Admin"}])
+    cash.store.save_cashier(owner, "9", "testfork", True, 0)
+    members = {
+        uid: {
+            "name": f"Cash Member {uid}",
+            "peer": str(900 + int(uid)),
+            "eligible": True,
+        }
+        for uid in ("2", "3")
+    }
+    cash.store.configure(
+        owner,
+        {
+            "id": "5",
+            "name": "Cash Group",
+            "bot_id": adapter.config["id"],
+            "account": adapter.account,
+            "contact": "微信：cashier_test",
+            "enabled": True,
+            "rate": 500,
+            "version": 0,
+        },
+        members,
+        set(),
+    )
+    user = event(adapter, "2", private=False)
+    # Cash queries work without enabling or writing the old points rules.
+    for action in ("我的邀请", "邀请奖励"):
+        text = await service.command(user, "5", action, "")
+        assert "普通成员单价：5.00 元" in text
+        assert "待结账：0.00 元" in text
+        assert "如核算有问题，请联系本群结账员：微信：cashier_test。" in text
+        assert "UID" not in text
+        assert "管理员未设置奖励" not in text and "积分" not in text
+    with closing(activity_store.database(adapter)) as db:
+        assert db.execute("SELECT COUNT(*) FROM invite_rules").fetchone()[0] == 0
+    members.update(
+        {
+            uid: {
+                "name": f"Cash Member {uid}",
+                "peer": str(900 + int(uid)),
+                "eligible": True,
+            }
+            for uid in ("6", "7")
+        }
+    )
+    evidence = [
+        {
+            "member": "6",
+            "inviter": "2",
+            "source": "business_apply_log",
+            "event_id": "cash6",
+        },
+        {
+            "member": "7",
+            "inviter": "3",
+            "source": "business_apply_log",
+            "event_id": "cash7",
+        },
+    ]
+    cash.store.snapshot("5", adapter.config["id"], adapter.account, members, evidence)
+    text = await service.command(user, "5", "我的邀请", "")
+    assert "返现邀请记录：1 人" in text and "待结账：5.00 元" in text
+    detail = await service.command(user, "5", "我的邀请明细", "")
+    assert "Cash Member 6（在群，待结账）" in detail
+    assert "Cash Member 7" not in detail and owner not in text
+    with cash.store.connect() as db:
+        row = db.execute("SELECT id,version FROM entries WHERE member='6'").fetchone()
+    cash.store.mutate(owner, "5", "pay", [dict(row)], "fixture-cash-pay-001")
+    text = await service.command(user, "5", "我的邀请", "")
+    assert "待结账：0.00 元" in text and "已结账：5.00 元" in text
+    config = {**cash.store.get_group("5"), "enabled": False}
+    cash.store.configure(owner, config, None, set())
+    text = await service.command(user, "5", "我的邀请", "")
+    assert "返现已暂停" in text and "已结账：5.00 元" in text
+    assert "管理员未设置奖励" not in text
+    await service.command(event(adapter), "5", "设置邀请奖励", "3")
+    await service.command(event(adapter), "5", "开启邀请奖励", "")
+    text = await service.command(user, "5", "我的邀请", "")
+    assert "每人积分奖励：3.00 积分" in text and "已结账：5.00 元" in text
+    from astrbot.builtin_stars.wangshangliao_moderation.cashback_store import (
+        CashbackError,
+    )
+
+    with pytest.raises(CashbackError, match="query_scope"):
+        await cash.invitation_reply(user, "6", "我的邀请")
+    with pytest.raises(CashbackError, match="query_scope"):
+        await cash.invitation_reply(event(adapter, "2", private=True), "5", "我的邀请")
+    # Removing collector scope must not leak its cash records through another bot.
+    adapter.config["enabled_groups"] = ["6"]
+    other_group_event = event(adapter, "2", private=False)
+    other_group_event.get_group_id = lambda: "6"
+    assert await cash.invitation_reply(other_group_event, "6", "我的邀请") is None
+
+
+@pytest.mark.asyncio
+async def test_cashback_failure_does_not_claim_rewards_unconfigured(setup):
+    from astrbot.builtin_stars.wangshangliao_moderation.cashback_runtime import (
+        CashbackRuntime,
+    )
+
+    service, adapter, *_ = setup
+    runtime = CashbackRuntime(None)
+    runtime.service = SimpleNamespace(
+        invitation_reply=AsyncMock(side_effect=RuntimeError("database unavailable"))
+    )
+    service.cashback = runtime
+    text = await service.command(
+        event(adapter, "2", private=False), "5", "我的邀请", ""
+    )
+    assert "暂时查询不了" in text
+    assert "管理员未设置奖励" not in text
+
+
+@pytest.mark.asyncio
+async def test_enabling_rewards_does_not_reprice_tracked_invites(setup):
+    service, adapter, roster, mapping, now, _ = setup
+    caller = event(adapter)
+    await service.command(caller, "5", "开启邀请统计", "")
+    roster["6"] = member("6")
+    mapping["6"] = "2"
+    now[0] += 36
+    await service.tick(adapter)
+    assert [(row["member"], row["amount"]) for row in credits(adapter)] == [("6", 0)]
+    await service.command(caller, "5", "设置邀请奖励", "5")
+    assert "已开启" in await service.command(caller, "5", "开启邀请奖励", "")
+    roster["7"] = member("7")
+    mapping["7"] = "2"
+    now[0] += 36
+    await service.tick(adapter)
+    assert {row["member"]: row["amount"] for row in credits(adapter)} == {
+        "6": 0,
+        "7": 500,
+    }
 
 
 @pytest.mark.asyncio
@@ -704,6 +1239,11 @@ async def test_identity_change_after_invitation_read_never_credits(setup):
         "抽奖状态",
         "我的邀请",
         "邀请奖励",
+        "我的邀请明细",
+        "我拉了谁",
+        "我邀请了谁",
+        "为什么没统计",
+        "邀请统计说明",
         "开启抽奖",
         "立即开奖",
         "取消抽奖",
@@ -715,14 +1255,22 @@ async def test_identity_change_after_invitation_read_never_credits(setup):
         "抽奖邀请门槛 3",
         "领奖联系人 秦铭",
         "设置邀请奖励 5.25",
+        "开启邀请统计",
+        "暂停邀请统计",
         "开启邀请奖励",
         "邀请奖励状态",
         "邀请记录",
+        "邀请统计",
         "暂停邀请奖励",
     ],
 )
 def test_activity_commands_are_exact_bare_commands(text):
-    assert recognize_command(text) == text
+    expected = {
+        "我拉了谁": "我的邀请明细",
+        "我邀请了谁": "我的邀请明细",
+        "为什么没统计": "邀请统计说明",
+    }.get(text, text)
+    assert recognize_command(text) == expected
 
 
 @pytest.mark.parametrize(
@@ -733,6 +1281,7 @@ def test_activity_commands_are_exact_bare_commands(text):
         "不开启抽奖",
         "参加抽奖 2",
         "我的邀请 别人",
+        "邀请统计 有谁",
         "中奖名单\n开启抽奖",
         "抽奖奖励",
         "设置邀请奖励",

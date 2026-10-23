@@ -37,12 +37,12 @@ from astrbot.core.provider.entities import (
     LLMResponse,
     ProviderRequest,
 )
+from astrbot.core.provider.event_guard import AIRequestDenied, event_session_lock
 from astrbot.core.star.session_llm_manager import SessionServiceManager
 from astrbot.core.star.star_handler import EventType
 from astrbot.core.utils.image_input import prepare_request_images
 from astrbot.core.utils.media_utils import normalize_model_image_max_size
 from astrbot.core.utils.metrics import Metric
-from astrbot.core.utils.session_lock import session_lock_manager
 
 from .....astr_agent_run_util import AgentRunner, run_agent, run_live_agent
 from ....context import PipelineContext, call_event_hook
@@ -199,7 +199,15 @@ class InternalAgentSubStage(Stage):
                 return
 
             logger.debug("ready to request llm provider")
-            follow_up_capture = try_capture_follow_up(event)
+            prepare_ai = getattr(event, "prepare_ai_request", None)
+            if prepare_ai is not None and not await prepare_ai(
+                self.ctx.plugin_manager.context
+            ):
+                return
+            follow_up_enabled = getattr(event, "ai_follow_up_enabled", True)
+            follow_up_capture = (
+                try_capture_follow_up(event) if follow_up_enabled else None
+            )
             if follow_up_capture:
                 (
                     follow_up_consumed_marked,
@@ -235,7 +243,13 @@ class InternalAgentSubStage(Stage):
 
             await _prepare_file_attachments(event)
 
-            async with session_lock_manager.acquire_lock(event.unified_msg_origin):
+            conversation_origin = getattr(event, "get_ai_conversation_origin", None)
+            ai_origin = (
+                conversation_origin(self.ctx.plugin_manager.context)
+                if conversation_origin
+                else event.unified_msg_origin
+            )
+            async with event_session_lock(event, ai_origin):
                 logger.debug("acquired session lock for llm request")
                 current_config = self.ctx.plugin_manager.context.get_config(
                     umo=event.unified_msg_origin
@@ -296,8 +310,11 @@ class InternalAgentSubStage(Stage):
                             return
 
                     stream_to_general = (
-                        self.unsupported_streaming_strategy == "turn_off"
-                        and not event.platform_meta.support_streaming_message
+                        not event.platform_meta.support_streaming_message
+                        and (
+                            self.unsupported_streaming_strategy == "turn_off"
+                            or event.get_extra("buffer_intermediate_messages") is True
+                        )
                     )
 
                     if await call_event_hook(event, EventType.OnLLMRequestEvent, req):
@@ -322,8 +339,9 @@ class InternalAgentSubStage(Stage):
                         await reset_coro
                         reset_coro = None
 
-                    register_active_runner(event.unified_msg_origin, agent_runner)
-                    runner_registered = True
+                    if follow_up_enabled:
+                        register_active_runner(event.unified_msg_origin, agent_runner)
+                        runner_registered = True
                     action_type = event.get_extra("action_type")
 
                     event.trace.record(
@@ -474,6 +492,8 @@ class InternalAgentSubStage(Stage):
                     if runner_registered and agent_runner is not None:
                         unregister_active_runner(event.unified_msg_origin, agent_runner)
 
+        except AIRequestDenied:
+            event.stop_event()
         except Exception as e:
             logger.error(f"Error occurred while processing agent: {e}")
             custom_error_message = extract_persona_custom_error_message_from_event(
@@ -482,8 +502,16 @@ class InternalAgentSubStage(Stage):
             error_text = custom_error_message or (
                 f"Error occurred while processing agent request: {e}"
             )
+            if getattr(event, "authorize_ai_tool", None):
+                error_text = (
+                    "本次请求暂时无法完成，请稍后重试；"
+                    "若涉及管理操作，请先查询状态，不要重复提交。"
+                )
             await event.send(MessageChain().message(error_text))
         finally:
+            finish_ai = getattr(event, "finish_ai_request", None)
+            if finish_ai is not None:
+                await finish_ai()
             if typing_requested:
                 try:
                     await event.stop_typing()
@@ -507,6 +535,12 @@ class InternalAgentSubStage(Stage):
     ) -> None:
         if not req or not req.conversation:
             return
+        conversation_origin = getattr(event, "get_ai_conversation_origin", None)
+        history_origin = (
+            conversation_origin(self.ctx.plugin_manager.context)
+            if conversation_origin
+            else event.unified_msg_origin
+        )
 
         messages_to_save: list[Message] = []
         skipped_initial_system = False
@@ -533,7 +567,7 @@ class InternalAgentSubStage(Stage):
             if has_checkpoint or (llm_response is None and req.tool_calls_result):
                 token_usage = None if has_checkpoint else req.conversation.token_usage
                 await self.conv_manager.update_conversation(
-                    event.unified_msg_origin,
+                    history_origin,
                     req.conversation.cid,
                     history=message_to_save,
                     token_usage=token_usage,
@@ -579,7 +613,7 @@ class InternalAgentSubStage(Stage):
             token_usage = llm_response.usage.total if llm_response.usage else None
 
         await self.conv_manager.update_conversation(
-            event.unified_msg_origin,
+            history_origin,
             req.conversation.cid,
             history=message_to_save,
             token_usage=token_usage,

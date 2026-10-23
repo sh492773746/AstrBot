@@ -550,7 +550,10 @@ class LogManager:
         cls._remove_sink(cls._file_sink_id)
         cls._file_sink_id = None
 
-        if not enable_file:
+        # Offline tools may reconfigure logging after their first import.
+        if not enable_file or os.getenv(
+            "ASTRBOT_DISABLE_FILE_LOGGING", ""
+        ).strip().lower() in {"1", "true"}:
             return
 
         try:
@@ -589,13 +592,21 @@ class LogManager:
         cls._remove_sink(cls._trace_sink_id)
         cls._trace_sink_id = None
 
-        if not enable:
+        if not enable or os.getenv(
+            "ASTRBOT_DISABLE_FILE_LOGGING", ""
+        ).strip().lower() in {"1", "true"}:
             return
 
-        cls._trace_sink_id = cls._add_file_sink(
-            file_path=cls._resolve_log_path(path or "logs/astrbot.trace.log"),
-            level=logging.INFO,
-            max_mb=max_mb,
-            backup_count=3,
-            trace=True,
-        )
+        try:
+            cls._trace_sink_id = cls._add_file_sink(
+                file_path=cls._resolve_log_path(path or "logs/astrbot.trace.log"),
+                level=logging.INFO,
+                max_mb=max_mb,
+                backup_count=3,
+                trace=True,
+            )
+        except Exception as exc:
+            logging.getLogger("astrbot").error(
+                "Unable to open AstrBot trace log file (%s); file tracing is unavailable.",
+                type(exc).__name__,
+            )

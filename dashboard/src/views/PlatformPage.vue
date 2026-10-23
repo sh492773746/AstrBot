@@ -99,14 +99,19 @@
                       alt="bot logo"
                     />
                     <div class="bot-list-item__copy">
-                      <div class="bot-list-item__title">{{ platform.id }}</div>
+                      <div class="bot-list-item__title">{{ getPlatformInstanceName(platform, getPlatformStat(platform.id)) }}</div>
                       <div class="bot-list-item__subtitle">
                         <span
                           class="bot-list-item__status-dot"
                           :class="getPlatformStatusClass(platform)"
                         ></span>
                         <span>{{ getPlatformStatusLabel(platform) }}</span>
-                        <span v-if="platform.type">· {{ platform.type }}</span>
+                        <span v-if="platform.type">
+                          · {{ getPlatformDisplayName(platform.type) }}
+                        </span>
+                        <span v-if="platform.type === 'wangshangliao' && platform.account_id">
+                          · {{ platform.account_id }}
+                        </span>
                       </div>
                     </div>
                   </button>
@@ -319,17 +324,21 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { botApi, fileApi, systemConfigApi } from "@/api/v1";
+import { botApi, fileApi, pluginExtensionApi, systemConfigApi } from "@/api/v1";
 import AddNewPlatform from "@/components/platform/AddNewPlatform.vue";
 import PlatformEditor from "@/components/platform/PlatformEditor.vue";
 import QrCodeViewer from "@/components/shared/QrCodeViewer.vue";
 import { mergeDynamicTranslations, useModuleI18n } from "@/i18n/composables";
 import { copyToClipboard } from "@/utils/clipboard";
+import { getPlatformInstanceName } from "@/utils/platformInstanceName.mjs";
 import {
   askForConfirmation as askForConfirmationDialog,
   useConfirmDialog,
 } from "@/utils/confirmDialog";
-import { getPlatformIcon } from "@/utils/platformUtils";
+import {
+  getPlatformDisplayName,
+  getPlatformIcon,
+} from "@/utils/platformUtils";
 
 const { tm } = useModuleI18n("features/platform");
 const confirmDialog = useConfirmDialog();
@@ -369,8 +378,8 @@ const selectedPlatform = computed(
 
 const platformOptions = computed(() =>
   platforms.value.map((platform) => ({
-    title: platform.id,
-    subtitle: `${getPlatformStatusLabel(platform)} · ${platform.type || ""}`,
+    title: getPlatformInstanceName(platform, getPlatformStat(platform.id)),
+    subtitle: `${getPlatformStatusLabel(platform)} · ${getPlatformDisplayName(platform.type || "")}${platform.type === "wangshangliao" && platform.account_id ? ` · ${platform.account_id}` : ""}`,
     value: platform.id,
     platform,
   })),
@@ -429,6 +438,34 @@ async function getPlatformStats() {
         platform,
       ]),
     );
+    if (platforms.value.some(p => p.type === "wangshangliao")) {
+      try {
+        const response = await pluginExtensionApi.post(
+          "wangshangliao_moderation/open-service", { action: "status", payload: {} },
+        );
+        const state = response.data.data;
+        for (const bot of state?.accounts || []) {
+          const platform = platforms.value.find(p => p.id === bot.instance_id);
+          if (platform?.type !== "wangshangliao" ||
+              String(platform.account_id) !== String(bot.account)) continue;
+          const enabled = state.groups.filter(group =>
+            group.account === bot.account && group.active && group.present &&
+            !group.paused && !state.settings.paused && !state.health?.capacity_paused &&
+            ["legacy", "verified"].includes(group.admission || "legacy") &&
+            !group.membership_pending,
+          ).map(group => group.group_id);
+          platformStats.value[bot.instance_id] = {
+            ...getPlatformStat(bot.instance_id), nickname: bot.nickname, account_id: bot.account,
+            ...(state.mode === "integrated" ? {
+              // An empty group list or offline transport is not a business pause.
+              enabled_groups: enabled,
+            } : {}),
+          };
+        }
+      } catch {
+        // Plugin availability must not hide other platforms' runtime state.
+      }
+    }
   } catch (error) {
     console.warn("Failed to load bot runtime status:", error);
   }
@@ -439,6 +476,7 @@ function handleLocaleChange() {
 }
 
 function getPlatformIconFor(platform) {
+  if (platform?.type === "lajiaoliao") return getPlatformIcon("lajiaoliao");
   const templates =
     metadata.value["platform_group"]?.metadata?.platform?.config_template || {};
   const template =
@@ -741,6 +779,7 @@ function showError(error) {
   height: 30px;
   object-fit: contain;
   width: 30px;
+  border-radius: 8px;
 }
 
 .bot-list-icon--mobile {

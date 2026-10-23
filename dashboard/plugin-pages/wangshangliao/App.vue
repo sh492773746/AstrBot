@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   CalendarClock,
   ClipboardList,
@@ -14,10 +14,21 @@ import {
   ShieldCheck,
   TableProperties,
   Terminal,
+  Users,
+  Wallet,
   X,
 } from "@lucide/vue";
 import ConversationExamples from "./ConversationExamples.vue";
 import ReferenceTables from "./ReferenceTables.vue";
+import Cashier from "./SettlementPanel.vue";
+import BusinessControls from "./BusinessControls.vue";
+import FriendApproval from "./FriendApproval.vue";
+import OperationsLog from "./OperationsLog.vue";
+import GroupManagers from "./GroupManagers.vue";
+import OpenService from "./OpenService.vue";
+import CommandHelp from "./CommandHelp.vue";
+import CurrentMutesPanel from "./CurrentMutesPanel.vue";
+import { getPlatformInstanceName } from "../../src/utils/platformInstanceName.mjs";
 
 type Policy = Record<string, any>;
 type Bot = {
@@ -35,13 +46,20 @@ type Bot = {
   moderation?: Policy;
   revision: string;
   state: string;
+  current_error?: string;
   enable?: boolean;
+  proactive_send?: { enabled: boolean; targets: string[] };
+  developer_test?: Policy;
+  business_active?: boolean;
+  group_names?: Record<string, string>;
 };
 type Audit = {
   reviews: Array<Record<string, any>>;
   sanctions: Array<Record<string, any>>;
   counts: Array<Record<string, any>>;
   rules: Array<Record<string, any>>;
+  recalls: Array<Record<string, any>>;
+  recalls_available: boolean;
 };
 type ActivityState = {
   lottery: {
@@ -51,15 +69,22 @@ type ActivityState = {
     capacity: number;
     invite_gate: number;
     contact: string;
+    total_amount: string;
+    packet_mode: "prize" | "ordinary" | "lucky";
+    by_invites: boolean;
+    remarks: string;
   };
   invite_rate: string;
   invitation: {
     rate: string;
     enabled: boolean;
     last_scan: number;
+    presence_checked_at: number;
     error: string;
     credited_count: number;
     credited_total: string;
+    active_count: number;
+    left_count: number;
     pending_count: number;
     expired_count: number;
   };
@@ -70,6 +95,7 @@ type ScheduleState = {
   schedule: Record<string, any> | null;
   executions: Array<Record<string, any>>;
   history: Array<Record<string, any>>;
+  revision: string;
 };
 type Bridge = {
   ready(): Promise<unknown>;
@@ -87,6 +113,7 @@ const providers = ref<Array<{ id: string; model: string }>>([]);
 const botId = ref("");
 const groupId = ref("");
 const tab = ref("settings");
+const integrated = ref(false);
 const loading = ref(true);
 const saving = ref(false);
 const auditLoading = ref(false);
@@ -99,6 +126,8 @@ const auditError = ref("");
 const activityError = ref("");
 const scheduleError = ref("");
 const notice = ref("");
+const managersDirty = ref(false);
+const settlementDirty = ref(false);
 const form = ref<Policy>({});
 const original = ref("");
 const activityState = ref<ActivityState | null>(null);
@@ -109,6 +138,10 @@ const activityForm = ref<ActivityState["lottery"] & { invite_rate: string }>({
   capacity: 15,
   invite_gate: 0,
   contact: "",
+  total_amount: "0.00",
+  packet_mode: "ordinary",
+  by_invites: false,
+  remarks: "",
   invite_rate: "0.00",
 });
 const activityOriginal = ref("");
@@ -116,6 +149,7 @@ const scheduleState = ref<ScheduleState>({
   schedule: null,
   executions: [],
   history: [],
+  revision: "",
 });
 const confirmSchedulePause = ref(false);
 const pending = ref<(() => void) | null>(null);
@@ -124,9 +158,17 @@ const emptyAudit = (): Audit => ({
   sanctions: [],
   counts: [],
   rules: [],
+  recalls: [],
+  recalls_available: false,
 });
 const audit = ref<Audit>(emptyAudit());
 const bot = computed(() => bots.value.find((item) => item.id === botId.value));
+const groupOptions = computed(() => [
+  ...new Set([
+    ...(bot.value?.enabled_groups || []),
+    ...Object.keys(bot.value?.group_names || {}),
+  ]),
+]);
 const dirty = computed(
   () => original.value !== "" && JSON.stringify(form.value) !== original.value,
 );
@@ -145,12 +187,19 @@ let scheduleSequence = 0;
 let unsubscribe: (() => void) | undefined;
 
 const tabs = computed(() => [
+  { id: "open", name: integrated.value ? t("开通", "Activation") : t("开放服务", "Open Service"), icon: Network },
+  { id: "rules", name: t("规则", "Rules"), icon: ShieldCheck },
+  { id: "business", name: t("群聊与运行", "Groups & Runtime"), icon: Settings2 },
+  { id: "friend-approval", name: t("好友申请", "Friend Requests"), icon: Users },
   { id: "settings", name: t("审核配置", "Moderation"), icon: Settings2 },
   { id: "permissions", name: t("群授权", "Group Grants"), icon: ShieldCheck },
-  { id: "activities", name: t("活动控制", "Activities"), icon: Gift },
+  { id: "activities", name: t("玩家福利抽奖", "Player Lottery"), icon: Gift },
+  { id: "invite-rewards", name: t("邀请奖励", "Invitation Rewards"), icon: Users },
+  { id: "cashback", name: t("邀请记账／结账", "Invitation Settlement"), icon: ClipboardList },
   { id: "schedule", name: t("定时管理", "Schedules"), icon: CalendarClock },
   { id: "audit", name: t("处罚记录", "Audit"), icon: ClipboardList },
-  { id: "commands", name: t("群内命令", "Commands"), icon: Terminal },
+  { id: "operations", name: t("操作日志", "Operation Logs"), icon: ClipboardList },
+  { id: "commands", name: t("命令与权限", "Commands & Roles"), icon: Terminal },
   {
     id: "examples",
     name: t("对话示例", "Chat examples"),
@@ -158,7 +207,53 @@ const tabs = computed(() => [
   },
   { id: "architecture", name: t("架构表", "Architecture"), icon: Network },
   { id: "matrix", name: t("权限表", "Permissions"), icon: TableProperties },
+  { id: "consultation", name: t("客服咨询", "Customer Service"), icon: MessageSquareText },
+  { id: "admin-guidance", name: t("管理员指引", "Admin Guidance"), icon: ShieldCheck },
+  { id: "group-ai", name: t("群聊与热群", "Group AI"), icon: MessageSquareText },
+  { id: "plans", name: t("套餐与额度", "Plans & Quotas"), icon: Wallet },
+  { id: "model", name: t("模型与预算", "Model & Budget"), icon: ShieldCheck },
+  { id: "finance", name: t("结算授权", "Settlement Grants"), icon: ShieldCheck },
+  { id: "runtime", name: t("服务总控", "Service Controls"), icon: Settings2 },
+  { id: "open-audit", name: t("群管审计", "Management Audit"), icon: ClipboardList },
+].filter(item => integrated.value ? !["business", "settings"].includes(item.id) : item.id !== "rules"));
+const sections = computed(() => [
+  { id: "groups", name: t("群管理", "Groups"), icon: Network, tabs: ["open", "rules", "business", "settings", "permissions", "friend-approval"] },
+  { id: "ai", name: t("AI服务", "AI"), icon: MessageSquareText, tabs: ["consultation", "admin-guidance", "group-ai", "plans", "model"] },
+  { id: "finance", name: t("活动与财务", "Activities & Finance"), icon: Wallet, tabs: ["activities", "invite-rewards", "cashback", "finance"] },
+  { id: "runtime", name: t("运行与日志", "Runtime & Logs"), icon: CalendarClock, tabs: ["runtime", "schedule", "audit", "operations", "open-audit"] },
+  { id: "help", name: t("使用帮助", "Help"), icon: Terminal, tabs: ["commands", "examples", "architecture", "matrix"] },
 ]);
+const section = computed(() => sections.value.find(item => item.tabs.includes(tab.value))!);
+const sectionTabs = computed(() => section.value.tabs
+  .flatMap(id => tabs.value.filter(item => item.id === id)));
+const lastTabs = ref<Record<string, string>>({});
+const openViews: Record<string, string> = {
+  open: "groups", rules: "rules", consultation: "consultation", "admin-guidance": "admin-guidance", "group-ai": "group-ai",
+  plans: "plans", model: "model", finance: "finance", runtime: "runtime", "open-audit": "audit",
+};
+const openVisible = computed(() => tab.value in openViews);
+const openView = ref("groups");
+watch(tab, value => {
+  lastTabs.value[section.value.id] = value;
+  if (value in openViews) openView.value = openViews[value];
+}, { immediate: true });
+function selectTab(value: string) {
+  guard(() => { fillActivityForm(); tab.value = value; });
+}
+function navigateTabs(event: KeyboardEvent) {
+  const target = event.target as HTMLElement;
+  if (target.getAttribute("role") !== "tab"
+      || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const buttons = [...target.closest('[role="tablist"]')!
+    .querySelectorAll<HTMLButtonElement>('button[role="tab"]:not(:disabled)')];
+  const index = buttons.indexOf(target as HTMLButtonElement);
+  const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+    : (index + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+  event.preventDefault();
+  buttons[next].click();
+  buttons[next].focus({ preventScroll: true });
+  buttons[next].scrollIntoView({ block: "nearest", inline: "nearest" });
+}
 const actions = computed(() => [
   ["mute", t("成员禁言", "Mute member")],
   ["unmute", t("成员解禁", "Unmute member")],
@@ -176,11 +271,10 @@ const commands = computed(() => [
   { command: "抽奖状态", action: "lottery_status", public: true },
   { command: "我的邀请", action: "own_invites", public: true },
   { command: "邀请奖励", action: "invite_rewards", public: true },
-  { command: "禁言 @成员", action: "mute" },
-  { command: "解禁 @成员", action: "unmute" },
   { command: "公告 公告内容", action: "announce" },
-  { command: "全员禁言", action: "mute_all" },
-  { command: "解除全员禁言", action: "unmute_all" },
+  { command: "解禁 @成员（或：解除禁言 @成员）", action: "unmute" },
+  { command: "禁言名单（私聊选群后查询当前禁言成员）", action: "unmute" },
+  { command: "定时禁言 23:00 08:00", action: "mute_all" },
 ]);
 const activePolicy = computed(() => bot.value?.moderation || {});
 const activePermissions = computed<string[]>(
@@ -207,8 +301,43 @@ function label(value: string): string {
     error: ["故障", "Error"],
     accepted: ["已受理", "Accepted"],
     verified: ["已确认", "Verified"],
-    unknown: ["未知", "Unknown"],
+    unknown: ["结果待核对", "Outcome unverified"],
     rejected: ["已拒绝", "Rejected"],
+    action_scope_changed: ["操作范围或授权已变化", "Scope or authorization changed"],
+    action_automation_changed: ["成员身份或自动化授权已变化", "Member identity or automation grant changed"],
+    recall_scope_changed: ["连接或成员身份已变化", "Connection or member identity changed"],
+    recall_identity: ["原消息身份校验失败", "Original message identity check failed"],
+    moderation_target: ["处罚对象已离群或角色变化", "Target left or changed role"],
+    moderation_permission: ["原生角色校验未通过", "Native role check failed"],
+    moderation_identity: ["成员身份未核实", "Member identity unverified"],
+    content_policy_changed: ["审核策略已变化", "Moderation policy changed"],
+    not_online: ["连接不可用，未执行", "Connection unavailable"],
+    progressive_not_authorized: ["递进处罚授权已变化", "Progressive sanction grant changed"],
+    operation_failed: ["执行异常", "Execution error"],
+    validation_failed: ["提交校验未通过", "Submission validation failed"],
+    transport: ["平台连接异常", "Provider connection error"],
+    failed: ["失败", "Failed"],
+    disabled: ["已关闭，未执行", "Disabled; not executed"],
+    pending: ["等待处理", "Pending"],
+    sending: ["提交中，待核对", "Submitting; needs verification"],
+    observed: ["已记录，处理结果待更新", "Recorded; outcome pending"],
+    claimed: ["处理中，结果待更新", "Processing; outcome pending"],
+    reserved: ["已预留，待核对", "Reserved; needs verification"],
+    new: ["待提交", "Not submitted"],
+    expired: ["已过期，未执行", "Expired; not executed"],
+    business_suspended: ["业务暂停，未执行", "Service paused; not executed"],
+    sent: ["已发送（平台受理）", "Sent (platform accepted)"],
+    not_recorded: ["未查到发送回执", "No send receipt found"],
+    not_applicable: ["本项无需警告", "No warning required"],
+    audit_incomplete: ["原审计未完成，见撤回回执", "Audit incomplete; see recall receipt"],
+    recall_observed: ["已收到撤回通知", "Recall notification received"],
+    bot_rule_recall: ["机器人撤回（有回执）", "Bot recall (receipt matched)"],
+    bot_command_cleanup: ["机器人清理群命令", "Bot command cleanup"],
+    bot_reply_cleanup: ["机器人清理回复", "Bot reply cleanup"],
+    self_recall: ["成员自己撤回", "Author recalled"],
+    other_member_recall: ["其他成员撤回", "Another member recalled"],
+    bot_account_unattributed: ["机器人账号撤回，执行来源待核对", "Bot account; process unverified"],
+    unattributed: ["来源待核对", "Source unverified"],
     allow: ["正常", "Allowed"],
     violation: ["违规", "Violation"],
     review: ["证据不足", "Review"],
@@ -218,11 +347,20 @@ function label(value: string): string {
     external_promotion: ["外部引流", "External promotion"],
     adult_promotion: ["成人推广", "Adult promotion"],
     mute_keyword: ["禁言关键词", "Mute keyword"],
-    kick_keyword: ["踢出关键词", "Removal keyword"],
+    kick_keyword: ["高风险关键词", "High-risk keyword"],
     none: ["无", "None"],
     warned: ["已警告", "Warned"],
     muted: ["已禁言", "Muted"],
     kicked: ["已提交踢出", "Removal submitted"],
+    recalled: ["已撤回", "Recalled"],
+    message_flood: ["刷屏", "Message flood"],
+    prohibited_image: ["禁止图片", "Prohibited image"],
+    prohibited_video: ["禁止视频", "Prohibited video"],
+    prohibited_forward: ["禁止合并聊天记录", "Prohibited merged chat"],
+    review_only: ["仅记录，未处罚", "Recorded only"],
+    identity_unverified: ["成员身份待核验", "Member identity unverified"],
+    administrator_exempt: ["群管理免自动处罚", "Administrator exempt"],
+    historical_or_unknown_time: ["历史消息或时间待核验", "Historical or unverified time"],
     history: ["历史消息", "Historical"],
     needs_review: ["待核验", "Needs review"],
     announcing: ["通知发送中", "Announcing"],
@@ -232,7 +370,7 @@ function label(value: string): string {
     finished: ["已开奖", "Finished"],
     cancelled: ["已取消", "Cancelled"],
     notice_unknown: ["开场通知结果未知", "Announcement outcome unknown"],
-    result_unknown: ["开奖通知结果未知", "Result notification unknown"],
+    result_unknown: ["平台回执待核对", "Provider receipt unverified"],
     active: ["运行中", "Active"],
     paused: ["已暂停", "Paused"],
     deleted: ["已删除", "Deleted"],
@@ -272,12 +410,27 @@ function fillForm() {
           permissions: [...(settings.permissions?.[groupId.value] || [])],
           auto_kick: settings.auto_kick?.[groupId.value] === true,
           card_auto: settings.card_auto?.[groupId.value] === true,
+          card_suffix: settings.card_suffix?.[groupId.value] || "",
           reply: bot.value?.reply_groups?.[groupId.value] !== false,
           customer_provider_id:
             bot.value?.ai_routes?.groups?.[groupId.value] || "",
         }
       : {},
     reply_private: bot.value?.reply_private !== false,
+    enabled_groups: [...(bot.value?.enabled_groups || [])],
+    proactive_send: {
+      enabled: bot.value?.proactive_send?.enabled === true,
+      targets: [...(bot.value?.proactive_send?.targets || [])],
+    },
+    developer_test: {
+      sender_instance: "",
+      groups: [],
+      scopes: ["private_commands", "private_ai"],
+      keywords: [],
+      seconds: 300,
+      budget: 3,
+      ...(bot.value?.developer_test || {}),
+    },
     admin_provider_id: bot.value?.ai_routes?.admin_provider_id || "",
   };
   original.value = JSON.stringify(form.value);
@@ -291,6 +444,10 @@ function fillActivityForm() {
     capacity: settings?.lottery.capacity ?? 15,
     invite_gate: settings?.lottery.invite_gate ?? 0,
     contact: settings?.lottery.contact || "",
+    total_amount: settings?.lottery.total_amount ?? "0.00",
+    packet_mode: settings?.lottery.prize ? settings.lottery.packet_mode || "prize" : "ordinary",
+    by_invites: settings?.lottery.by_invites ?? Boolean(settings?.lottery.invite_gate),
+    remarks: settings?.lottery.remarks || "",
     invite_rate: settings?.invite_rate ?? "0.00",
   };
   activityOriginal.value = JSON.stringify(activityForm.value);
@@ -309,7 +466,7 @@ async function loadAudit() {
       bot_id: botId.value,
       group_id: groupId.value,
     });
-    if (sequence === auditSequence) audit.value = data;
+    if (sequence === auditSequence) audit.value = { ...emptyAudit(), ...data };
   } catch (err) {
     if (sequence === auditSequence)
       auditError.value =
@@ -323,9 +480,10 @@ async function loadAudit() {
 async function loadActivities() {
   const sequence = ++activitySequence;
   activityError.value = "";
+  activityState.value = null;
+  activityOriginal.value = "";
+  activityLoading.value = false;
   if (!bridge || !botId.value || !groupId.value) {
-    activityState.value = null;
-    activityOriginal.value = "";
     return;
   }
   activityLoading.value = true;
@@ -351,8 +509,10 @@ async function loadActivities() {
 async function loadSchedule() {
   const sequence = ++scheduleSequence;
   scheduleError.value = "";
+  scheduleState.value = { schedule: null, executions: [], history: [], revision: "" };
+  scheduleLoading.value = false;
+  confirmSchedulePause.value = false;
   if (!bridge || !botId.value || !groupId.value) {
-    scheduleState.value = { schedule: null, executions: [], history: [] };
     return;
   }
   scheduleLoading.value = true;
@@ -382,6 +542,9 @@ async function reload() {
   error.value = "";
   try {
     const data = await bridge.apiGet("settings");
+    const wasIntegrated = integrated.value;
+    integrated.value = data.open_mode === "integrated";
+    if (integrated.value && !wasIntegrated) tab.value = "open";
     bots.value = data.bots;
     providers.value = data.providers;
     if (!bots.value.some((item) => item.id === botId.value))
@@ -401,7 +564,7 @@ async function reload() {
 }
 function guard(action: () => void) {
   notice.value = "";
-  if (dirty.value || activityDirty.value) pending.value = action;
+  if (dirty.value || activityDirty.value || managersDirty.value || settlementDirty.value) pending.value = action;
   else action();
 }
 function select(event: Event, kind: "bot" | "group") {
@@ -436,14 +599,29 @@ async function save() {
   error.value = "";
   notice.value = "";
   try {
+    const proposal = JSON.parse(JSON.stringify(form.value));
+    if (integrated.value) {
+      proposal.policy = {};
+      delete proposal.admin_provider_id;
+      delete proposal.enabled_groups;
+      delete proposal.proactive_send;
+      delete proposal.developer_test;
+      delete proposal.reply_private;
+    }
+    if (bot.value.business_active === undefined) {
+      delete proposal.enabled_groups;
+      delete proposal.proactive_send;
+      delete proposal.developer_test;
+    }
     await bridge.apiPost(
       "settings",
       JSON.parse(
         JSON.stringify({
           bot_id: botId.value,
           revision: bot.value.revision,
-          group_id: groupId.value,
-          ...form.value,
+          group_id: form.value.enabled_groups.includes(groupId.value) ? groupId.value : "",
+          ...proposal,
+          group: form.value.enabled_groups.includes(groupId.value) ? form.value.group : {},
         }),
       ),
     );
@@ -458,61 +636,78 @@ async function save() {
   }
 }
 async function saveActivities() {
-  if (!activityState.value || !bridge || busy.value || !activityDirty.value)
+  if (
+    !activityState.value || !bridge || busy.value || activityLoading.value
+    || activitySaving.value || !activityDirty.value
+  )
     return;
+  const sequence = activitySequence, selectedBot = botId.value, selectedGroup = groupId.value;
   activitySaving.value = true;
   activityError.value = "";
   notice.value = "";
   try {
+    const invitationOnly = tab.value === "invite-rewards";
     const saved = await bridge.apiPost("activities", {
-      bot_id: botId.value,
-      group_id: groupId.value,
+      bot_id: selectedBot,
+      group_id: selectedGroup,
       revision: activityState.value.revision,
-      lottery: {
+      ...(invitationOnly ? { invite_rate: activityForm.value.invite_rate } : { lottery: {
         prize: activityForm.value.prize,
-        winners: activityForm.value.winners,
+        winners: activityForm.value.packet_mode === "prize" ? activityForm.value.winners : activityForm.value.capacity,
         duration_minutes: activityForm.value.duration_minutes,
         capacity: activityForm.value.capacity,
-        invite_gate: activityForm.value.invite_gate,
+        invite_gate: activityForm.value.by_invites ? activityForm.value.invite_gate : 0,
         contact: activityForm.value.contact,
-      },
-      invite_rate: activityForm.value.invite_rate,
+        total_amount: activityForm.value.total_amount,
+        packet_mode: activityForm.value.packet_mode,
+        by_invites: activityForm.value.by_invites,
+        remarks: activityForm.value.remarks,
+      } }),
     });
+    if (sequence !== activitySequence || selectedBot !== botId.value || selectedGroup !== groupId.value)
+      return;
     activityState.value = saved;
     fillActivityForm();
     notice.value = t("活动参数已保存", "Activity settings saved");
   } catch (err) {
-    activityError.value =
-      err instanceof Error
-        ? err.message
-        : t("活动参数保存失败", "Activity settings could not be saved");
+    if (sequence === activitySequence && selectedBot === botId.value && selectedGroup === groupId.value)
+      activityError.value =
+        err instanceof Error
+          ? err.message
+          : t("活动参数保存失败", "Activity settings could not be saved");
   } finally {
     activitySaving.value = false;
   }
 }
 async function pauseSchedule() {
   const schedule = scheduleState.value.schedule;
-  if (!schedule || !bridge || scheduleSaving.value) return;
+  if (!schedule || !scheduleState.value.revision || !bridge || scheduleLoading.value || scheduleSaving.value) return;
+  const sequence = scheduleSequence, selectedBot = botId.value, selectedGroup = groupId.value;
   scheduleSaving.value = true;
   scheduleError.value = "";
   try {
     await bridge.apiPost("schedule", {
-      bot_id: botId.value,
-      group_id: groupId.value,
+      bot_id: selectedBot,
+      group_id: selectedGroup,
       version: schedule.version,
+      revision: scheduleState.value.revision,
       action: "pause",
     });
+    if (sequence !== scheduleSequence || selectedBot !== botId.value || selectedGroup !== groupId.value)
+      return;
     confirmSchedulePause.value = false;
     await loadSchedule();
-    notice.value = t(
-      "后续定时操作已暂停，当前群状态未改变",
-      "Future scheduled actions paused; current group state unchanged",
-    );
+    if (selectedBot === botId.value && selectedGroup === groupId.value)
+      notice.value = t(
+        "后续定时操作已暂停，当前群状态未改变",
+        "Future scheduled actions paused; current group state unchanged",
+      );
   } catch (err) {
-    scheduleError.value =
-      err instanceof Error
-        ? err.message
-        : t("定时规则暂停失败", "Could not pause schedule");
+    if (selectedBot === botId.value && selectedGroup === groupId.value)
+      scheduleError.value =
+        err instanceof Error
+          ? err.message
+          : t("定时规则暂停失败", "Could not pause schedule");
   } finally {
     scheduleSaving.value = false;
   }
@@ -546,16 +741,16 @@ onBeforeUnmount(() => {
         <ShieldCheck :size="26" />
         <div>
           <h1>{{ t("旺商聊群管", "Wangshangliao Moderation") }}</h1>
-          <p>
+          <p v-if="!openVisible">
             {{ bot?.nickname || bot?.name || "Wangshangliao"
             }}<span v-if="bot?.account_id"> · {{ bot.account_id }}</span>
           </p>
         </div>
       </div>
       <div class="header-actions">
-        <span v-if="bot" class="badge" :class="bot.state"
+        <span v-if="bot && !openVisible" class="badge" :class="bot.state"
           ><span class="status-dot" />{{ label(bot.state) }}</span
-        ><button
+        ><span v-if="bot && !openVisible && bot.business_active !== undefined" class="badge" :class="{ warning: !bot.business_active }">{{ bot.business_active ? t("业务运行中", "Business active") : t("业务暂停", "Business paused") }}</span><button
           type="button"
           class="icon-button"
           :disabled="busy"
@@ -576,13 +771,33 @@ onBeforeUnmount(() => {
     <div v-if="loading && !bot" class="empty">
       <LoaderCircle class="spin" :size="24" />{{ t("读取中", "Loading") }}
     </div>
-    <div v-else-if="!bot" class="empty">
-      <ShieldCheck :size="32" /><strong>{{
-        t("暂无旺商聊实例", "No Wangshangliao instances")
-      }}</strong>
-    </div>
+    <section v-else-if="!bot">
+      <p>{{ t("暂无生产旺商聊实例", "No production Wangshangliao instances") }}</p>
+      <OpenService v-if="bridge" :bridge="bridge" />
+    </section>
     <template v-else>
-      <div class="scope-bar">
+      <nav class="tabs primary-tabs" role="tablist"
+        :aria-label="t('功能分类', 'Feature categories')" @keydown="navigateTabs">
+        <button v-for="item in sections" :id="`section-${item.id}`" :key="item.id"
+          type="button" role="tab" :aria-controls="`section-panel-${item.id}`"
+          :aria-selected="section.id === item.id" :tabindex="section.id === item.id ? 0 : -1"
+          :class="{ selected: section.id === item.id }"
+          @click="selectTab(lastTabs[item.id] || item.tabs.find(id => tabs.some(view => view.id === id))!)">
+          <component :is="item.icon" :size="17" />{{ item.name }}
+        </button>
+      </nav>
+      <div :id="`section-panel-${section.id}`" class="section-panel" role="tabpanel"
+        :aria-labelledby="`section-${section.id}`">
+      <nav class="tabs secondary-tabs" role="tablist"
+        :aria-label="t('管理视图', 'Management views')" @keydown="navigateTabs">
+        <button v-for="item in sectionTabs" :id="`tab-${item.id}`" :key="item.id"
+          type="button" role="tab" :aria-controls="`panel-${item.id}`"
+          :aria-selected="tab === item.id" :tabindex="tab === item.id ? 0 : -1"
+          :class="{ selected: tab === item.id }" @click="selectTab(item.id)">
+          {{ item.name }}
+        </button>
+      </nav>
+      <div v-if="!openVisible && !['examples', 'architecture', 'cashback'].includes(tab)" class="scope-bar">
         <label
           >{{ t("机器人实例", "Bot instance")
           }}<select
@@ -591,7 +806,7 @@ onBeforeUnmount(() => {
             @change="select($event, 'bot')"
           >
             <option v-for="item in bots" :key="item.id" :value="item.id">
-              {{ item.nickname || item.name || item.id }}
+              {{ getPlatformInstanceName({ ...item, type: "wangshangliao" }) }}<template v-if="item.nickname && item.account_id"> · {{ item.account_id }}</template>
             </option>
           </select></label
         >
@@ -599,19 +814,25 @@ onBeforeUnmount(() => {
           >{{ t("当前群", "Current group")
           }}<select
             :value="groupId"
-            :disabled="busy || !bot.enabled_groups?.length"
+            :disabled="busy || !groupOptions.length"
             @change="select($event, 'group')"
           >
             <option v-if="!bot.enabled_groups?.length" value="">
               {{ t("没有已启用群", "No enabled groups") }}
             </option>
-            <option v-for="id in bot.enabled_groups" :key="id" :value="id">
-              {{ t("群", "Group") }} {{ id }}
+            <option
+              v-for="id in groupOptions"
+              :key="id"
+              :value="id"
+              :disabled="!bot.enabled_groups?.includes(id)"
+            >
+              {{ bot.group_names?.[id] || t("群", "Group") }} · {{ id }}
+              {{ bot.enabled_groups?.includes(id) ? "" : t("（未启用）", "(Not enabled)") }}
             </option>
           </select></label
         >
       </div>
-      <div class="overview">
+      <div v-if="['settings', 'permissions', 'audit'].includes(tab)" class="overview">
         <div>
           <span>{{ t("自动审核", "Automatic moderation") }}</span
           ><strong
@@ -646,27 +867,14 @@ onBeforeUnmount(() => {
           }}</strong>
         </div>
       </div>
-      <nav
-        class="tabs"
-        role="tablist"
-        :aria-label="t('管理视图', 'Management views')"
-      >
-        <button
-          v-for="item in tabs"
-          :id="`tab-${item.id}`"
-          :key="item.id"
-          type="button"
-          role="tab"
-          :aria-controls="`panel-${item.id}`"
-          :aria-selected="tab === item.id"
-          :class="{ selected: tab === item.id }"
-          @click="tab = item.id"
-        >
-          <component :is="item.icon" :size="17" />{{ item.name }}
-        </button>
-      </nav>
-      <form @submit.prevent="save">
+      <form @submit.prevent="['settings', 'permissions', 'business'].includes(tab) && save()">
         <fieldset :disabled="busy" class="form-body">
+          <OpenService v-if="bridge" v-show="openVisible" :id="openVisible ? `panel-${tab}` : 'panel-open-service-hidden'"
+            role="tabpanel" :aria-labelledby="openVisible ? `tab-${tab}` : undefined" :bridge="bridge" :view="openView" />
+          <p v-if="['business', 'operations'].includes(tab) && bot.business_active === undefined" role="status">{{ t("此实例尚未切换到插件配置服务。", "This instance has not switched to the plugin policy service.") }}</p>
+          <BusinessControls v-if="tab === 'business' && bridge && bot.business_active !== undefined" id="panel-business" role="tabpanel" aria-labelledby="tab-business" :bot="bot" :form="form" :group-id="groupId" :bridge="bridge" :t="t" />
+          <FriendApproval v-if="tab === 'friend-approval' && bridge" id="panel-friend-approval" role="tabpanel" aria-labelledby="tab-friend-approval" :bot="bot" :bridge="bridge" :t="t" />
+          <OperationsLog v-if="tab === 'operations' && bridge && bot.business_active !== undefined" id="panel-operations" role="tabpanel" aria-labelledby="tab-operations" :bot-id="botId" :bridge="bridge" :t="t" />
           <section
             v-if="tab === 'settings'"
             id="panel-settings"
@@ -815,8 +1023,12 @@ onBeforeUnmount(() => {
             </div>
             <h2>{{ t("规则兜底", "Rule fallback") }}</h2>
             <div class="switch-row">
+              <span>{{ t("刷屏阈值", "Flood thresholds") }}</span>
+              <span>{{ t("3秒3条 / 10秒8条 / 30秒同文5条", "3 messages / 3s; 8 / 10s; 5 identical / 30s") }}</span>
+            </div>
+            <div class="switch-row">
               <label for="progressive-mute">{{
-                t("递进禁言＋撤回（5分钟 / 15分钟 / 1小时）", "Progressive mute + recall (5 / 15 / 60 minutes)")
+                t("先撤回3次，再撤回＋递进禁言（5分钟 / 15分钟 / 1小时）", "Recall 3 times, then recall + progressive mute (5 / 15 / 60 minutes)")
               }}</label>
               <input
                 id="progressive-mute"
@@ -864,7 +1076,7 @@ onBeforeUnmount(() => {
                 ></textarea>
               </label>
               <label
-                >{{ t("踢出关键词", "Removal keywords")
+                >{{ t("高风险关键词（不自动踢人）", "High-risk keywords (no auto-kick)")
                 }}<textarea
                   :value="form.policy.kick_keywords.join('\n')"
                   rows="4"
@@ -909,6 +1121,15 @@ onBeforeUnmount(() => {
               {{ t("没有已启用群", "No enabled groups") }}
             </div>
             <template v-else>
+              <GroupManagers
+                v-if="bridge && !integrated"
+                :bridge="bridge"
+                :bot-id="botId"
+                :group-id="groupId"
+                :locale="locale"
+                :disabled="loading || saving"
+                @dirty="managersDirty = $event"
+              />
               <div class="permission-grid">
                 <label
                   v-for="[action, name] in actions"
@@ -965,10 +1186,17 @@ onBeforeUnmount(() => {
                 ><input
                   id="card-auto"
                   v-model="form.group.card_auto"
+                  :disabled="!form.group.card_auto && (!form.policy.enabled || !groupPermissions.includes('rename'))"
                   type="checkbox"
                   role="switch"
                   class="switch"
                 />
+              </div>
+              <div class="field-grid">
+                <label for="card-suffix" class="wide">
+                  {{ t("本群名片后缀（可留空）", "Card suffix for this group (optional)") }}
+                  <input id="card-suffix" v-model="form.group.card_suffix" type="text" />
+                </label>
               </div>
               <p
                 v-if="
@@ -984,6 +1212,7 @@ onBeforeUnmount(() => {
             </template>
           </section>
         </fieldset>
+        <Cashier v-if="tab === 'cashback' && bridge" id="panel-cashback" role="tabpanel" aria-labelledby="tab-cashback" :bridge="bridge" @dirty="settlementDirty = $event" />
         <section
           v-if="tab === 'activities'"
           id="panel-activities"
@@ -991,14 +1220,14 @@ onBeforeUnmount(() => {
           aria-labelledby="tab-activities"
         >
           <div class="section-heading">
-            <h2>{{ t("当前群活动", "Group activities") }}</h2>
+            <h2>{{ t("玩家福利抽奖", "Player lottery") }}</h2>
             <button
               type="button"
               class="icon-button"
               :disabled="activityLoading || activitySaving || !groupId"
               :title="t('刷新活动状态', 'Refresh activity state')"
               :aria-label="t('刷新活动状态', 'Refresh activity state')"
-              @click="loadActivities"
+              @click="guard(() => loadActivities())"
             >
               <RefreshCw :size="18" :class="{ spin: activityLoading }" />
             </button>
@@ -1019,28 +1248,7 @@ onBeforeUnmount(() => {
                     : t("无进行中活动", "No active draw")
                 }}</strong>
               </div>
-              <div>
-                <span>{{ t("邀请奖励", "Invite rewards") }}</span>
-                <strong
-                  :class="{ enabled: activityState.invitation.enabled }"
-                  >{{
-                    activityState.invitation.enabled
-                      ? t("已开启", "Enabled")
-                      : t("未开启", "Off")
-                  }}</strong
-                >
-              </div>
-              <div>
-                <span>{{ t("已记账奖励", "Credits recorded") }}</span>
-                <strong
-                  >{{ activityState.invitation.credited_count }} ·
-                  {{ activityState.invitation.credited_total }}</strong
-                >
-              </div>
-              <div>
-                <span>{{ t("待核验邀请", "Pending attribution") }}</span>
-                <strong>{{ activityState.invitation.pending_count }}</strong>
-              </div>
+              <div><span>{{ t("参与口令", "Entry command") }}</span><strong>参与玩家福利抽奖</strong></div>
             </div>
             <dl
               v-if="activityState.current_lottery"
@@ -1049,6 +1257,10 @@ onBeforeUnmount(() => {
               <div>
                 <dt>{{ t("本期奖品", "Current prize") }}</dt>
                 <dd>{{ activityState.current_lottery.prize }}</dd>
+              </div>
+              <div v-if="activityState.current_lottery.packet_mode && activityState.current_lottery.packet_mode !== 'prize'">
+                <dt>{{ t("红包总金额", "Packet total") }}</dt>
+                <dd>{{ activityState.current_lottery.total_amount }} {{ t("元", "CNY") }} · {{ activityState.current_lottery.packet_mode === 'lucky' ? t("拼手气", "Lucky split") : t("普通红包", "Equal split") }}</dd>
               </div>
               <div>
                 <dt>{{ t("报名人数", "Entries") }}</dt>
@@ -1068,29 +1280,45 @@ onBeforeUnmount(() => {
                 <dt>{{ t("领奖联系人", "Claim contact") }}</dt>
                 <dd>{{ activityState.current_lottery.contact }}</dd>
               </div>
+              <div v-if="activityState.current_lottery.remarks">
+                <dt>{{ t("活动备注", "Activity remarks") }}</dt>
+                <dd class="lottery-remarks">{{ activityState.current_lottery.remarks }}</dd>
+              </div>
+              <template v-if="activityState.current_lottery.fixed_packets && ['finished', 'result_unknown', 'cancelled', 'notice_unknown'].includes(activityState.current_lottery.status)">
+                <div>
+                  <dt>{{ t("本期分配（待发放）", "Allocated (pending payout)") }}</dt>
+                  <dd>{{ activityState.current_lottery.allocated_count }} {{ t("份", "packets") }} · {{ activityState.current_lottery.allocated_amount }} {{ t("元", "CNY") }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("未领取退回（未支出）", "Unclaimed (unspent)") }}</dt>
+                  <dd>{{ activityState.current_lottery.capacity - activityState.current_lottery.allocated_count }} {{ t("份", "packets") }} · {{ activityState.current_lottery.unclaimed_amount }} {{ t("元", "CNY") }}</dd>
+                </div>
+              </template>
               <div v-if="activityState.current_lottery.error">
                 <dt>{{ t("活动异常", "Activity issue") }}</dt>
                 <dd>{{ activityState.current_lottery.error }}</dd>
               </div>
             </dl>
-            <p
-              v-if="activityState.invitation.error"
-              role="alert"
-              class="message warning"
-            >
-              {{ t("邀请核验异常", "Invitation verification issue") }}:
-              {{ activityState.invitation.error }}
-            </p>
             <h2>{{ t("下一期抽奖参数", "Next lottery settings") }}</h2>
             <div class="field-grid">
               <label
-                >{{ t("奖品", "Prize")
+                >{{ t("活动名称", "Draw name")
                 }}<input
                   v-model="activityForm.prize"
                   type="text"
                   maxlength="128"
                   required
               /></label>
+              <label>{{ t("红包类型", "Packet type") }}
+                <select v-model="activityForm.packet_mode" :aria-label="t('红包类型', 'Packet type')">
+                  <option value="ordinary">{{ t("普通红包", "Equal split") }}</option>
+                  <option value="lucky">{{ t("拼手气", "Lucky split") }}</option>
+                  <option v-if="activityState.lottery.packet_mode === 'prize'" value="prize">{{ t("原有奖品抽奖", "Legacy prize draw") }}</option>
+                </select>
+              </label>
+              <label v-if="activityForm.packet_mode !== 'prize'">{{ t("总金额（元）", "Total amount (CNY)") }}
+                <input v-model="activityForm.total_amount" type="number" min="0.01" max="999999.99" step="0.01" required />
+              </label>
               <label
                 >{{ t("领奖联系人", "Claim contact")
                 }}<input
@@ -1099,7 +1327,7 @@ onBeforeUnmount(() => {
                   maxlength="128"
                   required
               /></label>
-              <label
+              <label v-if="activityForm.packet_mode === 'prize'"
                 >{{ t("中奖名额", "Winner count")
                 }}<input
                   v-model.number="activityForm.winners"
@@ -1120,56 +1348,34 @@ onBeforeUnmount(() => {
                   required
               /></label>
               <label
-                >{{ t("参与上限（0为不限）", "Entry limit (0 = unlimited)")
+                >{{ activityForm.packet_mode === 'prize' ? t("参与上限（0为不限）", "Entry limit (0 = unlimited)") : t("参加人数", "Participant count")
                 }}<input
                   v-model.number="activityForm.capacity"
                   type="number"
-                  min="0"
-                  max="10000"
+                  :min="activityForm.packet_mode === 'prize' ? 0 : 1"
+                  :max="activityForm.packet_mode === 'prize' ? 10000 : 100"
                   step="1"
                   required
               /></label>
-              <label
-                >{{ t("有效邀请门槛", "Verified invitation threshold")
+              <label class="check">
+                <input v-model="activityForm.by_invites" type="checkbox" />
+                {{ t("是否按照邀请进行抽奖", "Require verified invitations") }}
+              </label>
+              <label v-if="activityForm.by_invites"
+                >{{ t("拉几人可以抽（有效邀请）", "Verified invites required to enter")
                 }}<input
                   v-model.number="activityForm.invite_gate"
                   type="number"
-                  min="0"
+                  min="1"
                   max="10000"
                   step="1"
                   required
               /></label>
+              <label class="wide">{{ t("抽奖备注／参与要求（选填）", "Lottery remarks / eligibility (optional)") }}
+                <textarea v-model="activityForm.remarks" rows="3" maxlength="500"
+                  :placeholder="t('例如：须使用指定头像，昵称包含活动标识；领奖时由管理员核验。', 'For example: use the required avatar and event name tag; verified by the claim administrator.')" />
+              </label>
             </div>
-            <h2>{{ t("统一邀请奖励", "Uniform invitation reward") }}</h2>
-            <div class="field-grid">
-              <label
-                >{{
-                  t("每位有效邀请奖励（积分）", "Per verified invite (points)")
-                }}<input
-                  v-model="activityForm.invite_rate"
-                  type="number"
-                  min="0"
-                  max="999999.99"
-                  step="0.01"
-                  required
-              /></label>
-              <p class="field-note">
-                {{
-                  t(
-                    "修改金额不会重算已记账奖励。启用时建立成员基线，需由管理员私聊发送“开启邀请奖励”。",
-                    "Changing the rate does not reprice credits already recorded. Enabling creates a member baseline and remains an admin private-chat action.",
-                  )
-                }}
-              </p>
-            </div>
-            <p class="message">
-              {{
-                t(
-                  "保存只修改下一期抽奖和统一邀请奖励金额，不会自动开启活动或付款。开启/开奖/取消请在已授权管理员私聊中操作；抽奖期间本期参数冻结。",
-                  "Saving changes only the next draw and the uniform reward rate. It does not start activities or pay out. Start/draw/cancel in an authorized admin DM; settings are frozen during a draw.",
-                )
-              }}
-            </p>
             <div class="save-bar">
               <span :class="{ warning: activityDirty }">{{
                 activityDirty
@@ -1196,8 +1402,43 @@ onBeforeUnmount(() => {
                   /><Save v-else :size="17" />{{
                     activitySaving
                       ? t("保存中", "Saving")
-                      : t("保存活动参数", "Save activity settings")
+                      : t("保存抽奖参数", "Save lottery settings")
                   }}
+                </button>
+              </div>
+            </div>
+          </template>
+        </section>
+        <section v-if="tab === 'invite-rewards'" id="panel-invite-rewards" role="tabpanel" aria-labelledby="tab-invite-rewards">
+          <div class="section-heading">
+            <h2>{{ t("邀请奖励", "Invitation rewards") }}</h2>
+            <button type="button" class="icon-button" :disabled="activityLoading || activitySaving || !groupId"
+              :title="t('刷新邀请奖励', 'Refresh invitation rewards')" @click="guard(() => loadActivities())">
+              <RefreshCw :size="18" :class="{ spin: activityLoading }" />
+            </button>
+          </div>
+          <p v-if="activityError" role="alert" class="message error">{{ activityError }}</p>
+          <p v-if="activityLoading" class="loading-line"><LoaderCircle :size="18" class="spin" />{{ t("读取中", "Loading") }}</p>
+          <template v-if="activityState">
+            <div class="control-overview">
+              <div><span>{{ t("奖励状态", "Reward status") }}</span><strong>{{ activityState.invitation.enabled ? t("已开启", "Enabled") : t("未开启", "Off") }}</strong></div>
+              <div><span>{{ t("已记账奖励（积分）", "Recorded credits (points)") }}</span><strong>{{ activityState.invitation.credited_count }} · {{ activityState.invitation.credited_total }}</strong></div>
+              <div><span>{{ t("当前仍在群", "Currently in group") }}</span><strong>{{ activityState.invitation.active_count }}</strong></div>
+              <div><span>{{ t("已退群", "Left group") }}</span><strong>{{ activityState.invitation.left_count }}</strong></div>
+              <div><span>{{ t("待核验邀请", "Pending attribution") }}</span><strong>{{ activityState.invitation.pending_count }}</strong></div>
+            </div>
+            <p v-if="activityState.invitation.error" role="alert" class="message warning">{{ activityState.invitation.error }}</p>
+            <div class="field-grid">
+              <label>{{ t("每位有效邀请奖励（积分）", "Per verified invite (points)") }}
+                <input v-model="activityForm.invite_rate" type="number" min="0" max="999999.99" step="0.01" required />
+              </label>
+            </div>
+            <div class="save-bar">
+              <span>{{ activityDirty ? t("有未保存更改", "Unsaved changes") : t("已同步", "Current") }}</span>
+              <div>
+                <button type="button" :disabled="activitySaving || !activityDirty" @click="fillActivityForm"><X :size="17" />{{ t("还原", "Reset") }}</button>
+                <button type="button" class="primary" :disabled="activitySaving || !activityDirty" @click="saveActivities">
+                  <LoaderCircle v-if="activitySaving" :size="17" class="spin" /><Save v-else :size="17" />{{ t("保存邀请奖励", "Save invitation reward") }}
                 </button>
               </div>
             </div>
@@ -1384,6 +1625,8 @@ onBeforeUnmount(() => {
           role="tabpanel"
           aria-labelledby="tab-audit"
         >
+          <CurrentMutesPanel v-if="integrated && bridge && bot?.account_id && groupId"
+            :key="`${botId}/${groupId}`" :bridge="bridge" :account="bot.account_id" :group="groupId" :locale="locale" />
           <div class="section-heading">
             <h2>{{ t("自动禁言累计", "Automatic mute counts") }}</h2>
             <button
@@ -1407,7 +1650,7 @@ onBeforeUnmount(() => {
             <table>
               <thead>
                 <tr>
-                  <th>{{ t("成员 ID", "Member ID") }}</th>
+                  <th>{{ t("成员", "Member") }}</th>
                   <th>{{ t("本轮受理", "Accepted in cycle") }}</th>
                   <th>{{ t("未知", "Unknown") }}</th>
                   <th>
@@ -1417,7 +1660,11 @@ onBeforeUnmount(() => {
               </thead>
               <tbody>
                 <tr v-for="row in audit.counts" :key="row.member">
-                  <td class="mono">{{ row.member }}</td>
+                  <td class="audit-member">
+                    <span>{{ row.member_name || t("名称未获取", "Name unavailable") }}</span>
+                    <small v-if="row.member_name_source === 'message'">{{ t("历史名称", "Historical name") }}</small>
+                    <small class="mono">{{ row.member }}</small>
+                  </td>
                   <td>
                     <span class="count">{{ row.accepted }} / 3</span>
                   </td>
@@ -1449,7 +1696,11 @@ onBeforeUnmount(() => {
               <tbody>
                 <tr v-for="row in audit.sanctions" :key="row.operation">
                   <td>{{ date(row.created) }}</td>
-                  <td class="mono">{{ row.member }}</td>
+                  <td class="audit-member">
+                    <span>{{ row.member_name || t("名称未获取", "Name unavailable") }}</span>
+                    <small v-if="row.member_name_source === 'message'">{{ t("历史名称", "Historical name") }}</small>
+                    <small class="mono">{{ row.member }}</small>
+                  </td>
                   <td>{{ label(row.action) }}</td>
                   <td>{{ row.minutes ? `${row.minutes} ${t("分钟", "min")}` : "-" }}</td>
                   <td>{{ row.recall_status ? label(row.recall_status) : "-" }}</td>
@@ -1457,6 +1708,9 @@ onBeforeUnmount(() => {
                     <span class="badge" :class="row.status">{{
                       label(row.status)
                     }}</span>
+                    <small v-if="row.action_submitted === 0" class="warning-cleanup">{{ t("未提交处罚", "Sanction not submitted") }}</small>
+                    <small v-if="row.action_error" class="warning-cleanup">{{ label(row.action_error) }}</small>
+                    <small v-if="row.provider_code != null" class="mono warning-cleanup">{{ row.provider_code }}</small>
                   </td>
                   <td class="mono wrap-id">{{ row.operation }}</td>
                 </tr>
@@ -1507,19 +1761,77 @@ onBeforeUnmount(() => {
                   <th>{{ t("成员", "Member") }}</th>
                   <th>{{ t("类别", "Category") }}</th>
                   <th>{{ t("状态", "Status") }}</th>
+                  <th>{{ t("原消息撤回", "Message recall") }}</th>
+                  <th>{{ t("警告通知", "Warning notification") }}</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="row in audit.rules" :key="row.message">
                   <td>{{ date(row.observed) }}</td>
-                  <td class="mono">{{ row.sender }}</td>
+                  <td class="audit-member">
+                    <span>{{ row.sender_name || t("名称未获取", "Name unavailable") }}</span>
+                    <small v-if="row.sender_name_source === 'message'">{{ t("历史名称", "Historical name") }}</small>
+                    <small class="mono">{{ row.sender }}</small>
+                  </td>
                   <td>{{ label(row.category) }}</td>
-                  <td>{{ label(row.status) }}</td>
+                  <td>{{ label(row.status === "review_only" && ["accepted", "verified"].includes(row.recall_status) ? "audit_incomplete" : row.status) }}</td>
+                  <td>
+                    {{ row.recall_status ? label(row.recall_status) : t("未查到撤回回执", "No recall receipt found") }}
+                    <small v-if="row.recall_submitted === 0" class="warning-cleanup">{{ t("未提交撤回", "Recall not submitted") }}</small>
+                    <small v-if="row.recall_error" class="warning-cleanup">{{ label(row.recall_error) }}</small>
+                  </td>
+                  <td>
+                    <span v-if="row.warning_number">{{ t(`第${row.warning_number}次警告 · `, `Warning ${row.warning_number} · `) }}</span>
+                    {{ label(row.warning_status || "not_recorded") }}
+                    <small v-if="['accepted', 'verified'].includes(row.warning_cleanup_status)" class="warning-cleanup">{{ t("警告曾被自动清理", "Warning was auto-removed") }}</small>
+                    <small v-else-if="row.warning_cleanup_status === 'pending'" class="warning-cleanup">{{ t("警告已安排自动清理", "Warning cleanup is scheduled") }}</small>
+                  </td>
                 </tr>
                 <tr v-if="!audit.rules.length">
-                  <td colspan="4" class="table-empty">
+                  <td colspan="6" class="table-empty">
                     {{ t("暂无内容规则记录", "No content rule audit") }}
                   </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <h2>{{ t("撤回来源", "Recall sources") }}</h2>
+          <p v-if="!audit.recalls_available" role="status" class="message">
+            {{ t("撤回通知暂不可读取，不能据此判断是谁撤回。", "Recall notifications are unavailable; the actor cannot be determined.") }}
+          </p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>{{ t("撤回时间 · 北京时间", "Recall time · Asia/Shanghai") }}</th>
+                  <th>{{ t("原消息成员", "Message author") }}</th>
+                  <th>{{ t("撤回人", "Recall actor") }}</th>
+                  <th>{{ t("来源", "Source") }}</th>
+                  <th>{{ t("证据", "Evidence") }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in audit.recalls" :key="`${row.message}-${row.client}-${row.author_peer}-${row.operator_peer}`">
+                  <td>
+                    {{ date(row.recalled_at || row.received_at) }}
+                    <small v-if="!row.recalled_at">{{ t("通知接收时间", "Notification received") }}</small>
+                  </td>
+                  <td class="audit-member">
+                    <span>{{ row.author_name || t("名称未获取", "Name unavailable") }}</span>
+                    <small>{{ row.author_id ? t(`账号 ${row.author_id}`, `Account ${row.author_id}`) : t("账号待核验", "Account unverified") }}</small>
+                  </td>
+                  <td class="audit-member">
+                    <span>{{ row.operator_name || t("名称未获取", "Name unavailable") }}</span>
+                    <small>{{ row.operator_id ? t(`账号 ${row.operator_id}`, `Account ${row.operator_id}`) : t("账号待核验", "Account unverified") }}</small>
+                  </td>
+                  <td>{{ label(row.source) }}</td>
+                  <td>
+                    {{ label(row.status) }}
+                    <small v-if="row.receipt_status">{{ t("机器人回执：", "Bot receipt: ") }}{{ label(row.receipt_status) }}</small>
+                  </td>
+                </tr>
+                <tr v-if="!audit.recalls.length && audit.recalls_available">
+                  <td colspan="5" class="table-empty">{{ t("暂无留存的撤回通知", "No retained recall notifications") }}</td>
                 </tr>
               </tbody>
             </table>
@@ -1531,7 +1843,7 @@ onBeforeUnmount(() => {
           :locale="locale"
           :group-id="groupId"
           :permissions="activePermissions"
-          :content-mode="Boolean(activePolicy.content_rules_since)"
+          :integrated="integrated"
         />
         <ConversationExamples
           v-if="tab === 'examples'"
@@ -1544,6 +1856,8 @@ onBeforeUnmount(() => {
           role="tabpanel"
           aria-labelledby="tab-commands"
         >
+          <CommandHelp v-if="integrated && bridge" :bridge="bridge" :locale="locale" @navigate="selectTab" />
+          <template v-else>
           <h2>
             {{ t("群内命令", "Group commands") }}
           </h2>
@@ -1565,7 +1879,7 @@ onBeforeUnmount(() => {
                     {{
                       item.public
                         ? t("普通群员", "Group members")
-                        : t("管理员 ID", "Administrator ID")
+                        : t("本群授权管理", "Authorized group manager")
                     }}
                   </td>
                   <td>
@@ -1614,9 +1928,10 @@ onBeforeUnmount(() => {
               <dd><code>帮助</code> · {{ t("私聊", "Private chat") }}</dd>
             </div>
           </dl>
+          </template>
         </section>
         <footer
-          v-if="tab === 'settings' || tab === 'permissions'"
+          v-if="tab === 'settings' || tab === 'permissions' || tab === 'business'"
           class="save-bar"
         >
           <span :class="{ warning: dirty }">{{
@@ -1638,6 +1953,7 @@ onBeforeUnmount(() => {
           </div>
         </footer>
       </form>
+      </div>
     </template>
     <div v-if="pending" class="modal-backdrop" @keydown.esc="pending = null">
       <section
@@ -1739,3 +2055,7 @@ onBeforeUnmount(() => {
     </div>
   </main>
 </template>
+
+<style scoped>
+.lottery-remarks { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>

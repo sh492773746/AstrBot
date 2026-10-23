@@ -1,4 +1,5 @@
 import asyncio
+import sqlite3
 from contextlib import closing
 from datetime import datetime
 from types import SimpleNamespace
@@ -9,6 +10,8 @@ import pytest
 
 from astrbot.builtin_stars.wangshangliao_moderation import schedules as module
 from astrbot.core.platform.sources.wangshangliao import schedule_store as store
+from astrbot.core.platform.sources.wangshangliao.actions import dispatch
+from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
 
 def epoch(value):
@@ -41,10 +44,13 @@ def setup(tmp_path, monkeypatch):
 
     async def execute(operation, action, group, *, scheduled_check):
         async with store.group_lock(adapter, str(group)):
-            scheduled_check()
+            await scheduled_check()
             return {"status": "accepted"}
 
     adapter.execute_moderation = AsyncMock(side_effect=execute)
+    adapter.execute_action = lambda request, **kwargs: dispatch(
+        adapter, request, **kwargs
+    )
     scheduler = module.GroupSchedules(
         SimpleNamespace(get_config=lambda _: {"admins_id": admins})
     )
@@ -120,6 +126,24 @@ async def test_cycle_idempotency_and_manual_pause(setup):
 
 
 @pytest.mark.asyncio
+async def test_native_role_pause_keeps_configuration_and_restores_only_future_boundary(
+    setup,
+):
+    scheduler, adapter, _, now, _ = setup
+    await enable(setup)
+    await scheduler.native_permission(adapter, "5", False)
+    assert state(adapter) == ("role_paused", "native_permission_lost")
+    now[0] = epoch("2026-09-23T09:00:00")
+    await scheduler.native_permission(adapter, "5", True)
+    with closing(store.database(adapter)) as db:
+        row = db.execute(
+            "SELECT status,start,end,next_at,next_action FROM schedules"
+        ).fetchone()
+    assert row == ("active", "23:00", "08:00", epoch("2026-09-23T23:00:00"), "mute_all")
+    adapter.execute_moderation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "change", ["same_message", "expired", "user", "session", "pause", "delete"]
 )
@@ -178,7 +202,7 @@ async def test_fail_closed(setup, fault):
     elif fault == "unknown":
 
         async def unknown(*args, scheduled_check):
-            scheduled_check()
+            await scheduled_check()
             return {"status": "unknown"}
 
         adapter.execute_moderation.side_effect = unknown
@@ -222,9 +246,13 @@ async def test_real_wrapper_serializes_manual_and_schedule(setup, manual_first):
     entered, release = asyncio.Event(), asyncio.Event()
     operations = []
 
-    async def upstream(operation, action, *args, scheduled_check=None):
+    async def upstream(
+        operation, action, *args, scheduled_check=None, action_check=None
+    ):
+        if action_check:
+            await action_check()
         if scheduled_check:
-            scheduled_check()
+            await scheduled_check()
         operations.append(operation)
         entered.set()
         await release.wait()
@@ -261,7 +289,7 @@ async def test_cancelled_claim_survives_restart(setup):
     entered = asyncio.Event()
 
     async def pending(*args, scheduled_check):
-        scheduled_check()
+        await scheduled_check()
         entered.set()
         await asyncio.Event().wait()
 
@@ -295,3 +323,90 @@ async def test_future_schedule_survives_startup_and_repeated_migration(setup):
     adapter.connection_state = "online"
     await scheduler.tick(adapter)
     adapter.execute_moderation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["owner", "grant", "account", "offline"])
+async def test_busy_schedule_preview_rechecks_authority(setup, tmp_path, change):
+    scheduler, adapter, event, _, admins = setup
+    with closing(store.database(adapter)):
+        pass
+    blocker = sqlite3.connect(tmp_path / "schedules.sqlite3")
+    blocker.execute("BEGIN IMMEDIATE")
+    work = asyncio.create_task(scheduler.command(event, "5", "定时禁言", "23:00 08:00"))
+    try:
+        await asyncio.sleep(0.03)
+        assert not work.done()
+        if change == "owner":
+            admins.clear()
+        elif change == "grant":
+            adapter.config["moderation"]["permissions"] = {}
+        elif change == "account":
+            adapter.account = "other"
+        else:
+            adapter.connection_state = "offline"
+        blocker.rollback()
+        with pytest.raises(ProtocolError):
+            await asyncio.wait_for(work, 3)
+        assert blocker.execute("SELECT COUNT(*) FROM confirmations").fetchone() == (0,)
+        adapter.execute_moderation.assert_not_awaited()
+    finally:
+        blocker.rollback()
+        blocker.close()
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change", ["account", "grant", "revision", "disabled", "cancel"]
+)
+async def test_manual_override_writer_wait_never_pauses_stale_schedule(
+    setup, tmp_path, change
+):
+    from astrbot.core.platform.sources.wangshangliao.adapter import WangshangliaoAdapter
+
+    _, adapter, _, _, _ = setup
+    await enable(setup)
+    with closing(store.database(adapter)) as db, db:
+        db.execute(
+            "INSERT INTO schedules SELECT 'another',group_id,owner,session,start,end,zone,"
+            "version,status,next_at,next_action,error FROM schedules WHERE account='1'"
+        )
+    upstream = adapter._execute_moderation = AsyncMock(
+        return_value={"status": "accepted"}
+    )
+    adapter.execute_moderation = WangshangliaoAdapter.execute_moderation.__get__(
+        adapter
+    )
+    blocker = sqlite3.connect(tmp_path / "schedules.sqlite3")
+    blocker.execute("BEGIN IMMEDIATE")
+    work = asyncio.create_task(adapter.execute_moderation("manual", "mute_all", 5))
+    try:
+        await asyncio.sleep(0.03)
+        assert not work.done()
+        if change == "account":
+            adapter.account = "another"
+        elif change == "grant":
+            adapter.config["moderation"]["permissions"] = {}
+        elif change == "revision":
+            adapter.config["_business_revision"] = "changed"
+        elif change == "disabled":
+            adapter.config["enable"] = False
+        else:
+            work.cancel()
+            await asyncio.sleep(0)
+        blocker.rollback()
+        with pytest.raises(
+            asyncio.CancelledError if change == "cancel" else ProtocolError
+        ):
+            await asyncio.wait_for(work, 3)
+        assert blocker.execute(
+            "SELECT account,status,error FROM schedules ORDER BY account"
+        ).fetchall() == [("1", "active", ""), ("another", "active", "")]
+        upstream.assert_not_awaited()
+    finally:
+        blocker.rollback()
+        blocker.close()
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)

@@ -16,8 +16,8 @@ from scripts.provision_wsl_business_knowledge import API
 
 SENDER = "wangshangliao_0acde7ec"
 RECEIVER = "wangshangliao_3cf3b038"
-USER = "20000001"
-BOT = "20000002"
+USER = "31846829"
+BOT = "9798577"
 GROUP = "1143980"
 
 

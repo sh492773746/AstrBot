@@ -20,7 +20,8 @@ SOURCE_ID = "eceef1f1-0ada-4144-ac49-ac07c1681e37"
 SOURCE_NAME = "大海传媒超级机器人-8b5578bc81a0-使用知识"
 PROFILE_ID = "cba0c0a2-f0f6-4edb-b7e1-1d656fc9a7f1"
 PROFILE_NAME = "旺商聊群管配置文件"
-TARGET_NAME = "旺商聊·大海传媒业务客服知识"
+LEGACY_TARGET_NAME = "旺商聊·大海传媒业务客服知识"
+TARGET_NAME = LEGACY_TARGET_NAME + "·20261012"
 SOURCE_DOCUMENTS = {
     "客服补充-直播会议与机器人制作-自然表达修订.md",
     "客服资料-20260923-彩金修订.md",
@@ -30,12 +31,19 @@ RETRIEVAL_CHECKS = (
     ("怎么联系大海和简单", "@dahai855"),
     ("直播网页入口在哪里", "userId=68475611160680765&guildId=444"),
     ("大海传媒几点开播", "每晚8点"),
-    ("机器人制作找谁", "@example_owner"),
+    ("机器人制作找谁", "@dh114514"),
     ("茶水和代言费是什么币种", "平台彩金"),
     ("100个直属充值门槛和茶水奖励", "| 100 | 5万 | 388 | 388 |"),
     ("机器人能查充值流水确认达标吗", "人工"),
     ("会议号和会议密码是什么", "没有独立会议"),
     ("大海兼职群有哪些岗位和薪资", "未提供"),
+    ("邀请统计为什么没有算上退群重新拉进来的人", "不重复计入"),
+    ("统计起点之前我拉的人算吗", "不补算"),
+    ("每人奖励显示管理员未设置奖励是什么意思", "没有开启"),
+    ("私聊昨天邀请好友记录怎么查询", "北京时间昨日00:00"),
+    ("回复1 我拉了谁需要去群里吗", "私聊支持本人邀请名单"),
+    ("拉人代理商价是看邀请者还是被邀请者", "被邀请成员"),
+    ("显示已结账但没有收到转账怎么回事", "结账员在账本登记"),
 )
 
 
@@ -161,7 +169,11 @@ def provision(api: API, *, apply: bool):
         raise RuntimeError("Source business documents missing")
     profiles = api.profiles()
     original = profiles[PROFILE_ID]
-    if original.get("kb_names") not in ([SOURCE_NAME], [TARGET_NAME]):
+    if original.get("kb_names") not in (
+        [SOURCE_NAME],
+        [LEGACY_TARGET_NAME],
+        [TARGET_NAME],
+    ):
         raise RuntimeError("Unexpected existing knowledge binding; review required")
     print(
         json.dumps(
@@ -220,7 +232,8 @@ def provision(api: API, *, apply: bool):
                 "name": TARGET_NAME,
                 "description": (
                     "大海传媒业务客服：导航、公开联系人、直播、机器人制作及"
-                    "代理奖励人工核验；来源2026-09-23，非实时公告，不含功能玩法。"
+                    "代理奖励人工核验；返现私聊、日期筛选、三小时核验与结账边界"
+                    "更新至2026-10-12，非实时个人账本。"
                 ),
             },
         )

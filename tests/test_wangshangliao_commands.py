@@ -1,9 +1,12 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from astrbot.builtin_stars.wangshangliao_moderation.commands import Commands
+from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
+from tests.fixtures.wsl_actions import bind_action_port
 
 
 @pytest.mark.parametrize(
@@ -61,7 +64,9 @@ async def test_selection_expiry_and_isolation(monkeypatch):
     )
     commands = Commands()
     assert "1. 大海兼职群" in await commands.run(event, "群列表")
-    assert "当前已选群：大海兼职群" == await commands.run(event, "选择群 1")
+    selected = await commands.run(event, "选择群 1")
+    assert selected.startswith("当前已选群：大海兼职群")
+    assert "不用先选菜单" in selected and "定时发言" in selected
     assert next(iter(commands.selections.values()))["group"] == "5"
     event.unified_msg_origin = "bot:private:3"
     assert "过期" in await commands.run(event, "选择群 1")
@@ -182,6 +187,25 @@ async def test_group_fixed_actions_no_longer_require_self_mention(command, actio
         ),
         execute_moderation=AsyncMock(return_value={"status": "accepted"}),
     )
+    bind_action_port(adapter)
+    if action == "unmute":
+        roster = {
+            "complete": True,
+            "groupMemberInfo": [
+                {"userId": "1", "nimId": "901", "groupRole": "GROUP_ROLE_ADMIN"},
+                {"userId": "3", "nimId": "903", "groupRole": "GROUP_ROLE_MEMBER"},
+            ],
+        }
+        adapter.get_moderation_members.return_value = roster
+        adapter.groups = {"5": "905"}
+        adapter.business = SimpleNamespace(request=AsyncMock(return_value=roster))
+        adapter.nim = SimpleNamespace(
+            get_team_muted_members=AsyncMock(return_value={"903"})
+        )
+        adapter.config["moderation"] = {
+            "enabled": True,
+            "permissions": {"5": ["unmute"]},
+        }
     event = SimpleNamespace(
         is_private_chat=lambda: False,
         is_admin=lambda: True,
@@ -195,12 +219,91 @@ async def test_group_fixed_actions_no_longer_require_self_mention(command, actio
     response = await Commands().run(event, command)
     assert ("已受理" if action in {"mute", "unmute"} else "服务端已接受") in response
     if action == "mute":
-        assert adapter.execute_moderation.call_args.kwargs == {"minutes": 30}
+        assert adapter.execute_moderation.call_args.kwargs["minutes"] == 30
         assert "30" in response and "尚未确认" not in response
     assert adapter.execute_moderation.call_args.args[1] == action
     event.is_admin = lambda: False
     assert await Commands().run(event, command) == "无权限"
     assert adapter.execute_moderation.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_revocation_while_action_waits_prevents_submission():
+    entered, release = asyncio.Event(), asyncio.Event()
+    authority = {"admin": True}
+    submitted = []
+
+    async def execute(*args, action_check, **kwargs):
+        entered.set()
+        await release.wait()
+        await action_check()
+        submitted.append(args)
+        return {"status": "accepted"}
+
+    adapter = SimpleNamespace(
+        account="1",
+        config={"enabled_groups": ["5"]},
+        execute_moderation=AsyncMock(side_effect=execute),
+    )
+    bind_action_port(adapter)
+    event = SimpleNamespace(
+        is_private_chat=lambda: False,
+        is_admin=lambda: authority["admin"],
+        platform=adapter,
+        get_sender_id=lambda: "2",
+        get_group_id=lambda: "5",
+        unified_msg_origin="bot:group:5",
+        message_obj=SimpleNamespace(message_id="m"),
+    )
+    work = asyncio.create_task(Commands().run(event, "公告 Test"))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        authority["admin"] = False
+        release.set()
+        with pytest.raises(ProtocolError, match="command_admin_revoked"):
+            await asyncio.wait_for(work, 1)
+        assert submitted == []
+    finally:
+        release.set()
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "progressive,manual_only", [(False, False), (True, False), (False, True)]
+)
+async def test_legacy_auto_kick_rule_text_does_not_promise_removal(
+    progressive, manual_only
+):
+    adapter = SimpleNamespace(
+        account="1",
+        config={
+            "enabled_groups": ["5"],
+            "moderation": {
+                "auto_kick": {"5": True},
+                "kick_keywords": ["old"],
+                "progressive_mute": progressive,
+                "manual_kick_only": manual_only,
+            },
+        },
+    )
+    event = SimpleNamespace(
+        is_private_chat=lambda: True,
+        is_admin=lambda: True,
+        platform=adapter,
+        get_sender_id=lambda: "2",
+        get_group_id=lambda: "5",
+        unified_msg_origin="bot:private:2",
+    )
+    result = await Commands().run(event, "规则")
+    assert "自动踢出已停用" in result
+    assert "私聊预览并确认" in result
+    assert "第四次" not in result
+    if progressive:
+        assert "前三次确认违规仅撤回并警告" in result
+    if manual_only:
+        assert "旧踢出关键词不触发自动处罚" in result
 
 
 @pytest.mark.asyncio
@@ -245,6 +348,7 @@ async def test_byte_bounded_member_pages_keep_snapshot_targets():
         get_moderation_members=AsyncMock(return_value={"groupMemberInfo": roster}),
         execute_moderation=AsyncMock(return_value={"status": "accepted"}),
     )
+    bind_action_port(adapter)
     event = SimpleNamespace(
         is_private_chat=lambda: True,
         is_admin=lambda: True,
@@ -278,6 +382,7 @@ async def test_private_snapshot_mute_duration_and_member_permission(duration):
         ),
         execute_moderation=AsyncMock(return_value={"status": "accepted"}),
     )
+    bind_action_port(adapter)
     event = SimpleNamespace(
         is_private_chat=lambda: True,
         is_admin=lambda: True,
@@ -294,7 +399,7 @@ async def test_private_snapshot_mute_duration_and_member_permission(duration):
     assert adapter.execute_moderation.await_count == int(accepted)
     if accepted:
         minutes = int(duration) if duration else 30
-        assert adapter.execute_moderation.await_args.kwargs == {"minutes": minutes}
+        assert adapter.execute_moderation.await_args.kwargs["minutes"] == minutes
         assert result == f"禁言已受理：{minutes} 分钟。"
     event.is_admin = lambda: False
     assert await commands.run(event, "禁言 1" + duration) == "无权限"
@@ -322,3 +427,45 @@ async def test_missing_counter_table_is_empty(tmp_path, monkeypatch):
         get_group_id=lambda: "5",
     )
     assert await Commands().run(event, "违规计数") == "暂无记录。"
+
+
+@pytest.mark.asyncio
+async def test_violation_counter_has_no_retired_kick_threshold(tmp_path, monkeypatch):
+    import sqlite3
+
+    from astrbot.builtin_stars.wangshangliao_moderation import commands as module
+
+    monkeypatch.setattr(module, "instance_dir", lambda _: tmp_path)
+    with sqlite3.connect(tmp_path / "moderation.sqlite3") as db:
+        db.execute(
+            "CREATE TABLE content_violations(account TEXT,group_id TEXT,"
+            "sender TEXT,category TEXT,status TEXT,observed REAL)"
+        )
+        db.execute(
+            "CREATE TABLE automatic_mutes(account TEXT,group_id TEXT,"
+            "member TEXT,closed INTEGER,status TEXT)"
+        )
+        db.executemany(
+            "INSERT INTO automatic_mutes VALUES('1','5','3',0,'accepted')",
+            [() for _ in range(4)],
+        )
+    adapter = SimpleNamespace(
+        account="1",
+        config={
+            "id": "bot",
+            "enabled_groups": ["5"],
+            "moderation": {"content_rules_since": 1, "auto_kick": {"5": True}},
+        },
+    )
+    event = SimpleNamespace(
+        is_private_chat=lambda: True,
+        is_admin=lambda: True,
+        platform=adapter,
+        get_sender_id=lambda: "2",
+        unified_msg_origin="b:p:2",
+        get_group_id=lambda: "5",
+    )
+    result = await Commands().run(event, "违规计数")
+    assert "受理 4 次" in result
+    assert "/3" not in result
+    assert "自动处理不踢人" in result

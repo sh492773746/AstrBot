@@ -3,7 +3,6 @@ __pycache__
 .mypy_cache
 .venv*
 .conda/
-uv.lock
 .coverage
 
 # IDE and editors
@@ -40,8 +39,9 @@ astrbot/builtin_stars/python_interpreter/workplace
 tests/astrbot_plugin_openai
 
 # Dashboard
-dashboard/node_modules/
+dashboard/node_modules
 dashboard/dist/
+dashboard/dist-*/
 .pnpm-store/
 package-lock.json
 yarn.lock

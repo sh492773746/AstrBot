@@ -4,9 +4,9 @@
       <div class="bot-editor__headline">
         <img :src="platformIcon" class="bot-editor__icon" alt="bot logo" />
         <div class="bot-editor__headline-copy">
-          <div class="bot-editor__title">{{ draft.id || platform.id }}</div>
+          <div class="bot-editor__title">{{ getPlatformInstanceName(draft.id ? draft : platform, runtimeStat) }}</div>
           <div class="bot-editor__subtitle">
-            {{ draft.type || platform.type }}
+            {{ getPlatformDisplayName(draft.type || platform.type) }}
             <template
               v-if="
                 draft.type === 'wangshangliao' && runtimeStat?.connection_state
@@ -16,6 +16,9 @@
             </template>
             <template v-else-if="runtimeStat?.status">
               · {{ tm(`runtimeStatus.${runtimeStat.status}`) }}
+            </template>
+            <template v-if="draft.type === 'wangshangliao' && draft.account_id">
+              · {{ draft.account_id }}
             </template>
           </div>
         </div>
@@ -30,7 +33,7 @@
           rounded="xl"
           @click="$emit('show-error')"
         >
-          {{ runtimeStat.error_count }} {{ tm("runtimeStatus.errors") }}
+          {{ runtimeStat.error_count }} {{ tm(draft.type === 'wangshangliao' ? "wangshangliao.errorHistory" : "runtimeStatus.errors") }}
         </v-btn>
         <v-btn
           v-if="hasQrPayload"
@@ -110,6 +113,7 @@
           v-if="draft.type === 'wangshangliao'"
           :key="draft.id"
           v-model="draft"
+          :runtime-stat="runtimeStat"
           @group-directory="directory => groupDirectoryNames[directory.instance] = directory.names"
           existing
         />
@@ -443,7 +447,12 @@ import ConfigProfileDrawer from "@/components/config/ConfigProfileDrawer.vue";
 import UmoDisplay from "@/components/shared/UmoDisplay.vue";
 import { ArrowUpRight } from "@lucide/vue";
 import { useModuleI18n } from "@/i18n/composables";
-import { getPlatformIcon, getTutorialLink } from "@/utils/platformUtils";
+import {
+  getPlatformDisplayName,
+  getPlatformIcon,
+  getTutorialLink,
+} from "@/utils/platformUtils";
+import { getPlatformInstanceName } from "@/utils/platformInstanceName.mjs";
 
 const SYSTEM_DEFAULT_CONFIG = "__astrbot_system_default__";
 
@@ -556,8 +565,9 @@ const currentRouteSnapshot = computed(() =>
 
 const isModified = computed(
   () =>
-    JSON.stringify(draft.value) !== initialConfigSnapshot.value ||
-    currentRouteSnapshot.value !== initialRouteSnapshot.value,
+    !loading.value &&
+    (JSON.stringify(draft.value) !== initialConfigSnapshot.value ||
+      currentRouteSnapshot.value !== initialRouteSnapshot.value),
 );
 
 defineExpose({ isModified });
@@ -945,8 +955,11 @@ function showSuccess(message) {
 }
 
 function showError(error) {
-  const message =
+  let message =
     error?.response?.data?.message || error?.message || String(error);
+  if (message === "instance_changed_refresh_required") {
+    message = "机器人设置已被其他页面修改，请刷新后重新编辑。";
+  }
   emit("show-toast", { message, type: "error" });
 }
 </script>
@@ -984,6 +997,7 @@ function showError(error) {
   height: 40px;
   object-fit: contain;
   width: 40px;
+  border-radius: 10px;
 }
 
 .bot-editor__headline-copy {
@@ -993,7 +1007,7 @@ function showError(error) {
 .bot-editor__title {
   font-size: 21px;
   font-weight: 680;
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
   line-height: 1.15;
   overflow-wrap: anywhere;
 }

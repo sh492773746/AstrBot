@@ -205,6 +205,17 @@ class KBSQLiteDatabase:
             result = await session.execute(stmt)
             return result.scalar() or 0
 
+    async def delete_kb_by_id(self, kb_id: str) -> None:
+        """Delete one KB's metadata atomically, including legacy orphan records."""
+        async with self.get_db() as session, session.begin():
+            await session.execute(delete(KBMedia).where(col(KBMedia.kb_id) == kb_id))
+            await session.execute(
+                delete(KBDocument).where(col(KBDocument.kb_id) == kb_id)
+            )
+            await session.execute(
+                delete(KnowledgeBase).where(col(KnowledgeBase.kb_id) == kb_id)
+            )
+
     # ===== 文档查询 =====
 
     async def get_document_by_id(self, doc_id: str) -> KBDocument | None:

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>旺商聊源码发布与完整性清单</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊源码发布与完整性清单</h1>
+<p>更新：2026-10-23。本文定义源码入库和发布检查，不声明已经推送到远端或全部实群验收通过。
+当前规则以<a href="wangshangliao-rules-ai.html">规则与AI分权</a>和对应实现为准；
+加载、配置读回、平台回执及手机观察分别记录于<a href="wangshangliao-maintenance.html">维护说明</a>。</p>
+<h2>必须一并入库的实现</h2>
+<table>
+<thead>
+<tr>
+<th>功能层</th>
+<th>源码与必要配套</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>接入器与可信身份</td>
+<td><code>astrbot/core/platform/sources/wangshangliao/</code>：登录、身份绑定、入站账本、收发、引用和结构化@、目录与权限</td>
+</tr>
+<tr>
+<td>动作与持久化</td>
+<td>同目录中的动作授权、自动审核、递进禁言、黑名单、异步数据库、调度和未知回执保护</td>
+</tr>
+<tr>
+<td>插件与控制面</td>
+<td><code>astrbot/builtin_stars/wangshangliao_moderation/</code>：固定命令、群管理、黑白名单、处罚查询／解禁、私信会话及控制面校验</td>
+</tr>
+<tr>
+<td>图文与定时</td>
+<td>插件中的关键词回复、私有素材、图片录入、去重与安全清理、先图后文、最多3图轮换、三条独立错峰计划</td>
+</tr>
+<tr>
+<td>其他已实现业务</td>
+<td>插件中的开通、只读管理员指引、按群AI与知识、额度、邀请归属、结账登记、活动及其权限和审计模块</td>
+</tr>
+<tr>
+<td>管理页</td>
+<td><code>dashboard/plugin-pages/wangshangliao/</code>及共用组件、引用表、页面入口、Vite和TypeScript配置</td>
+</tr>
+<tr>
+<td>运行依赖</td>
+<td><code>pyproject.toml</code>、依赖说明、<code>dashboard/package.json</code>、包管理锁文件和所有被源码引用的静态资源</td>
+</tr>
+<tr>
+<td>构建与部署</td>
+<td>插件页面构建配置、<code>dashboard/scripts/</code>、必要的<code>hatch_build.py</code>及部署模板；保留源码构建路径</td>
+</tr>
+<tr>
+<td>核心接线</td>
+<td><code>astrbot/core/</code>和<code>astrbot/dashboard/</code>中实际被上述功能使用的平台、组件、管线、后台API和生命周期修改</td>
+</tr>
+<tr>
+<td>回归与使用帮助</td>
+<td>对应Python及前端测试、原始中英文文档、教程生成器、文档目录与AI索引</td>
+</tr>
+</tbody>
+</table>
+<p>不能只提交已跟踪的旧文件：新增模块、管理页、构建入口和测试同样必须核对。
+不能以一份编译后的<code>index.html</code>代替管理页源码，也不能漏掉插件实际加载的自包含页面。
+源码入库不等于本机业务设置或账号状态会在新部署中自动恢复。</p>
+<h2>不上传的内容</h2>
+<ul>
+<li>账号会话、令牌、密码、私钥、生产环境文件、真实联系人和聊天正文。</li>
+<li>运行数据库、账本、素材存储、用户上传图片、测试群截图、日志及私有备份。</li>
+<li><code>node_modules</code>、虚拟环境、缓存、开发工作树及可重建的整站<code>dist</code>目录。</li>
+<li>真实群规则、名单、财务和活动数据导出；公开说明只保留必要的匿名化操作范围。</li>
+</ul>
+<p>产品内置静态资源与离线UI夹具截图不是用户上传素材，应按明确路径白名单纳入；
+不要为解决遗漏而取消所有图片或运行目录的忽略规则。
+提交前扫描候选文件及Git索引，检查高风险文件名、凭据模式、超大文件和缺失的本地引用。
+不要通过查看或复制真实业务数据库来生成文档、测试数据或样例配置。</p>
+<h2>构建与检查</h2>
+<p>在仓库根目录运行文档生成器，在<code>dashboard</code>中使用项目声明的Node及包管理环境：</p>
+<pre><code class="language-sh">node dashboard/scripts/build-wangshangliao-guide.mjs
+.venv/bin/python scripts/build_wsl_guide_pdf.py
+node --test dashboard/scripts/build-wangshangliao-guide.test.mjs
+.venv/bin/pytest -q tests/test_wangshangliao_member_blacklist.py \
+  tests/test_wangshangliao_member_list_removal.py \
+  tests/test_wsl_member_list_storage_20261023.py
+cd dashboard
+npm run build:wangshangliao-page
+npm run typecheck
+</code></pre>
+<p>PDF构建使用本机Playwright Chromium，必要时设置<code>WSL_GUIDE_CHROMIUM</code>。
+教程源、HTML、索引和PDF须同批重建；文档生成不运行真实机器人动作。
+仅更新文档时按维护说明发布静态文档，不重启消息服务。
+接入器／核心代码的加载仍遵守完整重启要求，不能用Git提交或插件热重载替代。</p>
+<h2>Git与验收边界</h2>
+<p>推送前核对目标仓库、可见性、分支、远端历史及提交作者。
+本地独立基线不能强推覆盖已有远端主分支；使用独立分支并保留可审查的差异。
+当远端另含本机没有的插件或新版本时，本机生产快照必须放入独立快照分支，
+不能将整个生产树覆盖到远端主分支，也不能将“快照已上传”说成“主分支已合并”。
+提交后检查Git索引无遗漏；推送后比较本地提交SHA与远端分支SHA，
+并核对关键模块、管理页和文档能从远端提交读取。
+没有远端地址、写权限或可靠回执时，明确报告未上传，不能写成“已提交GitHub”。</p>
+<p>离线回归、构建、配置读回、真实收件、平台处罚和手机显示是不同证据层级。
+2026-10-23 23:39的名单移除与三群7天配置对齐没有执行真实处罚；
+产品默认仍为29天。2026-10-24起，群内原生管理员真实@单个成员或回复可核实的同群原消息发送“黑名单”，
+按当前群配置立即提交禁言；私信和后台加入仅登记，后续可信真实重入才禁言。
+相同命令不重复处罚，未知结果不自动重试，黑名单流程不踢人。
+不要因文档更新或仓库上传而修改正式群规则、启用测试账号、开放窗口或重试未知动作。</p>
+<h2>本轮发布前检查（2026-10-23）</h2>
+<p>以下是独立生产快照的历史检查记录，不是合入远端新版本后的CI结果。
+合入分支保留远端框架版本和其他插件，重新运行完整Python测试、跨平台启动、
+代码检查、前端测试与构建；以该PR及合并提交对应的GitHub Actions状态为准。
+Dashboard流水线同时生成带提交号和SHA-256校验文件的应用包，包含源码、
+自包含旺商聊管理页及整站前端，不包含运行数据库、账号、上传图片或生产配置。
+生成应用包不等于自动部署生产环境，不触发真实群操作。</p>
+<ul>
+<li>旺商聊Python专项：<strong>8129通过、55条件跳过、2条现有弃用警告</strong>，364.16秒。
+条件跳过不算通过，不替代真实平台或手机客户端验收。</li>
+<li>旺商聊前端单元回归：<strong>203通过</strong>；独立文档生成器回归<strong>5通过</strong>。</li>
+<li>插件及完整Dashboard的TypeScript类型检查和隔离输出目录构建通过；
+插件源码重建产物与当时正在提供的自包含管理页逐字节一致。</li>
+<li>接入器和插件范围Ruff检查<strong>0问题</strong>，不据此宣称全仓全部模块都已验收。</li>
+<li><strong>49篇</strong>本地教程、<strong>6份</strong>PDF重建；49篇教程在390px／1440px检查
+无脚本错误、缺图或横向溢出。</li>
+<li>公开副本保留功能源码，仅清空一处旧验证码示例令牌；
+生产账号凭据、运行数据和上传素材未进入副本，生产源码未因脱敏被改写。
+已逐条审查扫描器误报，最终扫描另以原始结果核验。</li>
+</ul>
+<p>上述检查不执行生产重启或群内处罚。最终远端分支、提交SHA及内容清单以实际上传回执为准，
+本文不预写推送成功，也不宣称远端主分支已合并。</p>
+<h2>English Release Boundary</h2>
+<p>Publish the complete adapter, plugin, dashboard sources, required static assets,
+build inputs, shared-core wiring, tests and bilingual documentation together.
+Keep credentials, sessions, production databases, customer content, uploads,
+private backups and rebuildable caches out of Git. Regenerate guides and PDFs
+from maintained sources; built pages do not replace their sources.
+Use a reviewable branch when local and remote histories differ, never force-push
+over a remote default branch. Verify the remote commit SHA and key paths after
+upload. A Git commit or successful build is not live-sanction acceptance.
+The latest seven-day setting is scoped configuration, not the29-day default.</p>
+</body></html>

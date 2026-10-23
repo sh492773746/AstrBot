@@ -16,6 +16,7 @@ async def test_recall_routing_and_no_repeat(tmp_path):
     adapter = SimpleNamespace(
         account="1",
         config={
+            "id": "fixture",
             "enabled_groups": ["5"],
             "moderation": {"enabled": True, "permissions": {"5": ["recall"]}},
         },
@@ -29,10 +30,11 @@ async def test_recall_routing_and_no_repeat(tmp_path):
         diagnostics=SimpleNamespace(emit=Mock()),
         get_moderation_members=AsyncMock(
             return_value={
+                "complete": True,
                 "groupMemberInfo": [
                     {"userId": "1", "groupRole": "GROUP_ROLE_ADMIN"},
                     {"userId": "2", "groupRole": "GROUP_ROLE_MEMBER"},
-                ]
+                ],
             }
         ),
     )

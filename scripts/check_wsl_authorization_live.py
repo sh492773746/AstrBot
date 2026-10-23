@@ -18,8 +18,8 @@ from astrbot.core.platform.sources.wangshangliao.wire import b64
 
 SENDER = "wangshangliao_0acde7ec"
 RECEIVER = "wangshangliao_3cf3b038"
-USER = "20000001"
-BOT = "20000002"
+USER = "31846829"
+BOT = "9798577"
 GROUP = "1143980"
 TARGET = "23691273"
 PROFILE = "cba0c0a2-f0f6-4edb-b7e1-1d656fc9a7f1"

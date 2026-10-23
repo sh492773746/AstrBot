@@ -8,7 +8,7 @@ import os
 import platform
 import zoneinfo
 from collections.abc import Coroutine
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from astrbot.core import logger
@@ -41,6 +41,7 @@ from astrbot.core.platform.astr_message_event import AstrMessageEvent
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.provider import Provider
 from astrbot.core.provider.entities import ProviderRequest
+from astrbot.core.provider.event_guard import AIRequestDenied, guard_provider
 from astrbot.core.provider.register import llm_tools
 from astrbot.core.skills.skill_manager import (
     SkillInfo,
@@ -290,15 +291,19 @@ async def _get_session_conv(
     event: AstrMessageEvent, plugin_context: Context
 ) -> Conversation:
     conv_mgr = plugin_context.conversation_manager
-    umo = event.unified_msg_origin
+    validate_history = getattr(event, "validate_ai_history_access", None)
+    if validate_history is not None:
+        await validate_history()
+    origin = getattr(event, "get_ai_conversation_origin", None)
+    umo = origin(plugin_context) if origin else event.unified_msg_origin
     cid = await conv_mgr.get_curr_conversation_id(umo)
     if not cid:
         cid = await conv_mgr.new_conversation(umo, event.get_platform_id())
     conversation = await conv_mgr.get_conversation(umo, cid)
-    if not conversation:
+    if not conversation or (origin and getattr(conversation, "user_id", None) != umo):
         cid = await conv_mgr.new_conversation(umo, event.get_platform_id())
         conversation = await conv_mgr.get_conversation(umo, cid)
-    if not conversation:
+    if not conversation or (origin and getattr(conversation, "user_id", None) != umo):
         raise RuntimeError("无法创建新的对话。")
     return conversation
 
@@ -317,6 +322,13 @@ async def _apply_kb(
                 query=req.prompt,
                 umo=event.unified_msg_origin,
                 context=plugin_context,
+                **(
+                    {"session_origin": event.get_ai_conversation_origin(plugin_context)}
+                    if callable(
+                        getattr(type(event), "get_ai_conversation_origin", None)
+                    )
+                    else {}
+                ),
             )
             if not kb_result:
                 req.extra_user_content_parts.append(
@@ -562,17 +574,26 @@ async def _ensure_persona_and_skills(
     if not req.conversation:
         return
 
-    (
-        persona_id,
-        persona,
-        _,
-        use_webchat_special_default,
-    ) = await plugin_context.persona_manager.resolve_selected_persona(
-        umo=event.unified_msg_origin,
-        conversation_persona_id=req.conversation.persona_id,
-        platform_name=event.get_platform_name(),
-        provider_settings=cfg,
-    )
+    persona_selector = getattr(event, "get_ai_persona_id", None)
+    if persona_selector is not None:
+        persona_id = persona_selector()
+        persona = plugin_context.persona_manager.get_persona_v3_by_id(persona_id)
+        if persona is None:
+            event.stop_event()
+            raise AIRequestDenied("selected_persona_unavailable")
+        use_webchat_special_default = False
+    else:
+        (
+            persona_id,
+            persona,
+            _,
+            use_webchat_special_default,
+        ) = await plugin_context.persona_manager.resolve_selected_persona(
+            umo=event.unified_msg_origin,
+            conversation_persona_id=req.conversation.persona_id,
+            platform_name=event.get_platform_name(),
+            provider_settings=cfg,
+        )
 
     set_persona_custom_error_message_on_event(
         event, extract_persona_custom_error_message_from_persona(persona)
@@ -595,6 +616,8 @@ async def _ensure_persona_and_skills(
     skill_manager = SkillManager()
     skills = skill_manager.list_skills(active_only=True, runtime=runtime)
     skills = _filter_skills_for_current_config(skills, cfg)
+    if getattr(event, "authorize_ai_tool", None):
+        skills = []
     workspace_skills: list[SkillInfo] = []
     if runtime == "local":
         workspace_root = await _get_workspace_path_for_umo(
@@ -720,6 +743,7 @@ async def _request_img_caption(
     image_urls: list[str],
     plugin_context: Context,
     montage_refs: set[str] | None = None,
+    event: AstrMessageEvent | None = None,
 ) -> str:
     """Describe prepared images, preserving animation semantics.
 
@@ -729,6 +753,7 @@ async def _request_img_caption(
         image_urls: Prepared images in their input order.
         plugin_context: Services used to resolve the caption provider.
         montage_refs: Prepared paths containing animation frame montages.
+        event: Optional event providing request-local model authorization.
 
     Returns:
         The generated image description.
@@ -760,7 +785,7 @@ async def _request_img_caption(
             indices=", ".join(montage_indices)
         )
     logger.debug("Processing image caption with provider: %s", provider_id)
-    llm_resp = await prov.text_chat(
+    llm_resp = await guard_provider(prov, event, "image_caption").text_chat(
         prompt=img_cap_prompt,
         image_urls=image_urls,
     )
@@ -796,6 +821,7 @@ async def _ensure_img_caption(
             req.image_urls,
             plugin_context,
             montage_refs=montage_refs,
+            event=event,
         )
         if caption:
             req.extra_user_content_parts.append(
@@ -1328,7 +1354,7 @@ async def _get_compress_provider(
     if config.llm_compress_provider_id:
         provider = plugin_context.get_provider_by_id(config.llm_compress_provider_id)
         if provider and isinstance(provider, Provider):
-            return provider
+            return guard_provider(provider, event, "compression")
         logger.warning(
             "指定的上下文压缩模型 %s 不可用",
             config.llm_compress_provider_id,
@@ -1336,8 +1362,12 @@ async def _get_compress_provider(
     # fallback: use current chat provider for this session
     if event:
         try:
-            return await plugin_context.get_using_provider_async(
-                umo=event.unified_msg_origin
+            return guard_provider(
+                await plugin_context.get_using_provider_async(
+                    umo=event.unified_msg_origin
+                ),
+                event,
+                "compression",
             )
         except ValueError:
             pass
@@ -1670,6 +1700,9 @@ async def collect_initial_request(
     # ownership until collection succeeds so errors and cancellation can clean up.
     for image_path in attachment_paths:
         event.untrack_temporary_local_file(image_path)
+    if getattr(event, "get_ai_conversation_origin", None):
+        req.conversation = await _get_session_conv(event, plugin_context)
+        req.contexts = json.loads(req.conversation.history)
     return req, quote_image_ref
 
 
@@ -1698,6 +1731,22 @@ async def build_main_agent(
     Returns:
         The configured agent and request, or None when the request is rejected.
     """
+    native_gate = getattr(event, "authorize_ai_tool", None)
+    if native_gate is not None:
+        settings = dict(
+            config.provider_settings
+            or plugin_context.get_config(umo=event.unified_msg_origin).get(
+                "provider_settings", {}
+            )
+        )
+        settings["computer_use_runtime"] = "none"
+        config = replace(
+            config,
+            computer_use_runtime="none",
+            add_cron_tools=False,
+            subagent_orchestrator={},
+            provider_settings=settings,
+        )
     provider = provider or await _select_provider(event, plugin_context)
     if provider is None:
         logger.info("未找到任何对话模型（提供商），跳过 LLM 请求处理。")
@@ -1941,6 +1990,8 @@ async def build_main_agent(
         supports_image=_provider_supports_modality(provider, "image"),
     )
 
+    provider = guard_provider(provider, event)
+    fallback_providers = [guard_provider(p, event) for p in fallback_providers]
     reset_coro = agent_runner.reset(
         provider=provider,
         request=req,

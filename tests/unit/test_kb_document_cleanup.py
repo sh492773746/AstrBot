@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import delete, event
+from sqlmodel import col
 
 from astrbot.core.knowledge_base.kb_db_sqlite import KBSQLiteDatabase
 from astrbot.core.knowledge_base.models import KBDocument, KBMedia, KnowledgeBase
@@ -22,7 +24,10 @@ async def kb_db(tmp_path):
     db = KBSQLiteDatabase(db_path)
     await db.initialize()
     await db.migrate_to_v1()
-    return db
+    try:
+        yield db
+    finally:
+        await db.close()
 
 
 @pytest_asyncio.fixture
@@ -197,3 +202,71 @@ async def test_update_kb_stats_counts_chunks_for_single_kb(kb_db, seeded_kb):
     mock_vec_db.count_documents.assert_awaited_once_with(
         metadata_filter={"kb_id": kb_id1},
     )
+    other = await kb_db.get_kb_by_id(kb_id2)
+    assert other is not None and other.chunk_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("orphaned", [False, True])
+async def test_delete_kb_cleans_its_metadata_without_touching_another_kb(
+    kb_db, seeded_media, orphaned
+):
+    kb_id, doc_id, _ = seeded_media
+    other = KnowledgeBase(kb_name="Keep this KB", embedding_provider_id="test")
+    async with kb_db.get_db() as session, session.begin():
+        session.add(other)
+        await session.flush()
+        other_doc = KBDocument(
+            kb_id=other.kb_id,
+            doc_name="keep.txt",
+            file_type="txt",
+            file_size=10,
+            file_path="",
+        )
+        session.add(other_doc)
+        await session.flush()
+        other_media = KBMedia(
+            kb_id=other.kb_id,
+            doc_id=other_doc.doc_id,
+            media_type="image",
+            file_name="keep.png",
+            file_path="keep.png",
+            file_size=10,
+            mime_type="image/png",
+        )
+        session.add(other_media)
+        if orphaned:
+            await session.execute(
+                delete(KnowledgeBase).where(col(KnowledgeBase.kb_id) == kb_id)
+            )
+    await kb_db.delete_kb_by_id(kb_id)
+    await kb_db.delete_kb_by_id(kb_id)
+    assert await kb_db.get_kb_by_id(kb_id) is None
+    assert await kb_db.get_document_by_id(doc_id) is None
+    assert await kb_db.list_media_by_doc(doc_id) == []
+    assert await kb_db.get_kb_by_id(other.kb_id) is not None
+    assert await kb_db.get_document_by_id(other_doc.doc_id) is not None
+    assert [m.media_id for m in await kb_db.list_media_by_doc(other_doc.doc_id)] == [
+        other_media.media_id
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delete_kb_failure_rolls_back_documents_and_media(kb_db, seeded_media):
+    kb_id, doc_id, media_ids = seeded_media
+
+    def fail_parent_delete(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("DELETE FROM knowledge_bases"):
+            raise RuntimeError("injected deletion failure")
+
+    event.listen(kb_db.engine.sync_engine, "before_cursor_execute", fail_parent_delete)
+    try:
+        with pytest.raises(RuntimeError, match="injected deletion failure"):
+            await kb_db.delete_kb_by_id(kb_id)
+    finally:
+        event.remove(
+            kb_db.engine.sync_engine, "before_cursor_execute", fail_parent_delete
+        )
+    assert await kb_db.get_kb_by_id(kb_id) is not None
+    assert await kb_db.get_document_by_id(doc_id) is not None
+    assert {m.media_id for m in await kb_db.list_media_by_doc(doc_id)} == set(media_ids)

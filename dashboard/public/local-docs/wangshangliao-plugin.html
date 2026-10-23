@@ -6,510 +6,223 @@ h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{w
 table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
 @page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
 </style></head>
-<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊群管与回复插件</h1>
-<p>更新：2026-10-03。<a href="wangshangliao-index.html">文档目录</a>、
-<a href="wangshangliao.html">接入器说明</a>、
-<a href="wangshangliao-testing.html">当前测试与验收</a>。
-日志统一进入 AstrBot 日志面板，详见<a href="wangshangliao-diagnostics.html">日志与排障</a>。
-数据分工、索引、备份回滚和性能验收见<a href="wangshangliao-database.html">数据库与性能维护</a>。</p>
-<h2>私聊 AI 管理工具</h2>
-<p>人格若使用工具白名单，须显式勾选 <code>wsl_private_management</code>；仅注册插件不会覆盖人格工具配置。开发门禁的私聊 AI 测试采用事件级中间回复缓冲，非流式结果合并后发送，避免准备说明先消耗唯一结果回复。窗口关闭后新的工具调用拒绝执行。</p>
-<p>启用支持工具调用的模型后，私聊管理员可使用自然语言查询目录、执行已有固定管理动作，
-或预览规则、活动参数、创建抽奖及每日计划修改。<code>wsl_private_management</code> 仅接受固定动作及独立参数，
-共用命令服务，不把模型输出当命令解析。普通用户与群聊不可使用。管理员身份、
-动作授权和平台原生权限缺一不可。目录快照十分钟有效，重名先追问，未知结果不继续处罚。
-不能修改管理员、动作授权或凭据，不提供任意消息撤回；配置请求本身不执行处罚。
-实现与离线覆盖不等于全部真实模型对话验收通过，当前证据见测试文档。</p>
-<pre><code class="language-mermaid">flowchart TD
-    A[私聊自然语言] --&gt; B[AstrBot 管理员与工具框架]
-    B --&gt; C[插件固定 AI 工具]
-    D[结构化群管命令] --&gt; E[共享命令服务与目录快照]
-    C --&gt; E
-    E --&gt; F[接入器最终授权与身份校验]
-    G[自动违规规则] --&gt; F
-    F --&gt; H[固定平台能力与持久化结果]
-    H --&gt; I[脱敏纯文本回复]
-</code></pre>
-<p>AstrBot 内置插件，为原生旺商聊接入器提供管理命令、自动违规规则，以及 AI 纯文本回复与敏感信息过滤。无需额外安装 Rust 服务。</p>
-<h2>职责与数据流</h2>
-<pre><code class="language-text">旺商聊消息
-  → 原生接入器：登录、收发、身份映射、机器人互斥
-  → AstrBot：会话、管理员身份、命令分发
-      → 群管插件：参数校验、目录选择、违规规则
-          → 接入器固定能力：动作授权、平台权限、幂等、回执
-      → AI：人格、模型、知识库、上下文
-          → 插件：纯文本要求、结果整理、回复脱敏
-  → 接入器发送回复
-</code></pre>
-<p>插件不维护第二套管理员系统，不通过聊天授予权限。平台原生群角色、机器人动作授权和 AstrBot 管理员身份是不同的检查，不能相互替代。</p>
-<h3>架构表</h3>
-<p>管理页新增只读「架构表」和「权限表」。结构化条目位于
-<code>dashboard/plugin-pages/wangshangliao/reference-tables.json</code>；测试核验实现文件存在、
-固定命令无遗漏和无重复、公共群命令与执行服务一致。这些表不增加授权或执行入口。</p>
-<table>
-<thead>
-<tr>
-<th>模块</th>
-<th>实现</th>
-<th>职责与边界</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>原生接入</td>
-<td>接入器 <code>adapter.py</code>、<code>business.py</code>、<code>nim.py</code></td>
-<td>认证、收发及 UID/NIM 映射；不按昵称猜身份</td>
-</tr>
-<tr>
-<td>框架鉴权</td>
-<td><code>waking_check/stage.py</code></td>
-<td>当前会话有效配置 <code>admins_id</code>；群角色、@ 目标不授予身份</td>
-</tr>
-<tr>
-<td>固定命令</td>
-<td><code>syntax.py</code>、<code>commands.py</code></td>
-<td>精确整条识别、公共命令分流、十分钟隔离目录快照；不调用模型</td>
-</tr>
-<tr>
-<td>私聊 AI 工具与草案</td>
-<td><code>main.py</code>、<code>intent.py</code>、<code>ai_config.py</code></td>
-<td>仅管理员私聊；规则/活动参数及开抽预览确认、计划转二次确认；不设置权限</td>
-</tr>
-<tr>
-<td>上下文审核</td>
-<td><code>semantic.py</code>、<code>content_rules.py</code>、插件 <code>policy.py</code></td>
-<td>独立模型审核同群上下文；故障规则兜底，正常和证据不足不罚</td>
-</tr>
-<tr>
-<td>处罚执行与升级</td>
-<td>接入器 <code>moderation.py</code>、<code>automatic.py</code></td>
-<td>最终授权、原生角色、目标身份、幂等与回执；人工禁言不计自动次数</td>
-</tr>
-<tr>
-<td>每日排名</td>
-<td><code>rankings.py</code></td>
-<td>已接收有效消息只读计数、分页、原生 @；不自动派奖</td>
-</tr>
-<tr>
-<td>群抽奖</td>
-<td><code>activities.py</code>、<code>activity_store.py</code></td>
-<td>参数冻结、报名、随机开奖和一次结果发布；不自动付款</td>
-</tr>
-<tr>
-<td>邀请归属与奖励</td>
-<td><code>activities.py</code>、接入器 <code>adapter.py</code>、<code>nim.py</code></td>
-<td>平台归属及去重积分；待审核、历史基线和归属未知不计奖</td>
-</tr>
-<tr>
-<td>每日定时</td>
-<td><code>schedules.py</code></td>
-<td>预览确认、未来边界执行、创建者持续鉴权；暂停和删除不解禁</td>
-</tr>
-<tr>
-<td>成员批量维护</td>
-<td><code>cards.py</code></td>
-<td>名片与封禁／注销清理独立任务；各自授权、保护管理角色、未知回读</td>
-</tr>
-<tr>
-<td>回复与撤回</td>
-<td>接入器 <code>event.py</code>、<code>reply_recall.py</code>、插件 <code>text.py</code></td>
-<td>纯文本、脱敏、原生 @；对应群功能回复受理20秒后撤回，抽奖通知与报名反馈保留</td>
-</tr>
-<tr>
-<td>插件管理页</td>
-<td><code>dashboard.py</code>、页面 <code>App.vue</code></td>
-<td>版本校验、逐群授权与有界审计；JWT + bot 权限，不直接处罚</td>
-</tr>
-<tr>
-<td>持久化与门禁</td>
-<td>接入器 <code>storage.py</code>、<code>test_window.py</code></td>
-<td>按实例保存账本；测试窗口300秒／10条上限，不授予任何管理权限</td>
-</tr>
-</tbody>
-</table>
-<h3>权限表</h3>
-<p>「授权管理员」仅指当前会话有效 AstrBot 配置中的管理员 UID。
-下表的「允许」表示入口允许，不代表平台一定执行成功；还需群启用、回复开关、
-已保存的逐群动作白名单、原生群角色和目标身份校验。只读查询不提交处罚动作。
-管理页显示的是<strong>已保存</strong>动作授权，不把未保存草稿或平台角色未知当作执行许可。</p>
-<table>
-<thead>
-<tr>
-<th>功能</th>
-<th>普通群员·群内</th>
-<th>授权管理员·群内</th>
-<th>普通用户·私聊</th>
-<th>授权管理员·私聊</th>
-<th>额外条件</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>排名、抽奖状态</td>
-<td>允许</td>
-<td>允许</td>
-<td>无权限</td>
-<td>允许</td>
-<td>群回复；私聊先选群</td>
-</tr>
-<tr>
-<td>参加抽奖</td>
-<td>允许</td>
-<td>允许</td>
-<td>无权限</td>
-<td>转活动群报名</td>
-<td>活动开放、资格及去重校验</td>
-</tr>
-<tr>
-<td>我的邀请、邀请奖励</td>
-<td>允许</td>
-<td>允许</td>
-<td>无权限</td>
-<td>允许</td>
-<td>只查本人积分，不付款</td>
-</tr>
-<tr>
-<td>帮助、我的权限、sid</td>
-<td>静默</td>
-<td>静默</td>
-<td>无权限</td>
-<td>允许</td>
-<td>仅私聊，不公开管理员查询数据</td>
-</tr>
-<tr>
-<td>群列表、选群、成员目录、下一页</td>
-<td>静默</td>
-<td>静默</td>
-<td>无权限</td>
-<td>允许</td>
-<td>当前操作者私聊快照，十分钟有效</td>
-</tr>
-<tr>
-<td>能力、规则、违规计数、结果、开发门禁</td>
-<td>静默</td>
-<td>静默</td>
-<td>无权限</td>
-<td>允许</td>
-<td>只读；门禁命令不打开窗口</td>
-</tr>
-<tr>
-<td>禁言</td>
-<td>无权限</td>
-<td>允许</td>
-<td>无权限</td>
-<td>允许</td>
-<td><code>mute</code>；群内真实 @、私聊编号；默认30分钟，无二次确认</td>
-</tr>
-<tr>
-<td>解禁</td>
-<td>无权限</td>
-<td>允许</td>
-<td>无权限</td>
-<td>允许</td>
-<td><code>unmute</code>；唯一目标，无二次确认</td>
-</tr>
-<tr>
-<td>踢出、确认踢出</td>
-<td>无权限</td>
-<td>按规则模式</td>
-<td>无权限</td>
-<td>允许</td>
-<td><code>kick</code>；业务规则模式必须私聊预览和新消息确认，旧模式保留固定动作</td>
-</tr>
-<tr>
-<td>公告</td>
-<td>无权限</td>
-<td>允许</td>
-<td>无权限</td>
-<td>允许</td>
-<td><code>announce</code> 与原生群管理角色</td>
-</tr>
-<tr>
-<td>全员禁言、解除全员禁言</td>
-<td>无权限</td>
-<td>允许</td>
-<td>无权限</td>
-<td>允许</td>
-<td>分别需 <code>mute_all</code>／<code>unmute_all</code>；先暂停定时</td>
-</tr>
-<tr>
-<td>抽奖设置、中奖名单、抽奖记录</td>
-<td>静默</td>
-<td>静默</td>
-<td>无权限</td>
-<td>允许</td>
-<td>当前选群的设置及历史</td>
-</tr>
-<tr>
-<td>奖品、人数、倒计时、上限、邀请门槛、联系人</td>
-<td>静默</td>
-<td>静默</td>
-<td>无权限</td>
-<td>允许</td>
-<td>下期参数；已开活动不可改</td>
-</tr>
-<tr>
-<td>开启抽奖、立即开奖、取消抽奖</td>
-<td>静默</td>
-<td>静默</td>
-<td>无权限</td>
-<td>允许</td>
-<td>群主动发送与回复授权；不自动付款</td>
-</tr>
-<tr>
-<td>邀请奖励设置、开启、暂停、状态、记录</td>
-<td>静默</td>
-<td>静默</td>
-<td>无权限</td>
-<td>允许</td>
-<td>统一积分；启用建立基线，待审核不计奖</td>
-</tr>
-<tr>
-<td>定时预览、确认、状态、暂停、恢复、删除</td>
-<td>静默</td>
-<td>静默</td>
-<td>无权限</td>
-<td>允许</td>
-<td>创建／恢复需两个全员动作授权和确认；运行持续检查创建者</td>
-</tr>
-<tr>
-<td>自然语言管理</td>
-<td>无工具</td>
-<td>无工具</td>
-<td>无权限</td>
-<td>AI 工具</td>
-<td>模型／人格启用工具；所需动作各自授权</td>
-</tr>
-<tr>
-<td>成员名片维护</td>
-<td>无入口</td>
-<td>无入口</td>
-<td>无权限</td>
-<td>AI 工具或机器人页</td>
-<td><code>rename</code>；单人自定义或批量规范先预览再确认；自动扫描按群另行开启</td>
-</tr>
-<tr>
-<td>封禁／注销账号清理</td>
-<td>无入口</td>
-<td>无入口</td>
-<td>无入口</td>
-<td>无聊天入口</td>
-<td>仅机器人页；<code>cleanup</code> 不继承 <code>kick</code> 或 <code>rename</code></td>
-</tr>
-</tbody>
-</table>
-<p>Dashboard 登录权限与聊天管理员分开：插件页须 JWT 和 <code>bot</code> 范围，聊天管理员不能
-据此绕过面板认证。主动发送只授权目的地，不授予群员管理员身份。自动内容审核不要求
-被审成员是管理员；定时及活动任务持续核验创建者，测试窗口不能替代上述任何授权。
-当前接收机器人启用 <code>manual_kick_only</code>，AI及自动规则不踢人。其他未启用此限制的兼容实例，自动踢出另需逐群开关及 <code>mute</code>、<code>kick</code>、<code>recall</code>，三次自动禁言受理后，第四次确认违规才升级。
-功能回复撤回只操作机器人自己的对应消息，不因此授予撤回成员消息的权限。</p>
-<h2>配置入口</h2>
-<h3>管理员私聊名片控制</h3>
-<p>已支持自然语言开关目标群的自动名片规范，以及指定普通成员改为自定义群名片。
-只改群名片，不改账号昵称；群主、平台管理员、已接入机器人和不可用账号继续受保护。
-例如“帮我关闭大海兼职群的自动规范名片”，AI通过
-<code>config_preview</code> 的 <code>target=moderation</code>、<code>changes={&quot;card_auto&quot;:false}</code>
-显示本群开关前后值，管理员在同一私聊发送原样 <code>确认设置 &lt;码&gt;</code> 才保存。
-开启需要已有 <code>rename</code> 授权；关闭不恢复历史名片，不会修改其他群开关或授予权限。</p>
-<p>例如“把大海兼职群里张三的群名片改成值班小张”：先选群、查询成员、重名澄清，
-AI用当前页编号调用 <code>card_member_preview</code>，不能凭昵称猜UID。返回原名、新名、
-目标群和预览ID，收到另一条明确“确认修改名片”后才通过 <code>card_execute</code> 排队。
-执行前重新核验成员映射、原名、当前管理员和平台权限；任务运行中撤权也停止。
-预览十分钟有效，不可跨账号、管理员或私聊确认；未知结果先查 <code>card_status</code>，不盲重试。
-后台接受请求不等于改名成功，须回读确认。管理页“对话示例 → 私聊与权限 → 名片设置”
-提供静态示例，不会发送消息或改配置。审核模型、关键词等仍为实例级，本次未改成逐群配置。</p>
-<p>当前接收机器人已启用「仅手动确认踢出」限制 <code>manual_kick_only</code>，关闭全部自动踢出。
-AI踢出请求、AI重新开启自动踢出、旧自动踢出意图均被拒绝；管理员手动私聊预览并
-另发确认仍可执行。该限制不能由AI配置工具修改。后续自动违规处理保持撤回＋最多60分钟禁言。</p>
-<p>审核配置提供「递进禁言＋撤回（5分钟 / 15分钟 / 1小时）」开关。
-开启后首次确认违规即撤回并禁言，后续按本轮受理次数升级，不再先警告。
-当前接收机器人第三次及后续只禁言最多60分钟，不踢出。只有未启用 <code>manual_kick_only</code>
-的兼容实例，才可能在第四次确认违规时撤回并踢出；还需逐群自动踢出开启且授权完整，
-不会在禁言到期时自动踢出。关闭踢出时后续禁言维持60分钟。
-撤回与禁言回执分别记录，失败不冒充成功，未知结果不重试处罚。
-关键词在AI审核中作为规则数据，关闭AI或模型失败才走字面规则兜底；
-当前限制下，递进模式的踢出关键词只参与违规判断，不触发踢人；兼容自动踢出分支也不能跳级。详情见<a href="wangshangliao-content-rules.html">审核规则</a>。</p>
-<p>新增「插件 → 旺商聊群管 → 旺商聊管理」页面，集中编辑 AI 审核、规则兜底、回复设置及当前群授权，并查看自动禁言累计与有界近期审计。机器人配置入口继续保留；登录、启用群、主动发送和成员批量任务仍在机器人页面。页面使用 AstrBot 插件消息桥和已有配置保存服务，不返回登录凭证、不提供直接处罚或重试按钮，不修改处罚计数。切群与刷新会提醒未保存修改，保存带配置版本校验。</p>
-<p>页面源码位于 <code>dashboard/plugin-pages/wangshangliao</code>，运行 <code>npm run build:wangshangliao-page</code> 生成内置插件 <code>pages/management</code> 静态资源，完整 Dashboard 构建会同时执行。已安装插件列表自动发现页面，无需单独导航配置。API 同时核验插件存活状态与 Dashboard 机器人权限；插件卸载后保留路由的调用拒绝。</p>
-<p>管理页九个视图包括审核配置、群授权、活动控制、定时管理、处罚记录、群内命令、
-对话示例、架构表、权限表。对话示例仅演示，不发消息或保存；参考表只读。
-活动控制保存下期参数/邀请积分，启停与开奖仍在管理员私聊；定时管理仅看/暂停。</p>
-<h3>管理页 API</h3>
-<p>前缀 <code>/api/v1/plugins/extensions/wangshangliao_moderation/</code>，
-必须插件存活、Dashboard JWT 与 <code>bot</code> 范围；独立插件/API Key 凭据不能代替。
-不要把聊天管理员 UID 当后台认证，也不要在文档展示 JWT。</p>
-<table>
-<thead>
-<tr>
-<th>路径</th>
-<th>方法</th>
-<th>参数及边界</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>settings</code></td>
-<td>GET</td>
-<td>实例公开配置、运行状态、提供商ID/模型名、<code>revision</code>；不返回登录凭据</td>
-</tr>
-<tr>
-<td><code>settings</code></td>
-<td>POST</td>
-<td><code>bot_id</code>、<code>revision</code>、<code>group_id</code>、可编辑 <code>policy</code>/<code>group</code>、<code>reply_private</code>、<code>admin_provider_id</code>；只补丁当前群及编辑的实例字段</td>
-</tr>
-<tr>
-<td><code>audit</code></td>
-<td>GET</td>
-<td><code>bot_id</code>、<code>group_id</code>；自动次数、近期动作、语义/规则有界记录，不修改计数</td>
-</tr>
-<tr>
-<td><code>invitations</code></td>
-<td>GET</td>
-<td><code>bot_id</code>、<code>group_id</code>、可选 <code>member_id</code>；<code>source=members/records</code>，记录另支持 <code>pending_only</code>、<code>last_id</code></td>
-</tr>
-<tr>
-<td><code>activities</code></td>
-<td>GET</td>
-<td><code>bot_id</code>、<code>group_id</code>；下期设置、邀请状态、近期活动与独立活动 <code>revision</code></td>
-</tr>
-<tr>
-<td><code>activities</code></td>
-<td>POST</td>
-<td><code>bot_id</code>、<code>group_id</code>、活动 <code>revision</code>、完整六字段 <code>lottery</code>、<code>invite_rate</code>；不启停，不付款</td>
-</tr>
-<tr>
-<td><code>schedule</code></td>
-<td>GET</td>
-<td><code>bot_id</code>、<code>group_id</code>；计划、近期执行与变更记录，未创建返回空计划</td>
-</tr>
-<tr>
-<td><code>schedule</code></td>
-<td>POST</td>
-<td><code>bot_id</code>、<code>group_id</code>、当前整数 <code>version</code>、<code>action=&quot;pause&quot;</code>；不解禁，不创建或恢复</td>
-</tr>
-</tbody>
-</table>
-<p><code>group</code> 可编辑字段为 <code>permissions</code>、<code>auto_kick</code>、<code>card_auto</code>、<code>reply</code>、
-<code>customer_provider_id</code>，客服模型实际保存为群ID到模型ID字符串映射。
-设置、活动与定时版本不能互用。400无效参数、403认证/权限不足、404实例不存在、
-409版本或活动冻结冲突、503离线；先刷新核对，不能强制覆盖或借重试提交处罚。</p>
-<p>生产页面将 Vue、样式和官方插件消息桥打包进同一 HTML，使用经典脚本；不从隔离 iframe 的 opaque origin 再请求需登录的模块或样式，兼容 Cloudflare Access 等认证代理。iframe 的 sandbox 权限保持不变，不启用 <code>allow-same-origin</code>。可用 <code>scripts/check_wangshangliao_page.py --access-cookie-guard --browser &lt;Chromium 路径&gt;</code> 重现登录 Cookie 门禁并检查页面；交互保存使用模拟响应，不修改生产配置。</p>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊群管</h1>
+<p>2026-10-22入口简化：独立结账页移至「旺商聊管理 → 活动与财务 → 邀请记账／结账」，
+旧域名、DNS、专属Access、隧道路由和独立6186服务已移除，不再跳转；
+旧网页、Unix RPC及独立构建目标已清理。原现金账本与历史付款保留。后台仅总控登录；
+普通群主及旧Access结账员不继承全局后台权限。默认「菜单／帮助」只显示五类常用操作，
+规则、关键词回复、定时广告、抽奖与邀请奖励优先在插件表单配置；直接固定命令仍保留，
+旧配置树仅主动发送「完整菜单」查看。必要的本人扣费同意和付款确认不省略。</p>
+<p>2026-10-23：关键词回复可上传1张静态配图（≤5MB），先图后文，也可只发图片；
+配图可预览、替换、删除，仍按机器人／群隔离并遵守冷却，不自动录入普通私信图片。
+定时区新增「三条消息·每小时循环」：选择三个独立计划或新建关闭的草稿，
+默认每小时00／20／40分、间隔20分钟，每条60分钟一次，可分别修改分钟。
+应用时间仅更新草稿，不自动启用或保存；需预览确认，原配置不会因部署改写。
+三条错峰是三个独立计划，不是同一计划一次发三图；新计划须分别启用并预览确认保存。
+图片私有保存、按本机器人本群去重隔离，不用公共图床，不跨群或跨机器人复用。
+关键词配图只在插件表单维护，没有新增关键词私信收图命令；没有后台权限请负责人在本群配图。</p>
+<p>定时发言支持每计划最多3张静态图片（JPG／PNG／WebP，原图每张≤5MB），
+按顺序每次轮换1张，可排序、替换、删除，支持纯图片或搭配文字链接。
+搭配文案时先发本次图片，回执确认成功后再发文案；图片未确认时不继续发文案。
+在「群管理→规则→关键词回复与定时发言」上传并预览确认；
+私信先「群列表」「选择群 序号」，随后直接「关键词回复」「定时发言」查询，
+旧「定时广告」兼容；私信选群后发「广告图片 计划序号」，再发一张静态图片，
+收到预览后发送「确认广告 预览令牌」保存。每张确认后再录下一张；
+未指定计划、超时、取消、切群或撤权不录入，群内图片不会被当作配置。
+后台支持选择文件、粘贴和拖入；显示读取／上传状态，读取15秒或上传45秒未完成时恢复操作，
+超时后的迟到结果不加入计划，不自动重试。管理员指引使用现行命令声明；
+未知或部分发送暂停核对，不自动补发，也不推动下一张。
+关键词和定时正文上限仍为2000字，使用原生分段回复避免长中文／表情文字超包；
+图片和全部段落都确认才算整次成功，文字中途未知不重发，已发图片也不重发。
+成员核验后错过时刻超过10秒
+跳过本次，等下一计划；确认删除计划同时清理对应轮换状态，历史发送回执保留。
+上传失败先核对静态格式、5MB限制、机器人／群和权限，等控件恢复后核对是否已有素材／保存回执，
+再重新选图、预览确认；未知结果暂停，不重复上传或确认。选错群先取消再重新选群。
+无权限先查「我的权限」，请群主核验原生角色、请服务负责人核对本群授权，不共享后台密码。</p>
+<h2>当前黑名单命令（2026-10-24）</h2>
+<p>群内已授权的原生群主／管理员，真正@一位成员发送<code>黑名单</code>，或回复其可核实的同群原消息发送<code>黑名单</code>，
+登记后<strong>立即提交本机器人本群设置时长的禁言，不踢人</strong>；可信真实重入仍禁言。
+私信／后台添加只登记，仍按搜索、预览、本人确认操作。
+重复投递不续封，未知回执暂停核对、不重试，不补执行旧命令；移除不解禁，解禁不移除名单。
+管理员账号即使也是本机配置的机器人，也只可通过身份、当前群授权和版本匹配的固定黑名单入口；
+最新完整目录、原生角色及目标保护仍须复查，不放开普通机器人对话或AI执行。
+普通24小时禁言上限不变，黑名单仅限独立持久化意图的群内命令／可信重入路径。
+下面2026-10-23的部署和验收记录为历史，旧“群内添加不立即处罚”已被本节取代。</p>
+<p>English: verified scoped native administrator mentions/replies followed by <code>黑名单</code>
+now enroll and immediately submit the configured mute, without kicking. DM/dashboard
+enrollment alone remains non-punitive. Duplicate deliveries never renew a mute;
+unknown outcomes require review without retry. Older dated evidence below is historical.</p>
+<h2>本群黑名单历史流程（2026-10-23）</h2>
+<p><strong>本轮互斥／移除已于北京时间2026-10-23 22:59:23完整重启加载</strong>（UTC14:59:23，
+PID4071721，active/running，NRestarts=0）。22:59:51保护快照22面／config全同，无业务配置改动；
+Python1794 passed／2 skipped／1条audioop警告，UI177 unit／9 browser通过。
+真实群成员未新增／移除／处罚，旧12条needs_review保留不重试；无真实满链路压测。
+性能短摘要见<a href="wangshangliao-maintenance.html">维护最新记录</a>，不作生产承诺；文档不向dist同步。
+新增黑／白名单同bot＋group＋UID互斥：已在另一名单时明确提示先移除，不自动转移或删除。
+历史重叠记录保留、黑名单优先、两份名单分别移除；移除黑名单不解禁，不连带移除白名单。
+退群／改名可用对应名单行移除图标→预览→本人确认，或移除模式按当前名／保存旧名／精确UID查已有记录。
+添加仍按真实当前成员目录名称搜索，不能UID盲添加；权限、普通禁言24小时及黑名单重入时长不变。
+下方20:02:56等加载／回归证据属于此前时长版本，不覆盖本次补修。</p>
+<p>北京时间2026-10-23 <strong>20:02:56完整重启已加载</strong>（PID3317496，NRestarts=0），在线配置流程通过；
+<strong>本轮真实新重入／禁言未测</strong>，不改写下方旧证据，不把离线及配置流程通过写成真实处罚通过。
+名单只限同一机器人账号和同一群。群内须核验发送者原生群主／管理员身份及本群管理授权，
+原生回复一名目标消息后发<code>黑名单</code>，或客户端真正@一名目标加<code>黑名单</code>；
+只登记，<strong>不立即处罚</strong>当前成员，既不踢出也不禁言。不收昵称、UID、手打@、复制引用或多人目标。
+查看用无原生目标的<code>黑名单</code>或<code>黑名单列表</code>；群内移除同样须原生回复／真正@单一目标加<code>移除黑名单</code>。</p>
+<p>私信每步单独发送：<code>群列表</code> → <code>选择群 序号</code> → <code>添加黑名单 名称</code>或<code>移除黑名单 名称</code>搜索 →
+<code>选择黑名单 本次搜索结果序号</code> → 核对本机器人／本群／唯一身份预览 → 本人另发<code>确认黑名单 预览令牌</code>。
+移除搜索也接受保存旧名／精确UID，仅定位已有名单，不作为添加入口。
+时长命令为<code>黑名单禁言时长 N分钟</code>／<code>黑名单禁言时长 N小时</code>／<code>黑名单禁言时长 N天</code>，
+例如<code>黑名单禁言时长 29天</code>。群内默认当前群，私信须先选群；默认<strong>29天＝41760分钟</strong>，
+换算后仅接受<strong>1..41760整分钟</strong>，拒绝0、负数、超限或不足整分钟的值。
+核对机器人、群和分钟数预览后，本人另发<code>确认黑名单 token</code>（本次预览令牌）保存；
+设置按<strong>机器人＋群</strong>隔离，切群、取消、撤权或版本变化须重新预览，不复用旧令牌。
+已有总控后台权限者在<strong>群管理 → 规则 → 黑名单设置</strong>读取／搜索、预览、本人确认提交；
+时长也须预览确认，读取和预览不写入。
+无权限先<code>我的权限</code>并联系群主／负责人核对原生角色和本群授权；选错群先<code>取消</code>，重新选群、搜索预览，
+不复用旧令牌、不按同名猜身份、不共享总控密码。</p>
+<p>列入后<strong>每次可信真实重新入群直接禁言并留群，不再踢人</strong>，首次即使用本机器人本群已确认时长。
+普通发言、重复通知、重启或重复添加不触发处罚或续封。修改时长<strong>只影响确认后新的真实重入</strong>，
+不自动重设已有禁言、不追罚、不重放历史通知，不设置每日续封。
+未知回执暂停核对，不重试或清历史。群主／管理员／机器人受保护，只有精确授权隔离fixture例外，
+不推广为正式群例外；白名单不能覆盖黑名单。移除不解禁；解禁也不移除黑名单。
+普通广告／刷屏自动踢人仍禁止，普通禁言24小时上限不变，1..41760分钟仅限此黑名单重入路径。
+管理员指引只能说明，不能执行、代确认、查询实时名单或声称成功。</p>
+<p><strong>旧→新</strong>：前三次真实重入成功踢出、第四次起固定29天禁言 → 首次起每次真实重入直接禁言、时长可设；
+成功踢出计数驱动阶段 → 历史计数仅保留证据，不再驱动新处罚；
+后台「规则 → 黑名单」→「规则 → 黑名单设置」。当日较早三踢实测保留原日期，不冒充新规则通过。
+用户回复「看得见」仅补充对应展示的手机显示确认，不证明29天后的真实到期已经发生。
+最终13文件1229 passed／2 skipped／1条audioop警告，后补权限提示257 passed／2 skipped；
+覆盖重叠不累加。旧通知不套新时长、最后同步权限fence、确证未提交不误记unknown均已验证，
+真正unknown保留不重试。20:10:45测试群1459282完成在线41760→60→41760
+预览／提交／读回，预览不写入；首次两次普通成员读取被409保护拒绝、无写入，已补具体提示。
+20:24:00保护复核完成，其他保护面匹配，测试217→220及已审计鼎峰后台并发version4／5保留；
+不宣称tenants原始整体hash全同或正式群从未变动。
+本轮无新踢人／禁言实际处罚；本次文档更新不执行生产操作，重新生成教程／索引／PDF但不向dist同步。
+完整加载、恢复及保护证据见<a href="wangshangliao-maintenance.html">维护记录</a>。
+完整中英规范见<a href="wangshangliao-rules-ai.html">规则与AI分权</a>及
+<a href="wangshangliao-rules-ai-en.html">English</a>。</p>
+<p>English: the new contract never kicks blacklisted members. Every trusted actual
+rejoin directly mutes and retains them; adding an entry never immediately punishes.
+The exclusivity/removal fix loaded at22:59:23 Beijing time, October23,2026,
+after a full restart (PID4071721, NRestarts=0). Protection snapshots matched at22:59:51.
+Python1,794 passed/2 skipped/1 audioop warning; UI177 unit/9 browser passed.
+No real member changes, sanctions or real full-chain load testing occurred;
+12 existing needs_review records remain without retry. Passive/isolated performance
+results have limited scope, not production guarantees. Under the loaded contract,
+new additions are exclusive by bot/group/UID and require removal from the other
+list first, without automatic transfers/deletions. Historical overlaps remain with
+blacklist precedence and separate removal. Departed/renamed entries can be removed
+by list-row icon/preview/confirmation or removal-mode current name/saved old name/
+exact UID. Addition still searches the real current roster by name, never blindly
+by UID. Removing one list never deletes the other entry or unmutes. Earlier loading
+and regression evidence below predates this fix; current evidence is in the latest maintenance record.
+The default is 29 days (41,760 minutes), configurable per bot/group to 1..41760
+whole minutes with <code>黑名单禁言时长 N分钟</code> / <code>N小时</code> / <code>N天</code>, then personal
+<code>确认黑名单 token</code>. Select the group first in DMs. Dashboard:
+Group Management → Rules → Blacklist Settings. Changes affect future rejoins
+only, never reset existing mutes or apply retrospective sanctions. The ordinary
+24-hour mute cap is unchanged. Historical three-kick evidence and the user's
+phone-display confirmation do not establish new-rule acceptance or future expiry.
+Code loaded at20:02:56 Beijing time, October23,2026 (PID3317496, NRestarts=0);
+online configuration passed and restored41,760 minutes. Offline suites passed
+with overlapping coverage; no new actual rejoin/mute acceptance was performed.
+The20:24:00 protection review accounted for the test version increment and
+concurrent Dingfeng dashboard saves, preserving them without rollback; other
+protected surfaces match, not all raw tenants hashes. Documentation regeneration
+does not sync dist; final synchronization and served-hash verification remain
+with the owner.</p>
+<blockquote>
+<p>新版本配置归属见<a href="wangshangliao-rules-ai.html">规则与AI分权</a>
+（<a href="wangshangliao-rules-ai-en.html">English</a>）。
+该规范取代本文旧群管热群模式及群知识写权限。新客服按已核验开通者跨群跨机器人共用，
+旧账号客服及显式指定负责人保留兼容；新群首次复制默认业务模板，所有者私信编辑本人资料，
+关键词／广告为非AI规则；PC28只读工具只给热群，整轮最多一次工具、两次独立计费模型请求。
+三类AI配置与人格均固定绑定，页面不提供跨业务选择，后端也拒绝串绑；
+客服参数跟随当前业务归属，旧客服不根据群管理员昵称推测归属或自动改名。</p>
+</blockquote>
+<p>同步日期：2026-10-22。本文对应当前公共合并模式，继续使用现有AstrBot及已登录账号。
+不启动独立公共机器人进程，不提供自然语言管理工具，不提供删除好友功能。</p>
+<h2>2026-10-22 管理入口与红包抽奖</h2>
+<ul>
+<li>「开通」只处理开通、管理员归属、暂停及正式AI准入；「规则」独立处理审核、
+成员白名单、关键词回复与定时广告。</li>
+<li>「玩家福利抽奖」与「邀请奖励」独立保存。红包设总金额、1至100位参加人数，
+分普通红包／拼手气；只有勾选邀请抽奖才使用邀请门槛，关闭时门槛清零。</li>
+<li>群内发送<code>参与玩家福利抽奖</code>报名，旧<code>参加抽奖</code>兼容。新活动开场固定完整份额，
+红包须倒计时结束后统一公布，满员或管理员命令不提前开奖。
+普通红包尽量均分且名单随机排序，拼手气按金额从大到小展示，不改变各人随机金额。
+开奖只分配已领取份额，未领取金额单独记录为退回（未支出），不重新分摊；
+100元10份普通红包、只报5人，各10元，剩余50元未支出。无人或取消全部未支出。
+可填最多500字多行备注，随本期公告／状态／结果展示；头像昵称等要求由管理员核验。
+本期冻结、结果持久化，未知回执不重抽，不重算更新前已开启或已开奖活动。
+金额仅为待发放与未支出记录，不连接支付宝、不真实扣款退款、不自动转账或修改财务结账账本。</li>
+<li>处罚页实时读取平台「当前禁言成员」，单成员解禁须预览确认、重新核权，
+受理后另查平台名单；历史违规不清除。</li>
+<li>入口映射、两种金额模式及受控试点范围见
+<a href="wangshangliao-start.html">中文教程</a> /
+<a href="wangshangliao-start-en.html">English guide</a>。</li>
+</ul>
+<h2>阅读入口</h2>
+<ul>
+<li>
+<p><a href="wangshangliao-component-runtime.html">组件治理试点</a> / <a href="wangshangliao-component-runtime-en.html">English</a></p>
+</li>
+<li>
+<p><a href="wangshangliao-index.html">文档目录</a></p>
+</li>
+<li>
+<p><a href="wangshangliao-start.html">从零开始</a></p>
+</li>
+<li>
+<p><a href="wangshangliao-command-tree.html">命令树文字版</a></p>
+</li>
+<li>
+<p><a href="wangshangliao-architecture-permissions.html">当前架构与权限</a></p>
+</li>
+<li>
+<p><a href="wangshangliao-acceptance-20261015.html">历史验收与追加证据</a></p>
+</li>
+<li>
+<p><a href="wangshangliao-testing.html">测试与验收</a></p>
+</li>
+<li>
+<p><a href="wangshangliao-scripts.html">维护脚本分类</a></p>
+</li>
+</ul>
+<p>使用指南与架构表为当前说明；按日期保留的旧报告不代表现行状态，不照旧恢复AI工具。
+当前62个插件模块与31个原生接入模块映射到页面25个职责分区，权限表覆盖七类角色。
+2026-10-20加载后只读核对：大蛤账号<code>43506527</code>在线；群<code>1516387</code>最新群AI配置为version 5，
+<code>enabled/mentions/autonomous/idle</code>均为<code>false</code>，加载前后配置未变。
+现行DeepSeek模型／凭证预算绑定已确认，同日早先15:47:56北京时间的自主回复受理记录保留为历史；
+不代表当前AI开启、新版本实群验收、供应商额度耗尽拒绝或手机显示已通过。</p>
+<h2>开通与使用</h2>
 <ol>
-<li>在「消息平台／创建或编辑机器人」完成登录、保存连接，选择启用的群。</li>
-<li>按需要开启私聊回复、各群回复和群管动作授权。普通群 AI 回复仍须明确 @ 当前机器人。</li>
-<li>首次管理员从有效配置 <code>admins_id</code> 的已有私聊列表按名字选择并保存，授权依据仍是 UID。
-非管理员私聊 <code>sid</code> 也被拒绝，不能依赖该命令自助获取首次管理权限。</li>
-<li>自动违规规则在机器人配置中设置；未配置的动作不自动获得权限。</li>
+<li>由真实群主或平台群管理员邀请机器人入群，邀请者本人发送<code>开通</code>。</li>
+<li>开通后将机器人设为平台群管理员，才可正常使用本群功能。</li>
+<li>发<code>菜单</code>，逐层回复数字；<code>0</code>返回上一步，「取消」退出并放弃未提交内容。</li>
+<li>群内管理绑定当前群，无须加好友、@机器人或私聊选群。</li>
+<li>私聊发<code>群列表</code>、<code>选择群 1</code>，只能看见和操作本人获授权的群。</li>
 </ol>
-<p>连接在线不代表授权已配置，也不代表每项平台动作都能执行。</p>
-<h2>三路 AI 与自然语言配置</h2>
-<table>
-<thead>
-<tr>
-<th>路由</th>
-<th>模型范围</th>
-<th>人格和知识库</th>
-<th>旺商聊管理工具</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>群内 @ 客服（含管理员）</td>
-<td>逐群 <code>ai_routes.groups[业务群ID]</code> 模型ID字符串</td>
-<td>原群会话</td>
-<td>不提供</td>
-</tr>
-<tr>
-<td>普通私聊客服</td>
-<td>当前私聊会话模型</td>
-<td>原私聊配置</td>
-<td>不提供</td>
-</tr>
-<tr>
-<td>管理员私聊群管</td>
-<td>实例 <code>ai_routes.admin_provider_id</code></td>
-<td>原私聊配置</td>
-<td>鉴权后提供</td>
-</tr>
-<tr>
-<td>群内容审核</td>
-<td>实例 <code>moderation.semantic.provider_id</code></td>
-<td>独立提示，不继承人格/知识库</td>
-<td><code>tools=None</code></td>
-</tr>
-</tbody>
-</table>
-<p>插件页选择三个模型，空选择沿用对应会话模型，并显示来源。不可用配置不应被当作
-正常管理完成；工具白名单仍需允许 <code>wsl_private_management</code>。客服隔离针对本工具，
-不意味着清空人格中所有其他工具。固定命令优先识别，不经过模型。</p>
-<p>管理员示例（每次单独发送；以下为交互格式，不是真实执行记录）：</p>
-<pre><code class="language-text">管理员：把大海兼职群下期抽奖改为18元猪脚饭，3个名额，10分钟，最多15人，联系人秦铭。
-机器人：预览目标群、修改前后参数；在本私聊发送：确认设置 &lt;确认码&gt;
-管理员：确认设置 &lt;确认码&gt;
-机器人：保存结果。仅修改下期参数，没有开启抽奖。
-管理员：开启抽奖
-机器人：群通知受理后开放报名，并返回本期信息。
-</code></pre>
-<p>也可直接说“在大海兼职群创建并开启抽奖，奖品……，中奖人数……，倒计时……
-分钟，参与上限……，邀请门槛……，联系人……”。AI 使用 <code>lottery_start</code> 草案，
-明确展示确认后会开启活动并通知群，再等待独立的 <code>确认设置 &lt;确认码&gt;</code>。
-确认前不会写入活动；确认时复核管理员、群授权、配置版本和当前活动状态。
-只有活动账本为 <code>open</code> 才返回 <code>started</code>；通知未知返回 <code>not_confirmed</code>，不能盲目重试。
-立即开奖、取消和邀请奖励启停仍使用既有固定命令；自动到时开奖继续有效。</p>
-<p><code>确认设置</code> 经模型调用 <code>config_confirm</code>，不是 <code>syntax.py</code> 固定命令；因此需要模型和
-工具仍可用。失败时重新预览，或使用固定设置命令，不猜码、不连续重试。
-例外是已撤权用户的精确确认请求：程序直接返回“无权限”并丢弃旧草案，不再调用模型；
-群内精确确认静默处理。客服请求发现旧管理工具历史时，新建客服会话并保留原管理员会话，
-不沿用先前管理员能力承诺。开抽预览和开启结果以程序校验结果展示，不依赖模型改写。
-草案600秒有效、一次使用，按实例、登录账号、管理员 UID、私聊 UMO 隔离；
-同一操作者新预览替换旧草案，重启丢弃。确认前复核权限与完整机器人配置版本，
-活动参数还核对活动版本及群锁；他人、跨私聊、过期、重复或旧版本确认不写入。</p>
-<table>
-<thead>
-<tr>
-<th>配置区</th>
-<th>允许修改</th>
-<th>真实影响范围与限制</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>moderation</code></td>
-<td><code>enabled</code>、<code>automation_enabled</code>、<code>recall_enabled</code>、<code>progressive_mute</code>、<code>cooldown_seconds</code>、<code>mute_keywords</code>、<code>kick_keywords</code>、<code>semantic</code>、<code>auto_kick</code>、<code>card_auto</code></td>
-<td><code>auto_kick</code> 和 <code>card_auto</code> 仅改目标群；其他为实例级，可能影响其他已启用群。开启自动名片需已有 <code>rename</code> 授权；<code>manual_kick_only</code> 下不能开启自动踢出</td>
-</tr>
-<tr>
-<td><code>semantic</code></td>
-<td><code>enabled</code>、<code>provider_id</code>、<code>timeout_seconds</code>、<code>context_limit</code></td>
-<td>模型须已配置，复用策略校验；不允许任意提示/工具</td>
-</tr>
-<tr>
-<td><code>activities</code></td>
-<td><code>lottery</code> 参数及 <code>invite_rate</code></td>
-<td>当前群下期设置，不开启/开奖/取消；活动开放期间抽奖参数冻结</td>
-</tr>
-<tr>
-<td><code>lottery_start</code></td>
-<td><code>lottery</code> 参数</td>
-<td>确认后保存参数并发送群通知；通知受理才开放报名；不改邀请奖励，不绕过主动发送授权</td>
-</tr>
-<tr>
-<td><code>schedule</code></td>
-<td><code>start</code>、<code>end</code></td>
-<td><code>HH:MM</code>，不相等；确认设置后仅生成定时预览，另发 <code>确认定时 &lt;新码&gt;</code> 才保存</td>
-</tr>
-</tbody>
-</table>
-<p>禁止字段包括管理员身份、权限授权、账号凭据、主动发送目的地及其他未知字段。
-<code>manual_kick_only</code> 是受保护字段，不能由 AI 改写。当前接收机器人只自动撤回和递进禁言；
-保留的自动踢出兼容分支也不能自然语言改成任意次数。<code>card_auto</code> 关闭不恢复旧名片，
-开启不等于为目标群授予改名权限。
-计划的双阶段确认与直接固定命令流程见<a href="wangshangliao-schedules.html">每日计划</a>。</p>
+<p>群内固定命令、本人菜单会话输入及对应机器人回复统一安排12秒撤回；
+原命令仍需平台群管理及撤回权限。普通聊天、私聊、AI闲聊及主动通知不受影响。</p>
+<p><code>管理 </code>前缀可省略。业务授权绑定平台、机器人账号和群；实例ID只作运行绑定。
+菜单可见不代表具备执行权限。权限、成员关系和配置版本在实际提交前复查；
+撤权、暂停或离群后，旧选择及旧确认不能继续操作。</p>
+<p>普通成员邀请机器人会触发受控退群。来源无法证明时保持未开通；
+开通码不能绕过真实邀请和邀请者平台管理身份，不将群主、审批人或通知发送者当邀请者。
+同群重拉不能夺取原有管理归属。</p>
+<p>机器人不是本群平台管理员时，本群功能统一提示先设置管理员；自动审核及任务停止，配置保留。
+确认踢出后清理本账号本群工作数据，保留财务、原管理归属、最小审计与未知操作回执。
+断线、接口错误和暂缺目录不触发删除。</p>
 <h2>完整命令索引</h2>
-<p>每条必须是单行完整命令；不解析一条消息中的多项操作。旧斜杠/群管写法为兼容别名。
-群内公共命令不要求管理员；全部私聊固定命令只向有效管理员开放。
-群内私聊专用固定命令静默消费，不发“请转私聊”提示、不执行、不落入 AI；
-旧斜杠/帮助入口同样静默。群内 @ 不提供管理配置工具。</p>
+<p>专属客服选择（仅私聊）：<code>客服列表</code>、<code>选择客服 序号</code>、<code>退出客服</code>。
+首次原生开通按已核验身份建立专属客服，后续本人跨群、跨机器人共用配置和业务资料；
+原有群不猜测归属或自动迁移。所有者通过客服设置固定流程编辑本人资料，不授予全局后台。</p>
+<p>这是固定解析器词汇索引，旧兼容词并不全部在公共入口开放。
+每条消息只发送一条完整命令；多项操作、任意代码和自定义正则不执行。
+公共服务额外识别<code>开通</code>、<code>认领 群号 开通码</code>、<code>/chat</code>和<code>/exit</code>。
+权限矩阵与页面对照数据保持一致，不能用旧<code>admins_id</code>直接取得公共群管理权。</p>
 <table>
 <thead>
 <tr>
@@ -519,32 +232,80 @@ AI踢出请求、AI重新开启自动踢出、旧自动踢出意图均被拒绝�
 </thead>
 <tbody>
 <tr>
-<td>帮助/身份</td>
-<td><code>帮助</code>（<code>群管帮助</code>、<code>help</code>）、<code>我的权限</code>（<code>sid</code>）</td>
+<td>普通私聊</td>
+<td><code>私聊菜单</code>（<code>菜单</code>）；<code>我的邀请</code>查询本人现金返现</td>
+</tr>
+<tr>
+<td>私聊财务</td>
+<td><code>结账</code>、<code>结账结果</code>、<code>确认已付款 &lt;六位确认码&gt;</code>、<code>确认修改 &lt;六位确认码&gt;</code>；仅总控单独授予的逐群财务身份，不继承群管理权限；不自动转账</td>
+</tr>
+<tr>
+<td>帮助／身份</td>
+<td><code>帮助</code>（<code>群管帮助</code>、<code>help</code>）、<code>我的权限</code>（兼容别名<code>sid</code>，同样执行身份和权限检查）</td>
 </tr>
 <tr>
 <td>目录</td>
-<td><code>群列表</code>、<code>选择群 &lt;编号&gt;</code>、<code>成员列表</code>、<code>成员搜索 &lt;名称&gt;</code>、<code>下一页</code></td>
+<td><code>群列表</code>、<code>选择群 &lt;编号&gt;</code>、<code>成员列表</code>、<code>成员搜索 &lt;名称&gt;</code>、<code>禁言名单</code>（仅当前被禁言成员）、<code>下一页</code></td>
 </tr>
 <tr>
 <td>状态</td>
-<td><code>能力</code>、<code>规则</code>、<code>违规计数</code>、<code>结果 &lt;操作ID&gt;</code>、<code>开发门禁</code></td>
+<td><code>能力</code>、<code>规则</code>、<code>违规计数</code>、<code>结果 &lt;操作ID&gt;</code>、<code>开发门禁</code>（旧兼容入口，不向公共用户开放）</td>
 </tr>
 <tr>
 <td>单人管理</td>
-<td><code>禁言 &lt;真实@或私聊编号&gt; [分钟]</code>、<code>解禁 &lt;目标&gt;</code>、<code>踢出 &lt;目标&gt;</code>、<code>确认踢出 &lt;码&gt;</code></td>
+<td><code>踢出 &lt;目标&gt;</code>、<code>确认踢出 &lt;码&gt;</code>；<code>解禁 &lt;目标&gt;</code>（别名<code>解除禁言</code>）恢复，仅本群授权管理及<code>unmute</code>授权；旧<code>禁言 &lt;目标&gt;</code>仍仅提示使用App，不执行</td>
 </tr>
 <tr>
 <td>群管理</td>
-<td><code>公告 &lt;内容&gt;</code>、<code>全员禁言</code>、<code>解除全员禁言</code></td>
+<td><code>公告 &lt;内容&gt;</code>；旧<code>全员禁言</code>、<code>解除全员禁言</code>仅提示使用App，不执行；定时功能保留</td>
+</tr>
+<tr>
+<td>管理授权</td>
+<td><code>管理员列表</code>、<code>添加管理员 &lt;真实@或编号&gt;</code>、<code>移除管理员 &lt;真实@或编号&gt;</code>、<code>确认授权 &lt;码&gt;</code></td>
+</tr>
+<tr>
+<td>群规则</td>
+<td><code>开启广告审核</code>、<code>关闭广告审核</code>、<code>开启防刷屏</code>、<code>关闭防刷屏</code>、<code>添加关键词 &lt;文本&gt;</code>、<code>修改关键词 &lt;序号&gt; &lt;新词&gt;</code>、<code>删除关键词 &lt;序号&gt;</code></td>
+</tr>
+<tr>
+<td>本群发言白名单</td>
+<td><code>白名单</code>、<code>添加白名单 &lt;成员名称&gt;</code>、<code>移除白名单 &lt;当前名／保存旧名／精确UID&gt;</code>、<code>选择白名单 &lt;本次搜索结果序号&gt;</code>、<code>确认白名单 &lt;预览令牌&gt;</code>；添加按本群真实目录名称搜索，移除仅查已有记录，预览后本人确认；互斥／移除22:59:23已加载</td>
+</tr>
+<tr>
+<td>本群黑名单</td>
+<td><code>黑名单</code>、<code>黑名单列表</code>、<code>移除黑名单</code>；群内原生回复／真正@单一目标添加后立即按本群时长禁言，不踢人；私信先选群，<code>添加黑名单 &lt;名称&gt;</code>／<code>移除黑名单 &lt;名称&gt;</code>搜索、<code>选择黑名单 &lt;搜索结果序号&gt;</code>、本人<code>确认黑名单 &lt;预览令牌&gt;</code>；私信／后台添加只登记，可信真实重入仍禁言</td>
+</tr>
+<tr>
+<td>黑名单重入禁言时长（已加载／在线配置通过）</td>
+<td><code>黑名单禁言时长 N分钟</code>／<code>黑名单禁言时长 N小时</code>／<code>黑名单禁言时长 N天</code>；私信先选群，预览后本人<code>确认黑名单 token</code>；仅影响本机器人本群后续真实重入，不重设已有禁言或追罚</td>
+</tr>
+<tr>
+<td>组合规则</td>
+<td><code>添加规则 &lt;名称&gt; | &lt;词一&gt; | &lt;词二&gt;</code>、<code>修改规则 &lt;序号&gt; &lt;名称&gt; | &lt;词一&gt; | &lt;词二&gt;</code>、<code>启用规则 &lt;序号&gt;</code>、<code>停用规则 &lt;序号&gt;</code>、<code>删除规则 &lt;序号&gt;</code>、<code>测试规则 &lt;文字&gt;</code>；每群20条，每条2—5个词同时出现，测试不处罚</td>
+</tr>
+<tr>
+<td>群聊天AI</td>
+<td><code>热群状态</code>、<code>开启热群</code>、<code>关闭热群</code>、<code>开启群聊回复</code>、<code>关闭群聊回复</code>、<code>开启冷场发话</code>、<code>关闭冷场发话</code>、<code>开启自主接话</code>、<code>关闭自主接话</code>；菜单9逐层开关，仅本群授权管理</td>
+</tr>
+<tr>
+<td>套餐与扣费</td>
+<td>私聊<code>我的套餐</code>（别名<code>我的额度</code>）、<code>套餐说明</code>；本群管理<code>本群额度</code>、<code>确认本群扣费</code>，本人预览确认</td>
+</tr>
+<tr>
+<td>个人知识</td>
+<td><code>我的知识 [页码]</code>、<code>查看我的知识 &lt;序号&gt;</code>、<code>我的知识容量</code>；<code>添加我的知识 &lt;标题&gt; | &lt;正文&gt;</code>、<code>修改我的知识 &lt;序号&gt; &lt;标题&gt; | &lt;正文&gt;</code>、<code>删除我的知识 &lt;序号&gt;</code>仅本人私聊菜单8→5预览确认执行</td>
+</tr>
+<tr>
+<td>群知识</td>
+<td><code>本群知识 [页码]</code>、<code>查看群知识 &lt;序号&gt;</code>、<code>本群知识容量</code>、<code>本群知识范围</code>；<code>添加群知识 &lt;标题&gt; | &lt;正文&gt;</code>、<code>修改群知识 &lt;序号&gt; &lt;标题&gt; | &lt;正文&gt;</code>、<code>删除群知识 &lt;序号&gt;</code>、<code>群知识引用 &lt;回复或热群&gt; &lt;开启或关闭&gt;</code>仅本群管理菜单9→7预览确认执行</td>
 </tr>
 <tr>
 <td>排名</td>
-<td><code>排名 [页码]</code>；别名 <code>今日排名</code>、<code>排行</code>、<code>今日排行</code></td>
+<td><code>排名 [页码]</code>；别名<code>今日排名</code>、<code>排行</code>、<code>今日排行</code></td>
 </tr>
 <tr>
 <td>群员活动</td>
-<td><code>参加抽奖</code>、<code>抽奖状态</code>、<code>我的邀请</code>、<code>邀请奖励</code></td>
+<td><code>参加抽奖</code>、<code>抽奖状态</code>、<code>我的邀请</code>、<code>邀请奖励</code>、<code>我的邀请明细</code>（<code>我拉了谁</code>）、<code>邀请统计说明</code>（<code>为什么没统计</code>）</td>
 </tr>
 <tr>
 <td>抽奖设置</td>
@@ -552,11 +313,11 @@ AI踢出请求、AI重新开启自动踢出、旧自动踢出意图均被拒绝�
 </tr>
 <tr>
 <td>抽奖控制</td>
-<td><code>开启抽奖</code>、<code>立即开奖</code>、<code>取消抽奖</code>、<code>中奖名单 [期数]</code>、<code>抽奖记录</code></td>
+<td><code>开启抽奖</code>、<code>立即开奖</code>（红包仅到期后可执行）、<code>取消抽奖</code>、<code>中奖名单 [期数]</code>、<code>抽奖记录</code></td>
 </tr>
 <tr>
-<td>邀请设置/控制</td>
-<td><code>设置邀请奖励 &lt;数值&gt;</code>、<code>开启邀请奖励</code>、<code>暂停邀请奖励</code>、<code>邀请奖励状态</code>、<code>邀请记录</code></td>
+<td>邀请设置／控制</td>
+<td><code>开启邀请统计</code>、<code>暂停邀请统计</code>、<code>设置邀请奖励 &lt;数值&gt;</code>、<code>开启邀请奖励</code>、<code>暂停邀请奖励</code>、<code>邀请奖励状态</code>、<code>邀请记录</code>、<code>邀请统计</code></td>
 </tr>
 <tr>
 <td>定时</td>
@@ -564,8 +325,10 @@ AI踢出请求、AI重新开启自动踢出、旧自动踢出意图均被拒绝�
 </tr>
 </tbody>
 </table>
-<p>自然语言的 <code>确认设置 &lt;码&gt;</code> 不是上表固定解析器入口。名片任务为 AI 工具/后台入口，
-封禁注销清理只在后台；不存在聊天 <code>/link</code> 专属邀请链接或任意成员消息撤回命令。</p>
+<p>菜单中的<code>99</code>为成员下一页；裸<code>0</code>始终返回，上限或门槛输入「不限」代表0。
+目录序号十分钟有效，绑定账号、发送者、群和对话，不能跨群复用。
+踢出、授权、定时等操作仍需要同对话新消息确认。管理员最多20人，不能删除最后一人。
+没有任意成员消息撤回命令、聊天名片批量任务、好友删除命令或AI写入入口。</p>
 <h3>数值范围</h3>
 <table>
 <thead>
@@ -579,7 +342,12 @@ AI踢出请求、AI重新开启自动踢出、旧自动踢出意图均被拒绝�
 <tr>
 <td>手动聊天禁言</td>
 <td>30</td>
-<td>整数1至1440分钟；内部自动/维护禁言沿用1分钟</td>
+<td>整数1至1440分钟；内部自动／维护禁言沿用1分钟</td>
+</tr>
+<tr>
+<td>黑名单重入禁言时长（已加载／在线配置通过）</td>
+<td>41760（29天）</td>
+<td>1..41760整分钟；分钟／小时／天换算后校验，按机器人＋群隔离，预览本人确认，只影响后续真实重入</td>
 </tr>
 <tr>
 <td>中奖人数</td>
@@ -604,214 +372,314 @@ AI踢出请求、AI重新开启自动踢出、旧自动踢出意图均被拒绝�
 <tr>
 <td>每人邀请奖励</td>
 <td>0</td>
-<td>0至999999.99，最多两位小数，积分而非自动现金转账</td>
+<td>0至999999.99，最多两位小数；活动积分，不是自动现金转账</td>
 </tr>
 </tbody>
 </table>
-<p>奖品/联系人须非空单行文本、符合128字符清理和512字节上限。
-示例“每拉3人才能报名”
-对应邀请门槛3，不等于每3人自动报名；群员仍需发送 <code>参加抽奖</code>。
-15名有效参与者、3人中奖才是20.00%；到期实际人数不足时按真实人数计算，
-不伪造固定中奖率，不因满员提前开奖。</p>
-<h2>邀请归属只读查询</h2>
-<p>新增插件 API <code>GET /api/v1/plugins/extensions/wangshangliao_moderation/invitations</code>，
-仅允许管理面板 JWT 的机器人权限，参数为 <code>bot_id</code>、已启用群的业务 <code>group_id</code>，
-以及可选的精确业务 <code>member_id</code>。使用现有在线连接调用 NIM <code>getTeamMemberInvitorAccid</code>
-查询，并通过完整成员名单转换邀请者身份，不按昵称、显示群号或聊天正文猜测。</p>
-<pre><code class="language-sh">.venv/bin/python scripts/check_wangshangliao_invitations.py --bot BOT_ID --group BUSINESS_GROUP_ID
-</code></pre>
-<p>每次最多查询200名当前成员，同群查询间隔30秒。<code>attributed</code> 表示平台返回邀请者且能够核对其
-当前成员身份；<code>inviter_not_in_roster</code> 保留平台返回的 NIM 邀请者账号，但不猜测业务账号；
-<code>unattributed</code> 表示平台未提供归属。这是当前名单快照，不是实时入群事件、历史拉人账本、
-审核结果或活动有效次数，也不认定历史成员属于本期新人。待审核或未在名单中的账号不能
-报告为成功入群。接口不批准申请、不发送邀请、不发消息、不处罚、不修改配置或账本。</p>
-<h3>待审核邀请与历史记录</h3>
-<p>同一接口增加 <code>source=records</code>，通过当前机器人业务会话读取
-<code>/v1/group/get-apply-logs</code>。首读参数必须为 <code>{}</code>；续读可用平台返回的
-<code>{&quot;lastId&quot;:&quot;...&quot;}</code>。该业务接口不接受 <code>groupId</code>、<code>v</code> 或分页参数，返回的账号可见日志
-必须在服务端过滤为已启用的目标群，再输出白名单字段，不能原样暴露其他群的记录。</p>
-<pre><code class="language-sh"># Only account-visible pending invitations in this enabled group.
-.venv/bin/python scripts/check_wangshangliao_invitations.py --bot BOT_ID --group BUSINESS_GROUP_ID --records
-# Include historical and unknown-state invitations; still not successful-join credits.
-.venv/bin/python scripts/check_wangshangliao_invitations.py --bot BOT_ID --group BUSINESS_GROUP_ID --records --all-states
-</code></pre>
-<p><code>member_id</code> 来自日志的 <code>applicant.userId</code>，<code>inviter_id</code> 来自 <code>inviter.userId</code>，
-不要求双方仍在群里。显示账号和 NIM 账号分别保留在 <code>*_account_id</code>、<code>*_nim_id</code>，
-不能互相替代。<code>apply_id</code>、<code>apply_time</code>、原始 <code>state</code> 用于区分重复邀请和历史记录。
-<code>MEMBER_STATE_INVITED</code>、<code>MEMBER_STATE_APPLIED</code> 标为待审核；已正常处理或管理员拒绝
-标为非待审核，未知状态的 <code>pending</code> 为 <code>null</code>，不会猜测。默认仅返回待审核邀请，
-<code>pending_only=false</code> 才包含其他状态，<code>last_id</code> 必须使用平台返回的游标，不能填申请
-<code>apply_id</code>。<code>apply_time</code> 保留平台的原始时间与时区，例如以 <code>Z</code> 结尾的时间是 UTC；
-不要把历史邀请当作今天截图中的新邀请。</p>
-<p>结果的 <code>scope=account_visible_records</code>、<code>complete=false</code> 明确表示仅覆盖当前账号可见
-记录。空列表不证明全群没有待审核邀请，正常状态也不证明用户现在仍在群里。查询不自动
-审核、不标记通知已读、不删除日志、不计数、不抽奖，同群日志读取间隔30秒，单次最多
-输出200条匹配邀请，超限或无效响应报错而不静默丢弃。</p>
-<h2>无前缀命令</h2>
-<p>直接发送整条命令，不需要 <code>/</code>、<code>群管</code> 前缀或 @ 机器人。旧写法仍兼容，但所有帮助和
-操作提示使用新写法。固定命令不经过聊天模型；普通句子、引述、否定和多行组合不是命令。
-身份始终来自有效 AstrBot 配置的管理员 ID，不能通过昵称、群主身份或聊天文字自授权。
-普通 AI 群聊仍需 @ 机器人，裸命令仅开放固定白名单，不改变其他平台的命令语法。</p>
-<p>普通群员在当前已启用且允许回复的群发送 <code>排名</code> 或 <code>今日排名</code>，查看北京时间当天排行，
-每页20条，<code>排名 2</code> 查看第二页，<code>排行</code>、<code>今日排行</code> 是别名。只返回标题、页码、编号、
-榜单成员的原生 @ 和条数，不 @ 查询者，不附日期、个人名次或统计说明；身份映射缺失
-只显示名字，不伪造 @。空页显示「暂无记录」。管理员私聊先选择群后也可查，使用纯文字。
-榜单只读取本实例已有的认证文字记录，
-不声称覆盖离线缺失历史；不计机器人、命令、纯表情、已确认违规或无法核实时刻的消息。
-每人30秒最多计一次，相同标准化内容五分钟不重复计数；按计数、达到该计数的时间和稳定
-UID 排序，缓存十秒。发言排行不自动派奖；抽奖和邀请奖励须单独私聊开启。</p>
-<p>群内管理直接发送 <code>禁言 @成员</code>、<code>解禁 @成员</code>、<code>公告 内容</code>、<code>全员禁言</code>、
-<code>解除全员禁言</code>。操作者须通过管理员 ID 校验，目标 @ 须与传输身份对应，不接受文本伪造
-或附带疑问、说明的目标命令。部署中的手动踢出仍必须私聊预览并二次确认。</p>
-<p>禁言默认30分钟；<code>禁言 @成员 3</code> 或 <code>禁言@成员 3</code> 指定3分钟，支持1至1440的
-整数分钟。私聊编号也支持 <code>禁言 2 3</code>。禁言和解禁不需要二次确认，平台受理后简洁
-回复，不追加“尚未确认”；未知请求仍不重复提交。自动违规和维护禁言的默认时长不变。
-群内回复开关须开启，普通成员才可收到排名；管理动作始终仅允许有效配置的管理员 UID，
-不能通过 @ 管理员获得权限。机器人主动发送目标授权不替代管理员名单。
-普通群员的管理命令拒绝执行。群／私聊回复关闭时不静默执行裸命令，自动违规处罚不受影响。</p>
-<p>群内排名、管理命令结果、无权限回复、自动违规警告，在各段消息被平台受理
-20秒后自动撤回。只撤回机器人自己的对应消息，不删除成员命令、私聊消息、
-普通 AI 聊天回复或主动发送内容。使用发送回执中的真实路由，不增加撤回成员消息的
-群管授权。待执行任务持久保存，重启或短暂断线后恢复；超过到期时间五分钟的旧任务
-不再补撤回。超时、失败和中断结果保留审计，不盲目重试。</p>
-<h2>私聊命令</h2>
-<h3>AI 能力介绍与设置引导</h3>
-<p>管理员私聊询问“你能做什么”“我不会设置”时，按当前工具是否可用分别引导，
-不把咨询或例句当作执行指令。可用时简要介绍抽奖/邀请数值、审核规则、定时规则；
-目标群与缺失参数逐步核对，配置仍需真实预览与确认。工具未开放时说明暂不能直接代办，
-可引导现有固定命令，不谎称管理员无权限。当前工具未覆盖的活动操作仍使用固定命令。</p>
-<p>普通用户私聊及所有群内客服只介绍公开业务、群内排名、抽奖报名及本人邀请查询。
-不披露管理员名单、管理命令目录、后台地址、工具名称、账号凭据或其他人的私聊与奖励明细。
-公开联系人与公开业务链接可按需提供，手机号与邮箱仍掩码。介绍入口不代表功能已开启，
-也不表示查询或报名已完成。提示按已验证的会话角色注入，不靠用户自述判断。
-输出脱敏保留原有凭据与联系方式过滤；不能保证识别任意无标签、编码或拆分的秘密。</p>
-<h3>群抽奖</h3>
-<p>管理员私聊先发送 <code>群列表</code>，按群名确认后发送 <code>选择群 1</code>。列表编号仅对当前操作者有效，
-十分钟后过期；同名群附群号区分。之后每条命令单独发送：</p>
-<pre><code class="language-text">抽奖奖励 18元猪脚饭
-中奖人数 3
-抽奖倒计时 10
-参与上限 15
-抽奖邀请门槛 0
-领奖联系人 秦铭
-开启抽奖
-</code></pre>
-<p>倒计时按分钟；参与上限 <code>0</code> 表示不限；邀请门槛按本群已记账的有效邀请人数计算。
-开启时冻结本期参数，并要求该群已有主动发送授权。群员发送 <code>参加抽奖</code> 报名，
-同一成员只记一次，到期随机抽取仍在群内且身份核验通过的成员。统一公布真实 @ 中奖
-名单、奖品和领奖联系人；15人参与、3人中奖显示20.00%。报名未满不提前开奖。
-管理员可发送 <code>立即开奖</code>、<code>取消抽奖</code>、<code>抽奖状态</code>、<code>中奖名单</code>、<code>抽奖记录</code>；
-<code>中奖名单 1</code> 查看指定期数。群员可查询 <code>抽奖状态</code>。抽奖开始、取消、中奖名单通知及
-报名和状态回复均保留，不自动撤回。奖品由联系人发放，不自动付款。
-报名时间使用原生消息外层的服务端时间；手机端内层时间缺失或为0不会被误判过期。
-仍拒绝活动开始前、截止后、未来异常时间或延迟超过五分钟的报名消息，不以接收时间
-替代消息发送时间，也不把开奖倒计时限制为五分钟。
-截止后若后台尚未完成开奖，状态显示「报名已截止，等待开奖」，不再显示报名中。
-报名成功才使用庆祝标记；重复报名显示已有记录，过期、名额满和身份未核验显示警示。</p>
-<h3>邀请奖励</h3>
-<pre><code class="language-text">设置邀请奖励 5
-开启邀请奖励
-邀请奖励状态
-邀请记录
-暂停邀请奖励
-</code></pre>
-<p>同群统一每人奖励积分，最多两位小数。启用时现有成员建立基线，不补历史奖励。
-每35秒左右检查，只有后续新成员已入群、平台明确返回邀请归属、双方仍在群内且状态
-正常、身份稳定才记一笔奖励。待审核、归属不明、机器人、重复进群不计奖。
-归属待核验最多保留24小时，不能核验则不计奖；没有完整入群事件的离线缺口不估算。
-修改奖励值不重算旧账；暂停再开启时重新建立基线，不补暂停期间的邀请。
-群员发送 <code>我的邀请</code>、<code>邀请奖励</code> 查看自己的有效人数和积分。只记账，不自动支付现金。
-奖励由后台周期核验后记账，不会逐笔主动群发到账提醒；管理员可用 <code>邀请奖励状态</code> 查看扫描状态。</p>
-<p>非管理员私聊命令只返回“无权限”；普通咨询仍受私聊回复开关、人格和模型配置控制。</p>
-<p>下列查询和操作需要 AstrBot 管理员：</p>
-<pre><code class="language-text">群列表
-选择群 1
-成员列表
-成员搜索 小明
-禁言 2
-解禁 2
-踢出 2
-公告 公告内容
-全员禁言
-解除全员禁言
-能力
-规则
-违规计数
-结果 &lt;操作ID&gt;
-开发门禁
-</code></pre>
-<p>成员列表包含名字和业务 ID。编号来自当前目录快照，按机器人、操作人及私聊会话隔离，十分钟过期；重新列出或搜索后使用新的编号。聊天不能修改授权。</p>
-<h2>群内命令</h2>
-<p>群内开放普通成员的排名/活动查询和管理员固定管理动作。私聊专用查询静默，
-不展示目录、权限或规则。本部署业务规则模式的管理员群内踢出同样静默，仍须私聊预览确认：</p>
-<pre><code class="language-text">排名
-禁言 @成员
-解禁 @成员
-公告 公告内容
-全员禁言
-解除全员禁言
-</code></pre>
-<p>通过客户端选择器真实 @。成员操作必须唯一识别一个目标；映射不明时拒绝，不按昵称匹配。命令不进入 AI，也不因命令正文包含违规关键词触发自动处罚。</p>
-<h2>自动违规处理</h2>
-<p>2026-10-03：当前接收机器人启用 <code>manual_kick_only</code>，AI和自动规则不再踢人。递进模式确认违规后撤回并依次禁言5、15、60分钟，后续上限60分钟；人工踢出仍需私聊固定命令和独立确认。自动次数按账号、群、成员持久保存，失败、未知和重复操作不计数，未知状态停止该成员后续自动处罚。历史人工操作不补算。其他明确授权的兼容实例才保留第四次违规自动踢出分支。</p>
-<p><code>semantic.py</code> 通过 AstrBot 模型接口读取当前消息与同群近期上下文，不调用工具或聊天人格。明确正常或有歧义不处罚；模型故障及无效证据交由高置信规则兜底。<code>automatic.py</code> 持久化自动禁言及踢出意图，接入器最终检查三次真实回执、新违规消息、身份、逐群授权和平台角色。详情见新版从零开始教程。</p>
-<p>仅未开启递进模式的旧关键词路径使用独立禁言/踢出关键词；同时命中以禁言为优先，<code>manual_kick_only</code> 下不执行踢出词规则。该旧路径首次违规在开启撤回时尝试撤回并 @ 警告，第二次执行相应处罚，计数窗口为24小时；不能用它描述当前递进模式。冷却、身份核验、动作授权与幂等限制按各自路径生效。任意手动撤回命令未提供，撤回通过自动违规入口处理。
-关键词模式同样拒绝时间未知、超前超过五秒或延迟超过五分钟的消息，不计违规次数、
-不发警告、不撤回或处罚。完整成员目录返回后再次检查动作授权与自动化开关。
-固定命令、私聊及群内唤醒对话也不重放此类历史消息，不进入管理工具或客服 AI。
-这些判断基于上游消息时间，不以重连后的本地接收时间代替。</p>
-<p>操作状态应区分「服务端已接受」「已确认」「拒绝」「未知」。已接受不等于对端确认；未知结果不自动补发，不能反复提交处罚来试探。</p>
-<h2>纯文本与回复脱敏</h2>
-<p>旺商聊不支持富文本。帮助和查询使用【标题】、空行、编号；插件追加 AI 排版要求，不替换人格。普通 AI 结果中的 Markdown 转为文本，链接和代码保留原意，结构化 @ 不被改写，并关闭该结果的文字转图片。</p>
-<p>回复过滤覆盖本插件命令结果和普通 AI 结果：</p>
+<p>奖品与联系人为非空单行文本，按128字符清理及512字节上限校验。
+中奖率以实际有效参与人数计算，满员不提前开奖；报名和开奖都不自动付款。</p>
+<h2>审核与执行</h2>
+<p>开通默认开启逐群广告规则和防刷屏，使用通用模板，不复制生产群专属关键词。
+关键词按字面匹配，不执行用户代码或自定义正则。
+本群授权管理可以在菜单3→9修改关键词、3→10增删改组合规则并单独启停，
+3→11只检查文字不处罚；原菜单编号不变。规则按机器人账号和群独立保存，
+后台群配置可编辑同一份组合规则，旧页面漏传已有组合规则会被拒绝以防误覆盖。
+组合规则仍沿用本群广告开关、管理员保护及递进处罚，不覆盖默认规则或财务设置。</p>
+<p>菜单“审核规则 → 发言白名单”及后台“群管理 → 规则 → 本群发言白名单”保留预览本人确认；
+私聊先选本人授权群。添加按真实当前目录名称搜索，移除可查当前名／保存旧名／精确UID或用名单行图标，
+不要求目标仍在群内；UID不能用来盲添加。逐步重核操作者权限、记录和版本，补修状态见本页首节。
+白名单仅豁免本机器人在本群的自动广告、媒体及刷屏禁言和撤回，不授予管理、AI或财务权限，
+不自动解除已有禁言，也不改变其他管理员的手动处罚。变更独立审计，既有记录和重启均保留。
+白名单不覆盖上文独立黑名单重入规则；黑名单移除和解除禁言分别处理。</p>
 <ul>
-<li>明确标注的 password、密码、验证码、API Key、Token、secret 等字段值。</li>
-<li>常见 <code>sk-</code> 密钥、Bearer 凭证、JWT 和完整私钥块。</li>
-<li>中国大陆 11 位手机号及常见邮箱，使用掩码展示。</li>
-<li>业务 ID、群 ID、操作 ID 不进行无差别数字替换。</li>
+<li>广告：前三次撤回并警告，后续按5／15／60分钟递进禁言；不自动踢人。</li>
+<li>刷屏：同一成员5秒3条、10秒8条文字或图片，或30秒5条重复文字；先禁言，再撤回对应整批消息，不识别图片／视频广告内容。</li>
+<li>广告和刷屏使用独立于AI等待的执行链；证据丢失时停止受影响自动处罚。</li>
+<li>权限不足或明确未提交记失败；实际发出且结果无法确认才记结果不明。</li>
+<li>不自动重放未知处罚；关闭广告后旧广告处罚不得因刷屏仍开着而继续。</li>
+<li>每日禁言只执行未来边界，持续检查创建人授权；暂停／删除不自动解禁。</li>
+<li>群内命令及全部对应回复安排12秒撤回；主动活动通知、私聊和普通AI不受影响。</li>
 </ul>
-<p>凭证过滤优先于代码及链接完整性，因此含认证参数的链接或示例代码会被遮盖。此功能是有限规则过滤，不是完整 DLP：无标签的任意密码、拆分或编码后的秘密可能无法识别；手机号形状的其他数字可能误判。第三方插件直接发送、主动发送、附件和流式路径不在本插件普通 AI 结果钩子的覆盖承诺内。</p>
-<p>这不是入站脱敏：不阻止原始消息进入模型，不修改历史记录，也不清理框架日志。不要把回复过滤视为凭证存储或日志治理方案。</p>
-<p>接入器文本边界同时去除成对的 <code>think</code>、<code>thinking</code>、<code>thought</code>、<code>analysis</code> 标签块、
-开头未闭合标签及孤立结束标签，避免部分模型推理混入可见正文。
-不承诺识别无标签推理、所有流式输出或任意嵌套格式；历史和日志不回溯清理，
-过滤后为空也不等于客服成功回答。框架结构化 reasoning 的展示仍应核对框架设置。</p>
-<h2>开发测试门禁</h2>
-<p>已接入的机器人默认相互排斥，即使是管理员也不例外。Dashboard 保存测试范围不会开启窗口，须单独开启。窗口仅存内存，最长五分钟、最多十次入站，重启、退出或替换账号后失效；一次仅支持一个指定发送实例。</p>
-<ul>
-<li>私聊 AI、私聊命令、群内命令、群内违规规则为独立范围；在接收机器人配置来源发送实例。</li>
-<li>群规则还需专用 <code>WSL_TEST_</code> 关键词及指定群。</li>
-<li><code>private_ai</code> 范围用于单向普通私聊 AI 测试。它不放行斜杠命令，不绕过私聊回复开关，每条仅允许一次关联回复。</li>
-<li><code>group_ai</code> 范围仅放行指定来源、指定群中真实结构化 @ 本机器人的非命令消息；
-不接受文本假 @，不绕过群回复开关或管理员工具隔离，每条仍仅一次关联回复。</li>
-<li>反向继续互斥，避免结果触发机器人循环。</li>
-<li>门禁不授予管理员身份、平台角色或机器人动作权限。</li>
-</ul>
-<p>测试结束关闭窗口，恢复临时主动发送及其他测试配置。普通账号验收与受控机器人测试应分别记录。</p>
-<h2>常见问题</h2>
-<p><strong>帮助没有回复</strong>：检查接收实例在线、允许私聊回复、插件启用状态。发送者若也是已接入机器人，检查门禁是否到期或因重启关闭；<code>ignored_bot</code> 表示互斥拦截，不代表管理员设置丢失。</p>
-<p><strong><code>private_peer_unknown</code></strong>：主动发送目标尚未成为本地已知会话；先用真实客户端建立私聊，不伪造消息记录。</p>
-<p><strong>AI 回复慢</strong>：区分模型生成、知识库查询、工具调用与平台发送。普通客服测试曾出现工具调用和超时，不应仅以连接在线认定稳定。</p>
-<p><strong>排行换行或 @ 前空格丢失</strong>：2026-10-02 全量离线回归发现3项输出格式失败，
-涉及结构化消息 Plain 分段边界；文档中的榜单格式是预期契约，不是缺陷已修复的证明。
-详情和测试名见当前验收文档，本次文档更新未改消息处理代码。</p>
-<h2>验证与边界</h2>
-<p>已有受控实测覆盖帮助入口、管理员查询、普通身份越权拒绝、普通私聊 AI 回复及两轮上下文。关闭私聊回复的线上测试已通过模型入口计数确认零调用；开启回复的对照组计数为一次。处理中撤销授权后未继续发出回复，群管执行也在变更前中止。群内未 @ 的线上零调用仍待独立验收。复杂排版的手机显示、任意秘密识别、完整普通外部账号验收及长期稳定性仍不能宣称全部通过。</p>
-<pre><code class="language-sh">.venv/bin/python -m pytest -q tests/test_wangshangliao_*.py
+<p>实际成功以平台回执为准，不以模型文本、队列受理或本地请求返回作为处罚成功依据。
+完整说明见<a href="wangshangliao-content-rules.html">内容规则</a>及
+<a href="wangshangliao-schedules.html">定时计划</a>。</p>
+<p>2026-10-20警告修正已随授权的完整后端重启加载：原生<code>actions.py</code>不再强制关闭警告撤回，
+也不信任调用方<code>userName</code>／ID标签；只从本账号本群权威完整名单精确匹配的UID／NIM取真昵称作原生@。
+身份可信但缺昵称时只发正文，身份不一致仍不发送；<code>auto_recall=True</code>在发送回执后安排12秒撤回。
+加载阶段未发测试消息；随后三账号在<code>1459282</code>通过隔离<code>test_advertising</code>完成3次真实警告，
+分属1＋2次的两个fixture，非同轮完整三级升级。<code>userNick</code>的<code>@大蛤</code>及目标身份正确，
+不优先使用群名片<code>testfork</code>；原消息撤回及警告的接收、自撤回均有对端原生证据。
+警告受理后12.112／12.115／12.125秒收到撤回通知，不等于手机画面或硬实时保证。
+测试规则、临时原生管理员角色恢复为原普通成员，窗口关闭；财务、正式群及正常处罚计数未变。
+实测0模型调用、无额外NIM连接、未重启服务；保留原生回执及最小审计，不重放旧警告。
+本轮不涵盖禁言升级、全功能或手机显示；证据和首轮核验脚本只读恢复说明见<a href="wangshangliao-testing.html">测试与验收</a>。
+619项通过发生在缺昵称回退细化前，不代表最新回退或手机显示已验收，历史审计日期和结果保留。</p>
+<h2>私聊、好友与AI</h2>
+<p>首次好友确认或首次未命中命令的私聊共用持久标记；已有好友不批量补发欢迎。
+2026-10-18欢迎素材更新为两张1024方图：①使用说明，②对话示例，沿用用户提供的大海Logo。
+首次好友确认或未命中命令时，先发文字菜单，再顺序发送两张原生图片；
+手动发送<code>菜单</code>可取得两图固定查看链接，不重新推送整套欢迎。
+两图经指定生图服务生成，原图和缩略图已按SHA-256核对，运行时只发送固定白名单资源，
+不把URL冒充资源编号，不在欢迎时上传、不增加任意图片发送或下载接口。
+真实管理员拉机器人进群且邀请身份核验通过后，本群发送文字菜单和同样两张图，提示邀请者发送<code>开通</code>；
+成功开通也保留同代次欢迎兜底，不重复推送。未核验来源或普通成员邀请不发送，欢迎不等于已经开通。
+群欢迎按账号、业务群及入群代次持久化去重；最多20项待处理、单通道处理，
+暂停、撤权、离群及插件卸载会停止后续发送。机器人尚无原生管理权限时仅提示设置，
+欢迎图片不会授予处罚权限。发送结果不明保留回执，不自动补发第二张或整套重放。
+原图／缩略图读回和原生回执不等于手机已显示；新版两图的手机画面及真实首次新好友仍需分别验收。</p>
+<p><code>onboarding_delivery.py</code>及原生图片发送的冷却等待均在账号发送锁之外，
+取得锁后复核最新发送时间、账号和授权；文字与原生图片共用至少3秒间隔，不在冷却期间占锁阻塞其他发送。
+<code>friend_auto.py</code>仅将明确<code>busy</code>、尚未认领且未发送的欢迎持久保留待处理，
+下次仍按真实申请和成员身份逐条核验；未知结果不补发，本地编码失败记明确失败。
+轮询、平台响应和必要冷却仍会影响送达速度，尚无真实手机端完整耗时验收，不承诺即时送达。</p>
+<p>自动同意保留单条处理：请求至少间隔3秒，同意动作至少30秒。
+读取失败使用有界退避，结果不明先核对，不自动重发；现有异常暂停不擅自解除。
+2026-10-16核对的验收账号仍是<code>enabled=false</code>、<code>paused=business_rejected</code>及1条未决审批。
+恢复只走总控「好友申请 → 核对并恢复」，携带账号配置和审批版本读回原结果；
+不能确认时继续暂停，不直接改库、不重复同意；原开关为关闭时，核对成功也不自动启用。
+真实新好友申请须证明申请编号此前不存在、方向及成员身份匹配，不能删除好友制造新申请。
+具体恢复与手机验证步骤见<a href="wangshangliao-start.html">入门文档</a>的「好友异常暂停」。
+删除好友的后台、单人、批量及SDK入口全部移除。</p>
+<p>只读咨询通过私聊<code>/chat</code>进入，<code>/exit</code>退出，闲置15分钟结束。
+<code>conversation_guidance.py</code>明确<code>0</code>只返回上级、「取消」退出菜单且私聊同时结束咨询；
+菜单可见不等于授权，其他人的数字不能接管本人的流程。
+未核验身份不能查询财务或管理群，普通用户核验后也仅查本人记录；
+AI不再推荐停用的手动禁言命令；单成员解禁通过菜单4→7或真实@固定命令完成，
+私聊菜单4→7先列本人授权群，选群后仅列当前禁言成员，选人预览再确认。
+固定命令为选群后查<code>禁言名单</code>、<code>解禁 序号</code>；普通成员列表编号不能用于解禁。
+名单来自原生完整成员快照并与业务目录交叉核验；不完整或读取失败停止操作，不以历史处罚代替。
+菜单4→8可单独查看禁言名单；确认提交前再次检查当前禁言及目标身份。AI不能代办，不清除违规记录，
+不编造实时金额、归属、结账结果或可用状态。
+群聊天／热群AI须逐群单独启用，默认关闭；<code>热群状态</code>、<code>开启热群</code>、<code>关闭热群</code>
+仅本群授权管理可用。后台分别设置群内@回复、普通聊天自主接话、冷场话题、间隔、每日上限、北京时间段和主题；
+菜单8进入／退出私聊咨询、查本人套餐；菜单9开关群AI、查本群额度和本人扣费确认。
+后台“AI服务”新增独立“管理员指引”配置<code>admin_guidance</code>；首次明确保存后按后端真实授权分流：
+普通用户进入“客服咨询”，近期完整群名册核验的本账号授权群管理及独立聊天结账员／财务管理
+进入“管理员指引”。群管理、结账员、财务管理逐账号逐群解释，AI始终无工具或操作权限。
+仅有AstrBot超管、额度豁免、套餐、后台登录或网页财务身份不能自动进入管理分流。
+新入口不覆盖旧客服／群配置，不打开群AI；授权及选群范围变化隔离历史并拦截迟到回复。
+未保存前沿用旧只读客服，独立配置失效后不回退到客服人格。
+群内原生@、自主接话和冷场话题均使用“群聊与热群”配置，
+统一按<code>profiles.resolve(&quot;group&quot;, account, group)</code>解析，支持账号／单群覆盖，不回退到私聊咨询人格。
+@回复的<code>mentions</code>开关独立于<code>autonomous</code>，关闭自主接话不会关闭已启用的@回复。
+方式开关不自动打开总开关；明确发送<code>开启热群</code>会打开总开关及自主接话，旧群不会自动开启。
+新增菜单9→8控制<code>开启自主接话</code>／<code>关闭自主接话</code>，原1—7编号不变。
+<code>conversation_profiles.py</code>仅接入人格文本、成对预设对话与有限生成参数，不继承知识库、工具、代理或任意额外请求；
+分别使用内置只读客服提示和群聊提示，群聊另附本群主题。
+当前配置来源如下；具体生成数值由选择器及单群覆盖决定，不把部署快照当作源码默认值：</p>
+<table>
+<thead>
+<tr>
+<th>用途</th>
+<th>AstrBot配置名称</th>
+<th>人格名称</th>
+<th>模型／边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>私聊只读咨询</td>
+<td>旺商聊·AI咨询（DeepSeek）</td>
+<td>旺商聊·只读咨询（DeepSeek）</td>
+<td><code>deepseek/deepseek-v4.1-flash</code>；私聊行为不变</td>
+</tr>
+<tr>
+<td>群内@／自主接话／冷场话题</td>
+<td>旺商聊·群聊热群（DeepSeek）</td>
+<td>小满｜高拟真热群</td>
+<td>同模型；共享群人格，@历史按本人隔离，自主候选缓存不变，冷场单独开关</td>
+</tr>
+</tbody>
+</table>
+<p>人格工具及技能不继承，不挂接原生全局知识库，不使用模型压缩；个人／群知识另按独立范围检索。
+编辑器将数值输入改为“跟随所选配置／低／中／高”；旧自定义值显示“现有设置（保留）”，不自动重写。
+低／中／高对应：随机性0.2／0.5／0.9，表达范围<code>top_p</code>0.6／0.85／1；
+私聊咨询输出256／512／1024 Token，群内@及热群输出128／256／512 Token，群输出硬限512；
+私聊历史档位2／6／12轮；群配置的历史轮数限定@带入的本人往轮历史，0不带入旧问答。
+自主接话上下文档位最多4／8／12条近期候选，零上下文仍提供当前候选消息，不改自主缓存。
+自主接话仅在显式启用、权限和预算有效时，将普通消息在内存短暂合并2秒；
+每群最多12条、每条512字、保留120秒，不新增旁观聊天持久化记录。
+命令、已命中审核、财务或敏感关键词、纯数字和已接入机器人消息不进入模型；这不是完整的敏感信息识别系统。
+一次调用同时选择是否发言、目标序号、是否引用和回复；静默也有模型成本。
+目标只能取自本群真实接收记录，撤回、成员身份变化或发送前撤权均停止发送。
+原生引用使用消息301字段及NIM29—38路由；仅支持有可信接收证据的群文本引用，私聊仍去掉引用装饰。
+原生引用已覆盖离线编解码、竞态及2026-10-19三账号六个互引方向的真实回读；
+手机客户端显示仍需另行确认，不以协议回读代替。
+热群沿用60秒间隔、全服务两个模型并发和共享预算；模型等待不阻塞审核，不安装MaiBot或增加规划模型调用。
+AstrBot配置的<code>request_max_retries=1</code>在底层按单次尝试解释；旺商聊专用HTTP调用仍不自动重试。
+咨询侧重准确解释命令；小满热群版使用短句接话、轻松接梗，不主动自报身份，不输出人设说明或内部判断。
+群内@、自主接话和冷场话题均只发送纯文本正文，不添加<code>【群聊AI】</code>或<code>【客服咨询】</code>前缀；
+私聊只读咨询的输出行为不变。
+用户授权「加载核实」后，上述群@路由、成员历史隔离及群输出去前缀已于2026-10-20
+09:47:09 UTC（北京时间17:47:09）随<code>astrbot.service</code>完整重启加载，非插件重载；
+新管理页标签也已发布。静态文档发布本身不激活后端，也不改变群开关或私聊咨询；
+当前群<code>1516387</code>的四项群AI开关均关闭，不把旧自主回复证据当作当前开启或新版本实群验收证明。
+直接询问真实身份时如实回答，不冒充真人或虚构经历、群消息和财务操作。
+热群文本见<a href="wangshangliao-xiaoman-persona.html">小满热群人格</a>，保存到AstrBot人格后通过选择器绑定；
+原「小满｜高拟真生活型」及其辣椒聊配置保持不变，不继承旧工具或AI代办管理说明。
+小满热群版增加PG游戏及加拿大28话题兴趣，不带单、报稳赢号或编造真实下注战绩。
+<a href="xiaoman-group-dialogs.json">预设对话</a>与AstrBot人格的<code>begin_dialogs</code>同步，目前为9组，
+实际请求标记示例边界，不视为群聊、个人历史或已执行操作，也不写入会话记忆。
+最多16组示例，每条不超过2KiB，总正文不超过16KiB；完整示例计入模型费用预留，
+修改示例与修改人格正文一样使在途旧配置失效。
+这里只绑定AI引用，不改变机器人主配置路由、其他平台或逐群开关；群级覆盖仍优先于群AI默认配置。
+保存配置不会开启公共AI、取消预算门禁、绑定扣费人或授权任何群。</p>
+<p>实际AI问答及已发送的群聊接话复用AstrBot原生<code>ConversationManager</code>，
+可在“数据与日志 → 对话”按机器人及私聊／群聊筛选，并与原生Token统计、脱敏追踪关联。
+私聊、群内@和自主接话分别隔离；群内共享人格不等于共享成员历史。
+群@使用新原生键<code>platform:GroupMessage:account/group/wsl-ai/account/group/mention/verifiedUid/peer</code>，
+其中<code>platform</code>为接入实例标识，UID及peer来自已核验身份，不按昵称推测。
+仅从该键读取配置允许的有界历史；不同成员、群、账号及私聊均不混用，
+不迁移或复用旧群客服咨询历史。自主／冷场保留原<code>/wsl-ai/account/group</code>来源及原候选缓存。
+仅存实际问题／所选目标与已发送回复，
+不存系统提示、知识片段、内部JSON决策、普通命令、财务输入或整批旁观聊天。
+私聊保存配置指定轮数，零上下文只保存本次问答；群AI原生记录有界，最多20轮，
+模型带入的@历史另受所选群配置轮数限制，不把原生页面可见记录全部传入模型。
+<code>/exit</code>、闲置结束或进入结账后，下一次<code>/chat</code>新建对话，不延续上次模型上下文；
+原生后台记录仍可查看、删除及导出。写入前发现记录已删除、切换或编辑时，跳过旧快照。
+插件不再新建<code>chat_history</code>或将其用于上下文，旧表仅兼容清理，不导入或虚构旧会话。
+原生记录失败不重发回复、不重试模型。未开放模型调用时原生页面无新增记录属于正常状态。</p>
+<p>知识库清理仅移除已备份且没有配置引用的旧版「旺商聊·大海传媒业务客服知识」
+和「旺商聊共享群聊知识-20260921」；仍被引用的20261012版业务客服库及超级机器人使用知识保留。
+AstrBot原生删库在移除索引及文件后，同一事务删除该库的文档、媒体和库元数据，避免遗留孤立记录；
+清理历史残留只按明确旧库ID执行，不扫描删除其他库的数据。
+热群及只读咨询不继承这些知识库，不能靠旧知识资料执行财务或群管操作。</p>
+<h3>个人与群知识空间</h3>
+<p>2026-10-18新增轻量资料入口，原有编号不变：私聊「菜单」→8→5为「我的知识库」，
+群内或私聊选群后「菜单」→9→7为「本群知识库」。列表每页5条，查看全文输入资料序号；
+添加输入<code>标题 | 正文</code>，修改输入<code>序号 新标题 | 新正文</code>，删除输入序号，均须本人再预览确认。
+<code>0</code>返回、「取消」退出；打开知识编辑会结束当前私聊AI，资料编辑输入不交给模型。</p>
+<p>个人空间按真实NIM发送者隔离，同一真实发送者访问当前机器人账号时共享本人资料；
+群空间按平台（当前固定旺商聊）、机器人账号、业务群隔离。私聊仅可选择本人获授权的群；
+当前成员、机器人原生管理权限、授权及资料版本在提交前复核，不以昵称或自报UID认人。
+这不是原生AstrBot全局知识库的用户授权，不给普通用户后台登录或<code>kb</code>权限。</p>
+<p><code>knowledge.py</code>负责固定命令、权限和单任务工作通道，<code>knowledge_store.py</code>在已有
+<code>open-service.sqlite3</code>中保存文本和FTS5增量索引；索引与正文、版本、最小审计同事务提交。
+每空间最多100条、1MiB，每条标题与正文最多8KiB，菜单单次输入仍最多4096字；
+全站文本最多64MiB／10000条（不是整个数据库磁盘大小限制）。不支持文件、网址抓取、
+OCR、代码或正则执行，不部署额外模型／进程；队列忙时拒绝，不无限等待。
+中文分词仅在有资料需要索引或检索时加载；无资料／未开启群引用时直接返回。</p>
+<p>私聊咨询只检索本人空间；群@回复与主动热群分别按本群使用范围检索，默认均关闭，
+不会读取管理者个人资料。每次最多5段、合计2400字符参考正文，计入既有AI费用预留，
+预算门禁、套餐和群AI开关不变。全文索引无匹配时不扫描全库或重建BM25，模型无资料时不得编造。
+资料仅作为不可信参考，不能修改人格、权限或调用工具。资料变更后旧调用与迟到回复停止，
+已经提交的模型调用仍按原费用规则核算。确认退群后只清理该账号该群的资料和索引，
+保留递增代次及最小审计；撤去群管理权限仅暂停，财务与其他空间不受影响。
+删除不代表抹去既有对话或备份；原有备份生命周期继续适用，成功操作去重记录保留90天。</p>
+<p>不批量持久化旁观聊天；明确开启自主接话时会发送上述有界候选上下文，
+原生对话仅保存选定目标与已发送回复。未知调用／发送停用待总控核对，不重试旧请求。
+原管理员每日加额入口改为套餐，旧增额记录保留但不是付费订单；仅总控能授予已核验管理。
+所有身份都不能通过AI调用工具、MCP、子代理、代码或管理操作。
+试用每日20次、每人每自然月成本3元；Plus每日2000次／30天／20 USDT；
+Pro每日5000次／30天／50 USDT。付费成本为实际登记人民币收入70%，当前分别93.80／234.50元。
+北京时间零点重置，重启不清零，到期回试用但当天已用不清零；同档续期排后，
+升级立即生效、不自动折算退款，尚未开始的已付费续期保留并顺延。
+同一可信管理跨机器人账号共用一个池，私聊与本人确认的群AI共同扣除，不逐群重复发放。
+开通者默认候选，必须本人预览确认；换人由总控指定再本人确认，撤权／离群不自动转扣。
+群每日附加限额可选，默认0不额外限制；全站独立安全阈值默认100000次／日。
+已核验超管只豁免次数，不豁免费用、并发及门禁。次数与定点人民币费用原子预留；
+全站月成本、完整输入及输出／推理硬上界、原价、倍率、充值换算和计费依据未确认时拒绝调用。
+未知结果保留占用不重试，用量缺失／超界暂停模型并审计。额度与80%／100%费用提醒仅私信并持久化去重。
+升级客服由后台统一填写，未填不允许新授予付费套餐；不获取汇率、不接入支付。
+每人一个在途请求、间隔5秒，服务并发2、超时45秒，繁忙直接拒绝。
+<strong>供应商硬预算未核实的模型／凭证绑定不允许调用</strong>。
+2026-10-20现行DeepSeek绑定已确认有限额度元数据及本地保护，未实测耗尽拒绝边界；
+更换模型、凭证或价格仍需重新确认。独立费用测试本身不解除门禁。</p>
+<h2>财务边界</h2>
+<p>私聊<code>我的邀请</code>只列已开启返现的群名，按序号查询可信本人记录，不显示UID。
+群内同名命令属于本群活动邀请查询；活动积分和现金账本不是同一业务。
+AI不读取账本，普通群管理授权不能改金额、归属、结账或撤回登记。
+网页继续使用CF Access身份和财务群范围；私聊<code>结账</code>使用总控单独授予的逐账号、
+逐群财务身份，两者共用账本，不互相提升权限。聊天只登记人工付款，不自动转账。
+关闭普通成员返现不等于清除旧欠账；自然入群和来源未确认记录不计入可结账金额。
+本次代码和文档清理不改既有财务字段。</p>
+<h2>代码结构</h2>
+<table>
+<thead>
+<tr>
+<th>路径／模块</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>main.py</code></td>
+<td>插件注册、接收分流及任务生命周期</td>
+</tr>
+<tr>
+<td><code>open_service.py</code>、<code>open_store.py</code></td>
+<td>开通、逐群授权、只读AI、额度和持久状态</td>
+</tr>
+<tr>
+<td><code>ai_plans.py</code></td>
+<td>套餐周期、跨账号共享池、本人群扣费同意、定点费用预留／结算及私信通知</td>
+</tr>
+<tr>
+<td><code>group_ai.py</code></td>
+<td>逐群只读聊天／冷场话题，独立日上限、时段、发送校验及未知结果暂停</td>
+</tr>
+<tr>
+<td><code>command_menu.py</code>、<code>syntax.py</code>、<code>commands.py</code></td>
+<td>树状导航、固定语法、参数及执行</td>
+</tr>
+<tr>
+<td><code>lifecycle.py</code>及接入器<code>group_scope.py</code></td>
+<td>群范围、状态变化、离群清理</td>
+</tr>
+<tr>
+<td><code>content_rules.py</code>、<code>flood.py</code>、<code>progressive.py</code></td>
+<td>字面审核、防刷屏、递进处罚</td>
+</tr>
+<tr>
+<td><code>activities.py</code>、<code>invitations.py</code>、<code>schedules.py</code></td>
+<td>抽奖、积分证据及每日任务</td>
+</tr>
+<tr>
+<td><code>friend_auto.py</code>、<code>private_interaction.py</code></td>
+<td>单条好友审批、首次菜单</td>
+</tr>
+<tr>
+<td><code>cashback*.py</code>、<code>private_invitation.py</code></td>
+<td>共用财务存储、网页结账接口、本人查询</td>
+</tr>
+<tr>
+<td><code>finance_chat.py</code>、<code>cashback_finance.py</code>、<code>finance_sandbox.py</code></td>
+<td>私聊财务导航、精确授权与原子确认、明确标记的独立测试账本</td>
+</tr>
+<tr>
+<td><code>dashboard.py</code>、<code>open_rpc.py</code></td>
+<td>总控鉴权、固定白名单、进程内调用</td>
+</tr>
+<tr>
+<td><code>ai_config.py</code></td>
+<td>旧AI配置入口的拒绝兼容壳；无数据库、服务引用或写入实现</td>
+</tr>
+<tr>
+<td><code>../../../dashboard/plugin-pages/wangshangliao/</code></td>
+<td>管理页面及双语架构权限JSON</td>
+</tr>
+</tbody>
+</table>
+<p>底层登录、传输、真实身份和平台动作在
+<code>astrbot/core/platform/sources/wangshangliao/</code>，不在插件中重复实现。
+旧独立公共进程启动器只保留拒绝提示；财务Socket继续使用，不应一并删除。
+测试脚本只可显式运行，不注册到生产聊天、AI或定时任务。</p>
+<h2>验证与发布</h2>
+<p>2026-10-16历史版本曾在3.72秒维护窗口内部署，4267项回归通过、0跳过；
+这是当时证据，不代表当前全量测试或最新部署。本轮源码回归6391项通过、52项条件性跳过，
+跳过的真实环境检查不计通过。文档及页面对照回归另外执行。
+这些均不等于真实新好友、原生图片手机端、Access流程或新一轮30分钟灰度通过。
+已结账列表新增只读展示缓存，每次重新核验权限，并用SQLite <code>data_version</code>判断缓存是否失效；
+不缓存财务写入授权或改变结账资格。首轮初始加载P95为2.306→2.217毫秒，
+仅有一轮、重复测试尚待完成，不能据此宣布性能稳定达标或整体验收通过。
+本次文档同步不操作线上好友、解除异常暂停、启用正式群或开放模型调用。</p>
+<pre><code class="language-sh">env ASTRBOT_DISABLE_FILE_LOGGING=1 .venv/bin/pytest -q tests/test_wangshangliao_docs.py tests/test_wangshangliao_reference_tables.py
+env ASTRBOT_DISABLE_FILE_LOGGING=1 .venv/bin/pytest -q tests/test_wangshangliao_retired_execution.py tests/test_wangshangliao_ai_operations.py
+node dashboard/scripts/build-wangshangliao-guide.mjs
 </code></pre>
-<p>上述为离线回归，不发送真实消息。真实副作用脚本及四场景验收标准见当前测试文档；
-群内 @ AI 和管理员自然语言改配置不能仅凭固定命令通过就标为已验收。</p>
-<p>日志和标题由 AstrBot 核心负责：标题在列表、详情、搜索及导出保持一致。启用文件日志后可从当前文件恢复有限历史，每类最多读取末尾 4 MiB／1000 条，合并上限 2000 条；不加载更早轮转文件。已验证浏览器断网补发、服务重启恢复及 390 px 追踪页面换行。</p>
-<p>成员分页使用 <code>下一页</code>，编号仅绑定当前页。警告发送状态独立于违规次数：明确失败先补警告，未知不重发且不进入处罚。操作结果通过接入器固定查询接口读取。开发测试只使用实例级门禁，旧环境变量不再生效。</p>
-<p>Platform scope: moderation commands are filtered to the <code>wangshangliao</code> adapter. The plugin declares <code>support_platforms: [wangshangliao]</code>, so Telegram command registration excludes its commands. Existing runtime checks restrict moderation actions and presentation changes to Wangshangliao; the LLM hook also removes its management tool from unauthorized requests.</p>
-<h2>群名片任务</h2>
-<p>封禁（<code>ACCOUNT_STATE_BAN</code>）和注销（<code>ACCOUNT_STATUS_CANCELLED</code>）账号在预览及发送前排除。历史未知操作只做回读：若目标已封禁或注销，保留未知结果并隔离该目标，新任务可继续处理其他成员；隔离目标不会自动重试。普通账号的其他未知结果仍会暂停整个任务。</p>
-<p>历史验收（2026-09-20）：指定测试群内普通成员 <code>D1 → 名片测试 → D1</code> 完成两次平台目录回读确认，临时授权已恢复。该记录不代表后续版本的自动进群、整批规范或手机对端已全部验收。当前 Dashboard 单成员预览支持配对的 <code>card_member</code>、<code>card_name</code>；管理员私聊 AI 使用 <code>card_member_preview</code>，参数为当前成员快照的 <code>member_number</code> 与 <code>card_name</code>，不得直接猜测账号 ID。</p>
-<p>插件 <code>cards.py</code> 负责两字命名、持久化预览、任务与五分钟目录扫描；接入器 <code>rename_member()</code> 负责固定协议、最终授权、身份与原名校验以及回读。扫描不使用模型。</p>
-<p>在消息平台逐群勾选名片动作授权并保存。自动开关另行开启，默认关闭。手动任务从 Dashboard 预览后执行，支持进度与停止。私聊管理员工具支持 <code>card_preview/card_member_preview/card_execute/card_status/card_stop</code>，需要人格工具白名单启用 <code>wsl_private_management</code>。生成预览与明确执行必须是两条用户消息；执行时重新检查当前管理员身份、群授权和成员快照。</p>
-<p>优先群名片，空白时用昵称；按 Unicode 字素取前两字符，不拆 Emoji；不足两字符生成并保存“大海群员＋六位数字”。排除已接入机器人、自己、群主与管理员。人工更改过的原名不覆盖。未知结果不重发，重启先回读。成员目录不完整或身份不一致时不执行。</p>
-<p>语义执行门禁使用当前真实消息，不使用模型声称的授权；否定、查询、条件、引用需先澄清。规则门禁测试不等于真实模型自然语言验收，平台回读也不等于手机对端确认。</p>
-<h3>封禁／注销账号清理</h3>
-<p>Dashboard 的“成员批量操作”提供独立清理预览、确认、执行、进度及停止。需逐群授予 <code>cleanup</code>，不会继承 <code>kick</code> 或 <code>rename</code> 授权；默认不自动运行。只移出平台明确封禁／注销的普通成员，不删除账号，不按昵称推断。机器人及群管理角色保持保护。执行前重新校验，结果未知暂停回读，重启不续跑；清理记录与名片处理标记隔离。</p>
-<p>引用回复兼容：AstrBot 的“引用回复”装饰在旺商聊降级为普通文本回复，群聊保留结构化 @。目前不发送原生引用气泡；不会因引用组件丢失整条回复，也不会复制被引用的原文。图片等其他未支持组件仍明确拒绝。</p>
+<p>全量回归、浏览器环境、受控群及性能门槛见<a href="wangshangliao-testing.html">测试说明</a>。
+真实测试必须固定账号和测试群、预览确认、保存恢复点，不能在正式群反复重放未知动作。
+未授权的正式群保持关闭；当前开关以后台为准，文档和测试不自动启用任何群。
+真实验收不完整时不标记整体通过。
+源码、HTML、PDF和页面JSON需同步发布；回滚只恢复代码及配置，不覆盖期间新增账本。</p>
 </body></html>

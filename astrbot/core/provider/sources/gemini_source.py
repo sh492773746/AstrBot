@@ -672,24 +672,38 @@ class ProviderGoogleGenAI(Provider):
                     temperature,
                 )
                 async with self._conversation_header(conversation_id):
-                    result = await retry_provider_request(
-                        "Gemini",
-                        lambda: self.client.models.generate_content(
-                            model=model,
-                            contents=cast(types.ContentListUnion, conversation),
-                            config=config,
-                        ),
-                        max_attempts=request_max_retries,
-                    )
+                    from astrbot.core.provider.event_guard import generation_meter
+
+                    meter = generation_meter.get()
+                    if meter is not None:
+                        result = await meter.generate(self, model, conversation, config)
+                    else:
+                        result = await retry_provider_request(
+                            "Gemini",
+                            lambda: self.client.models.generate_content(
+                                model=model,
+                                contents=cast(types.ContentListUnion, conversation),
+                                config=config,
+                            ),
+                            max_attempts=request_max_retries,
+                        )
                 logger.debug(f"genai result: {result}")
 
                 if not result.candidates:
+                    if meter is not None:
+                        from astrbot.core.provider.event_guard import AIRequestDenied
+
+                        raise AIRequestDenied("ai_assistant_unavailable")
                     logger.error(
                         f"Gemini request failed: candidates is empty: {result}"
                     )
                     raise Exception("Gemini request failed: candidates is empty.")
 
                 if result.candidates[0].finish_reason == types.FinishReason.RECITATION:
+                    if meter is not None:
+                        from astrbot.core.provider.event_guard import AIRequestDenied
+
+                        raise AIRequestDenied("ai_assistant_unavailable")
                     if temperature > 2:
                         raise Exception(
                             "Temperature exceeded the maximum value of 2, but Gemini recitation still occurred."
@@ -766,15 +780,21 @@ class ProviderGoogleGenAI(Provider):
                     system_instruction,
                 )
                 async with self._conversation_header(conversation_id):
-                    result = await retry_provider_request(
-                        "Gemini",
-                        lambda: self.client.models.generate_content_stream(
-                            model=model,
-                            contents=cast(types.ContentListUnion, conversation),
-                            config=config,
-                        ),
-                        max_attempts=request_max_retries,
-                    )
+                    from astrbot.core.provider.event_guard import generation_meter
+
+                    meter = generation_meter.get()
+                    if meter is not None:
+                        result = await meter.stream(self, model, conversation, config)
+                    else:
+                        result = await retry_provider_request(
+                            "Gemini",
+                            lambda: self.client.models.generate_content_stream(
+                                model=model,
+                                contents=cast(types.ContentListUnion, conversation),
+                                config=config,
+                            ),
+                            max_attempts=request_max_retries,
+                        )
                 break
             except APIError as e:
                 if e.message is None:

@@ -41,6 +41,7 @@ class TestWindow:
         ):
             raise ProtocolError("test_window_arguments")
         self.receiver, self.sender = receiver, sender
+        self.policy_epoch = getattr(receiver, "config", {}).get("_business_epoch")
         self.identities = tuple(
             (p.account, getattr(p, "nim_account", None)) for p in (receiver, sender)
         )
@@ -60,6 +61,14 @@ class TestWindow:
         """Return whether both original instances and the deadline remain valid."""
         return (
             time.monotonic() < self.expires
+            and getattr(self.receiver, "config", {}).get("_business_active")
+            is not False
+            and self.policy_epoch
+            == getattr(self.receiver, "config", {}).get("_business_epoch")
+            and (
+                self.policy_epoch is None
+                or getattr(self.receiver, "test_window", None) is self
+            )
             and not self.receiver.stopping.is_set()
             and not self.sender.stopping.is_set()
             and self.identities
@@ -83,6 +92,18 @@ class TestWindow:
         key = (group, mid)
         if not self.active() or str(payload.get("sender")) != self.sender.account:
             return ""
+        if group.startswith("private/"):
+            from .wire import b64
+
+            peer = str(getattr(self.sender, "nim_account", "") or "")
+            if (
+                not peer.isascii()
+                or not peer.isdecimal()
+                or not 0 < int(peer) < 1 << 32
+                or payload.get("transport_peer") != peer
+                or group != f"private/{self.sender.account}/{b64(peer.encode())}"
+            ):
+                return ""
         if key in self.accepted:
             return self.accepted[key]
         if self.remaining <= 0:
@@ -103,12 +124,15 @@ class TestWindow:
                         encoded[end * 2 :].decode("utf-16-le", errors="replace").strip()
                     )
                     break
-        from astrbot.builtin_stars.wangshangliao_moderation.syntax import (
-            recognize_command,
-        )
+        from .runtime_policy import runtime
 
-        command = bool(recognize_command(text))
-        if group.startswith("private/") and text in {"/help", "/帮助"}:
+        command = bool(runtime.recognize(text))
+        if group.startswith("private/") and text in {
+            "/help",
+            "/帮助",
+            "/new",
+            "/stats",
+        }:
             command = True
         scope = "private_commands" if group.startswith("private/") else "group_commands"
         if not group.startswith("private/") and group not in self.groups:
@@ -184,10 +208,7 @@ class TestWindow:
         Returns:
             Whether this exact command attempt is permitted.
         """
-        from astrbot.builtin_stars.wangshangliao_moderation.syntax import (
-            recognize_command,
-        )
-
+        from .runtime_policy import runtime
         from .wire import b64
 
         expected = f"private/{self.receiver.account}/{b64(str(self.receiver.nim_account).encode())}"
@@ -201,8 +222,16 @@ class TestWindow:
                 (
                     "private_commands" in self.scopes
                     and (
-                        recognize_command(command)
-                        or command in {"/群管", "/群管帮助", "/help", "/帮助"}
+                        runtime.recognize(command)
+                        or command
+                        in {
+                            "/群管",
+                            "/群管帮助",
+                            "/help",
+                            "/帮助",
+                            "/new",
+                            "/stats",
+                        }
                         or command.startswith("/群管 ")
                     )
                 )
@@ -210,7 +239,7 @@ class TestWindow:
                     "private_ai" in self.scopes
                     and command
                     and not command.startswith("/")
-                    and not recognize_command(command)
+                    and not runtime.recognize(command)
                 )
             )
             or self.remaining <= 0

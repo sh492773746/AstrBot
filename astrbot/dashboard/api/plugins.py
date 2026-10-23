@@ -7,16 +7,23 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query, Request
 from fastapi.responses import PlainTextResponse, Response
+from pydantic import BaseModel
 
 from astrbot.api.web import PluginRequest, bind_request_context
 from astrbot.core import logger
 from astrbot.core.log import LogManager
+from astrbot.core.star.components import (
+    CapabilitySpec,
+    CommandSpec,
+    ComponentRecoveryRequest,
+    PageSpec,
+)
 from astrbot.dashboard.asgi_runtime import (
     DashboardRequestState,
     call_request_view,
 )
 from astrbot.dashboard.async_utils import run_maybe_async
-from astrbot.dashboard.responses import error, ok
+from astrbot.dashboard.responses import ApiError, error, ok
 from astrbot.dashboard.schemas import (
     EnabledPatch,
     PluginByIdRequest,
@@ -57,6 +64,102 @@ legacy_router = APIRouter(tags=["Dashboard Plugins"], include_in_schema=False)
 
 
 require_plugin_scope = ScopeDependency("plugin")
+
+
+class ComponentCatalogData(BaseModel):
+    schema_version: int
+    components: list[CapabilitySpec | CommandSpec | PageSpec]
+
+
+class ComponentStatusEntry(BaseModel):
+    capability: str
+    plugin: str
+    scope: list[str]
+    reference: str
+    state: str
+    version: int
+    failures: int
+    retry_after: float
+    in_flight: int
+    error: str
+
+
+class ComponentStatusData(BaseModel):
+    entries: list[ComponentStatusEntry]
+
+
+class ComponentRecoveryData(BaseModel):
+    state: str
+    version: int
+
+
+class ComponentCatalogResponse(BaseModel):
+    status: str
+    message: str | None
+    data: ComponentCatalogData
+
+
+class ComponentStatusResponse(BaseModel):
+    status: str
+    message: str | None
+    data: ComponentStatusData
+
+
+class ComponentRecoveryResponse(BaseModel):
+    status: str
+    message: str | None
+    data: ComponentRecoveryData
+
+
+@router.get("/runtime/catalog", response_model=ComponentCatalogResponse)
+async def component_catalog(
+    plugin: str | None = Query(default=None, max_length=160),
+    username: str = Depends(require_dashboard_user),
+):
+    """Return server-only declarations without executable bindings."""
+    from astrbot.core.star.components import components
+
+    return ok({"schema_version": 1, "components": components.catalog(plugin)})
+
+
+@router.get("/runtime/status", response_model=ComponentStatusResponse)
+async def component_status(
+    plugin: str | None = Query(default=None, max_length=160),
+    username: str = Depends(require_dashboard_user),
+):
+    """Return cooperative runtime state without message bodies or secrets."""
+    from astrbot.core.star.component_runtime import component_runtime
+
+    return ok({"entries": component_runtime.status(plugin)})
+
+
+@router.post("/runtime/recover", response_model=ComponentRecoveryResponse)
+async def recover_component(
+    payload: ComponentRecoveryRequest,
+    username: str = Depends(require_dashboard_user),
+):
+    """Recover only an exact declared scope after authenticated server review."""
+    from astrbot.core.star.component_runtime import RuntimeRejected, component_runtime
+
+    try:
+        result = await component_runtime.recover(
+            payload.capability,
+            payload.scope,
+            payload.version,
+            "dashboard/" + username,
+            reset=payload.operation == "reset_after_review",
+            reason=payload.reason,
+        )
+    except RuntimeRejected as exc:
+        raise ApiError(str(exc), status_code=409) from None
+    logger.info(
+        "Component recovery actor=%s capability=%s operation=%s version=%s",
+        username,
+        payload.capability,
+        payload.operation,
+        payload.version,
+    )
+    return ok(result)
 
 
 def get_service(request: Request) -> PluginService:

@@ -24,6 +24,93 @@ if str(PROJECT_ROOT) not in sys.path:
 # 设置测试环境变量
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("ASTRBOT_TEST_MODE", "true")
+os.environ.setdefault("ASTRBOT_DISABLE_FILE_LOGGING", "1")
+
+
+@pytest.fixture(autouse=True)
+def wsl_offline_metrics(request, monkeypatch):
+    """Keep Wangshangliao offline tests out of global metrics storage and uploads.
+
+    Args:
+        request: Current test identity used to limit this fixture to Wangshangliao.
+        monkeypatch: Test-scoped environment restoration.
+    """
+    if request.node.path.name.startswith(("test_wangshangliao_", "test_wsl_")):
+        monkeypatch.setenv("ASTRBOT_DISABLE_METRICS", "1")
+        from types import SimpleNamespace
+
+        from astrbot.builtin_stars.wangshangliao_moderation import model_stats
+        from astrbot.core import conversation_mgr
+
+        monkeypatch.setattr(
+            model_stats, "db_helper", SimpleNamespace(insert_provider_stat=AsyncMock())
+        )
+        monkeypatch.setattr(
+            conversation_mgr,
+            "sp",
+            SimpleNamespace(
+                session_get=AsyncMock(return_value=None),
+                session_put=AsyncMock(),
+                session_remove=AsyncMock(),
+            ),
+        )
+
+
+@pytest.fixture
+def wsl_active_policy(monkeypatch):
+    """Register an explicit plugin policy for transport-focused unit tests."""
+    from types import SimpleNamespace
+
+    from astrbot.builtin_stars.wangshangliao_moderation.syntax import recognize_command
+    from astrbot.core.platform.sources.wangshangliao.adapter import WangshangliaoAdapter
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
+        BUSINESS_FIELDS,
+        PolicySnapshot,
+        runtime,
+    )
+
+    monkeypatch.setattr(runtime, "service", None)
+    monkeypatch.setattr(runtime, "snapshots", {})
+    monkeypatch.setattr(runtime, "observation_groups", {})
+    monkeypatch.setattr(runtime, "classifier", recognize_command)
+    monkeypatch.setattr(runtime, "observer", None)
+    monkeypatch.setattr(runtime, "help_responder", None)
+    monkeypatch.setattr(runtime, "generation", 1)
+    original = WangshangliaoAdapter.__init__
+
+    def publish(config):
+        values = {key: config[key] for key in BUSINESS_FIELDS if key in config}
+        values.setdefault("reply_private", True)
+        values.setdefault("reply_groups", {})
+        runtime.service = SimpleNamespace(active=True)
+        runtime.publish(
+            config["id"],
+            PolicySnapshot(
+                str(config.get("account_id", "")),
+                "fixture-policy",
+                json.dumps(values),
+                1,
+            ),
+        )
+
+    def create(adapter, config, settings, queue):
+        publish(config)
+        original(adapter, config, settings, queue)
+
+    monkeypatch.setattr(WangshangliaoAdapter, "__init__", create)
+    return publish
+
+
+@pytest.fixture
+def wsl_command_classifier(monkeypatch):
+    """Supply only the registered syntax callback for lightweight event fixtures."""
+    from types import SimpleNamespace
+
+    from astrbot.builtin_stars.wangshangliao_moderation.syntax import recognize_command
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
+
+    monkeypatch.setattr(runtime, "service", SimpleNamespace(active=True))
+    monkeypatch.setattr(runtime, "classifier", recognize_command)
 
 
 @pytest.fixture(scope="module")

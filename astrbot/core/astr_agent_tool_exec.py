@@ -142,6 +142,27 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
             AsyncGenerator[None | mcp.types.CallToolResult, None]
 
         """
+        owner = getattr(run_context, "context", None)
+        event = getattr(owner, "event", None)
+        authorize = getattr(event, "authorize_ai_tool", None)
+        if authorize is not None:
+            try:
+                allowed = authorize(tool, owner.context)
+            except Exception:
+                allowed = False
+            if not allowed:
+                yield mcp.types.CallToolResult(
+                    isError=True,
+                    content=[
+                        mcp.types.TextContent(
+                            type="text",
+                            text=json.dumps(
+                                {"status": "rejected", "reason": "tool_not_authorized"}
+                            ),
+                        )
+                    ],
+                )
+                return
         if isinstance(tool, HandoffTool):
             is_bg = tool_args.pop("background_task", False)
             if is_bg:

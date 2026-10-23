@@ -44,6 +44,7 @@ async def check(browser_path, screenshots):
                     if failures:
                         raise RuntimeError(f"{file.name}: {failures}")
                     if screenshots and file.name in (
+                        "wangshangliao-ai-index.html",
                         "wangshangliao-index.html",
                         "wangshangliao-start.html",
                         "wangshangliao.html",

@@ -15,6 +15,7 @@ import httpx
 import jwt
 
 from astrbot.core.platform.sources.wangshangliao.storage import instance_dir
+from astrbot.core.platform.sources.wangshangliao.text import plain_text, redact_reply
 from scripts.check_wsl_authorization_live import (
     BOT,
     GROUP,
@@ -118,6 +119,7 @@ class DialogueTest(Matrix):
         if receipt.get("status") != "accepted":
             raise RuntimeError("Send not confirmed; do not retry")
         incoming, outgoing = None, []
+        wire_text = redact_reply(plain_text(text))
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             candidates = rows(
@@ -131,7 +133,7 @@ class DialogueTest(Matrix):
                     r
                     for r in candidates
                     if str(json.loads(r["payload"]).get("sender")) == USER
-                    and json.loads(r["payload"]).get("text", "").endswith(text)
+                    and json.loads(r["payload"]).get("text", "").endswith(wire_text)
                     and (
                         r["team"] == GROUP
                         if scope == "group"
@@ -225,6 +227,12 @@ class DialogueTest(Matrix):
             raise RuntimeError("Reply content acceptance failed")
         if re.search(r"</?(?:think|thought|thinking|analysis)\b", reply, re.I):
             raise RuntimeError("Reasoning markup leaked")
+        if re.search(
+            r"(?:^|\n)(?:@\S+\s+)?(?:My (?:Response|Analysis)|Analyzing and Responding|Okay, (?:here|let me))",
+            reply,
+            re.I,
+        ):
+            raise RuntimeError("Unmarked reasoning prose leaked")
         if unchanged and not result["protected_state_unchanged"]:
             raise RuntimeError("Read-only/unauthorized request changed protected state")
         return reply

@@ -1,17 +1,39 @@
 """Fixed moderation operations for explicit human requests, not AI tools."""
 
+import asyncio
 import hashlib
+import inspect
 import json
 import sqlite3
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Awaitable, Callable
 
-from .business import BusinessClient
+from .blacklist import BLACKLIST_MUTE_MINUTES, BlacklistIntent, authorize_intent
+from .business import BusinessClient, BusinessError
+from .database import AsyncDatabase
 from .diagnostics import Diagnostics
 from .directory import member_card, member_directory
 from .event import is_managed_account
 from .storage import instance_dir
 from .wire import ProtocolError
+
+
+def operation_database(instance):
+    """Open the existing action ledger on its owning worker.
+
+    Args:
+        instance: Saved platform instance ID.
+
+    Returns:
+        SQLite connection with additive schema initialization.
+    """
+    root = instance_dir(instance)
+    root.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(root / "moderation.sqlite3")
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS operations "
+        "(id TEXT PRIMARY KEY, digest TEXT NOT NULL, result TEXT NOT NULL)"
+    )
+    return db
 
 
 async def execute(
@@ -25,9 +47,12 @@ async def execute(
     text: str = "",
     *,
     minutes: int = 1,
-    authorize: Callable[[], None] | None = None,
+    authorize: Callable[[], Awaitable[None] | None] | None = None,
     expected_card: str | None = None,
     expected_nim: str | None = None,
+    blacklist_intent: BlacklistIntent | None = None,
+    blacklist_fixture=None,
+    submission_guard: Callable[[], None] | None = None,
 ) -> dict:
     """Execute a human-confirmed action once and retain ambiguous outcomes.
 
@@ -40,10 +65,12 @@ async def execute(
         group: Positive business group ID.
         member: Member ID for member actions.
         text: Announcement content or new group card.
-        minutes: Mute duration in integer minutes, bounded to one day.
+        minutes: Mute duration, capped at one day except for a stored blacklist intent.
         expected_card: Exact previewed group card, required for rename.
         expected_nim: Verified preview transport identity, required for rename.
         authorize: Revalidate current local authorization after remote lookups.
+        blacklist_intent: Stored canonical-join capability, not a callback grant.
+        submission_guard: Synchronous adapter generation fence after the last DB wait.
 
     Returns:
         Persisted operation result, without authentication material.
@@ -55,7 +82,56 @@ async def execute(
         raise ProtocolError("moderation_arguments")
     if str(client.fields[3]) != account:
         raise ProtocolError("moderation_identity")
-    if action == "mute" and (type(minutes) is not int or not 1 <= minutes <= 1440):
+    blacklist_action = (
+        operation.startswith("blacklist/") or blacklist_intent is not None
+    )
+
+    async def managed_protected():
+        if not is_managed_account(str(member)):
+            return False
+        from .blacklist import protected_target
+        from .test_blacklist import BlacklistFixture
+
+        if (
+            type(blacklist_fixture) is not BlacklistFixture
+            or not (blacklist_action or action == "unmute")
+            or blacklist_fixture.receiver.business is not client
+            or blacklist_fixture.receiver.config["id"] != instance
+            or str(blacklist_fixture.receiver.account) != account
+        ):
+            return True
+        return await asyncio.to_thread(
+            protected_target,
+            blacklist_fixture.receiver,
+            str(group),
+            str(member),
+            expected_nim,
+            fixture=blacklist_fixture,
+            intent=blacklist_intent,
+        )
+
+    if blacklist_action:
+        await asyncio.to_thread(
+            authorize_intent,
+            instance,
+            account,
+            operation,
+            action,
+            group,
+            member,
+            minutes,
+            blacklist_intent,
+        )
+        if expected_nim != blacklist_intent.peer:
+            raise ProtocolError("blacklist_identity_required")
+    if action == "mute" and (
+        type(minutes) is not int
+        or not (
+            1 <= minutes <= 1440
+            or blacklist_action
+            and 1 <= minutes <= BLACKLIST_MUTE_MINUTES
+        )
+    ):
         raise ProtocolError("moderation_minutes")
     routes = {
         "cleanup": ("/v1/group/remove-group-member", {"groupMemberIds": [member]}),
@@ -93,15 +169,10 @@ async def execute(
             [account, route, params, expected_card, expected_nim], sort_keys=True
         ).encode()
     ).hexdigest()
-    root = instance_dir(instance)
-    root.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(root / "moderation.sqlite3")) as db, db:
-        db.execute(
-            "CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, digest TEXT NOT NULL, result TEXT NOT NULL)"
-        )
-        row = db.execute(
+    async with AsyncDatabase(lambda: operation_database(instance)) as db:
+        row = await db.fetchone(
             "SELECT digest,result FROM operations WHERE id=?", (operation,)
-        ).fetchone()
+        )
         if row:
             if row[0] != digest:
                 raise ProtocolError("moderation_operation_conflict")
@@ -126,7 +197,14 @@ async def execute(
             if str(m.get("userId")) == str(member)
         ]
         if (
-            len(matches) != 1
+            (blacklist_action or blacklist_fixture is not None)
+            and not page.get("complete")
+            or len(matches) != 1
+            or str(member) == account
+            or action != "cleanup"
+            and await managed_protected()
+            or blacklist_action
+            and str(matches[0].get("nimId")) != expected_nim
             or matches[0].get("groupRole") != "GROUP_ROLE_MEMBER"
             or not matches[0].get("nimId")
         ):
@@ -156,7 +234,74 @@ async def execute(
         ):
             raise ProtocolError("card_preview_stale")
     if authorize is not None:
-        authorize()
+        validation = authorize()
+        if inspect.isawaitable(validation):
+            await validation
+    native_authorize = authorize
+    if blacklist_action or blacklist_fixture is not None:
+
+        async def native_authorize():
+            # This callback also runs under BusinessClient's reentrant HTTP lock.
+            # Lookup requests do not carry this callback, so they cannot recurse.
+            if authorize is not None:
+                validation = authorize()
+                if inspect.isawaitable(validation):
+                    await validation
+            groups = await client.request("/v1/group/get-group-list", {"v": "0"})
+            group_matches = [
+                g
+                for g in groups.get("owner", []) + groups.get("member", [])
+                if str(g.get("groupId")) == str(group)
+            ]
+            roster = await member_directory(client, str(group))
+            current = [
+                row
+                for row in roster.get("groupMemberInfo", [])
+                if str(row.get("userId")) == str(member)
+            ]
+            if (
+                len(group_matches) != 1
+                or group_matches[0].get("me", {}).get("role")
+                not in {"GROUP_ROLE_OWNER", "GROUP_ROLE_ADMIN"}
+                or not roster.get("complete")
+                or len(current) != 1
+                or current[0].get("groupRole") != "GROUP_ROLE_MEMBER"
+                or str(current[0].get("nimId")) != expected_nim
+                or str(member) == account
+                or await managed_protected()
+                or str(client.fields[3]) != account
+            ):
+                raise ProtocolError("blacklist_target_changed")
+            if authorize is not None:
+                validation = authorize()
+                if inspect.isawaitable(validation):
+                    await validation
+            if blacklist_fixture is not None:
+                await blacklist_fixture.authorize_submission(
+                    blacklist_fixture.receiver,
+                    str(group),
+                    str(member),
+                    expected_nim,
+                    blacklist_intent=blacklist_intent,
+                    directory=roster,
+                )
+            if str(client.fields[3]) != account or await managed_protected():
+                raise ProtocolError("blacklist_target_changed")
+            if blacklist_action:
+                await asyncio.to_thread(
+                    authorize_intent,
+                    instance,
+                    account,
+                    operation,
+                    action,
+                    group,
+                    member,
+                    minutes,
+                    blacklist_intent,
+                )
+            if submission_guard is not None:
+                submission_guard()
+
     result = {
         "operation": operation,
         "action": action,
@@ -166,26 +311,44 @@ async def execute(
     }
     if action == "mute":
         result["minutes"] = minutes
+    if blacklist_action:
+        result["expected_nim"] = expected_nim
     # Commit before the network write: interruption must never trigger a blind retry.
-    with closing(sqlite3.connect(root / "moderation.sqlite3")) as db, db:
+    async with AsyncDatabase(lambda: operation_database(instance), write=True) as db:
         try:
-            db.execute(
+            await db.execute(
                 "INSERT INTO operations VALUES(?,?,?)",
                 (operation, digest, json.dumps(result)),
             )
         except sqlite3.IntegrityError:
             raise ProtocolError("moderation_operation_busy") from None
+    submitted = False
+    failure = None
     try:
-        receipt = await client.request(route, params)
-        result["status"] = "accepted"
+        # Writer and HTTP-lock contention can both outlive a grant.
+        if str(client.fields[3]) != account:
+            raise ProtocolError("moderation_identity")
+        if authorize is not None:
+            validation = authorize()
+            if inspect.isawaitable(validation):
+                await validation
+        submitted = True
+        receipt = await client.request(route, params, authorize=native_authorize)
+        result.update(status="accepted", submitted=True)
         if action == "cleanup" or (
-            action == "kick" and operation.startswith("automatic-kick/")
+            action == "kick"
+            and (operation.startswith("automatic-kick/") or blacklist_action)
         ):
             roster = await member_directory(client, str(group))
-            if not any(
-                str(m["userId"]) == str(member) for m in roster["groupMemberInfo"]
+            if (not blacklist_action or roster.get("complete")) and not any(
+                str(m["userId"]) == str(member)
+                or blacklist_action
+                and str(m.get("nimId")) == expected_nim
+                for m in roster["groupMemberInfo"]
             ):
                 result["status"] = "verified"
+                if blacklist_action:
+                    result.update(absence_verified=True, readback_complete=True)
         if action == "rename":
             roster = await member_directory(client, str(group))
             current = [
@@ -208,11 +371,33 @@ async def execute(
                 for n in notices.get("noticeInfoList", [])
             ):
                 result.update(status="verified", notice_id=notice_id)
-    except Exception:
-        result["status"] = "unknown"
-    with closing(sqlite3.connect(root / "moderation.sqlite3")) as db, db:
-        db.execute(
+    except BaseException as exc:
+        # Readback submission evidence belongs to that read, not the mutation.
+        if result["status"] not in {"accepted", "verified"}:
+            if not submitted or getattr(exc, "submitted", None) is False:
+                result.update(status="rejected", submitted=False)
+                failure = exc
+            elif (
+                isinstance(exc, BusinessError)
+                and getattr(exc, "provider_rejected", False) is True
+            ):
+                result.update(
+                    status="rejected",
+                    submitted=True,
+                    error=str(exc),
+                    provider_code=exc.number,
+                )
+            else:
+                result.update(status="unknown", submitted=True)
+        if not isinstance(exc, Exception):
+            failure = exc
+    async with AsyncDatabase(lambda: operation_database(instance), write=True) as db:
+        await db.execute(
             "UPDATE operations SET result=? WHERE id=?", (json.dumps(result), operation)
         )
     Diagnostics(instance).emit("moderation", result["status"], operation)
+    if failure is not None:
+        if result.get("submitted") is False:
+            failure.submitted = False
+        raise failure
     return result

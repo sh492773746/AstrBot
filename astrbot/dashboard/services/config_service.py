@@ -1445,13 +1445,26 @@ class BotConfigService:
                 continue
             if type_ and bot.get("type") != type_:
                 continue
-            bots.append(copy.deepcopy(bot))
+            if bot.get("type") == "wangshangliao":
+                from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
+                    runtime,
+                )
+
+                bots.append(runtime.view(bot, public=True))
+            else:
+                bots.append(copy.deepcopy(bot))
         return {"bots": bots}
 
     def get_bot(self, bot_id: str) -> dict:
         bot = self._find_bot(bot_id)
         if bot is None:
             raise ValueError(f"Bot {bot_id} not found")
+        if bot.get("type") == "wangshangliao":
+            from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
+                runtime,
+            )
+
+            return {"bot": runtime.view(bot, public=True)}
         return {"bot": copy.deepcopy(bot)}
 
     def get_bot_stats(self) -> dict:
@@ -1512,229 +1525,28 @@ class BotConfigService:
     async def save_wangshangliao(
         self, config: dict, owner: str, current: dict | None = None
     ) -> None:
-        """Commit a native login reference with rollback on configuration failure.
+        """Delegate native validation and rollback to the platform module.
 
         Args:
-            config: Public platform settings and optional one-time session reference.
+            config: Proposed public platform configuration.
             owner: Authenticated Dashboard principal.
-            current: Existing configuration when editing or logging in again.
-
-        Raises:
-            ValueError: On invalid fields, identity conflicts or expired references.
+            current: Existing configuration when updating.
         """
-        import hashlib
-
-        from astrbot.core.platform.sources.wangshangliao.registration import (
-            registrations,
+        from astrbot.core.platform.sources.wangshangliao.dashboard import (
+            save_configuration,
         )
-        from astrbot.core.platform.sources.wangshangliao.storage import Vault
 
-        allowed = {
-            "id",
-            "type",
-            "enable",
-            "account_id",
-            "nickname",
-            "enabled_groups",
-            "reply_private",
-            "reply_groups",
-            "ai_routes",
-            "proactive_send",
-            "moderation",
-            "developer_test",
-            "session_ref",
-            "login_method",
-            "name",
-        }
-        if set(config) - allowed or config.get("type") != "wangshangliao":
-            raise ValueError("platform_config_fields")
-        if config.get("login_method", "password") not in {"password", "sms"}:
-            raise ValueError("login_method_invalid")
-        groups = config.get("enabled_groups", [])
-        from astrbot.core.platform.sources.wangshangliao.policy import validate_policy
+        await save_configuration(self, config, owner, current, persist=save_config)
 
-        if type(config.get("reply_private", True)) is not bool:
-            raise ValueError("reply_private_invalid")
-        replies = config.get("reply_groups", {})
-        if not isinstance(replies, dict) or any(
-            not isinstance(group, str)
-            or not group.isascii()
-            or not group.isdigit()
-            or int(group) <= 0
-            or type(enabled) is not bool
-            for group, enabled in replies.items()
-        ):
-            raise ValueError("reply_groups_invalid")
-        if current and "ai_routes" in current:
-            config.setdefault("ai_routes", copy.deepcopy(current["ai_routes"]))
-        routes = config.get("ai_routes", {})
-        if (
-            not isinstance(routes, dict)
-            or set(routes) - {"admin_provider_id", "groups"}
-            or not isinstance(routes.get("admin_provider_id", ""), str)
-            or len(routes.get("admin_provider_id", "")) > 256
-            or not isinstance(routes.get("groups", {}), dict)
-            or len(routes.get("groups", {})) > 100
-            or any(
-                not isinstance(group, str)
-                or group not in groups
-                or not isinstance(provider_id, str)
-                or len(provider_id) > 256
-                for group, provider_id in routes.get("groups", {}).items()
-            )
-        ):
-            raise ValueError("ai_routes_invalid")
-        config["ai_routes"] = {
-            "admin_provider_id": routes.get("admin_provider_id", ""),
-            "groups": dict(routes.get("groups", {})),
-        }
-        # Preserve opt-ins when an older dashboard omits newer policy fields.
-        if current:
-            for field in ("content_rules_since", "semantic", "auto_kick"):
-                if field in current.get("moderation", {}):
-                    config.setdefault("moderation", {}).setdefault(
-                        field, copy.deepcopy(current["moderation"][field])
-                    )
-        validate_policy(config.get("moderation", {}))
-        draft = config.get("developer_test", {})
-        if (
-            not isinstance(draft, dict)
-            or set(draft)
-            - {"sender_instance", "groups", "scopes", "keywords", "seconds", "budget"}
-            or not isinstance(draft.get("sender_instance", ""), str)
-            or len(draft.get("sender_instance", "")) > 256
-            or not isinstance(draft.get("groups", []), list)
-            or any(
-                not isinstance(g, str) or g not in groups
-                for g in draft.get("groups", [])
-            )
-            or not isinstance(draft.get("scopes", []), list)
-            or any(
-                s
-                not in (
-                    "private_commands",
-                    "private_ai",
-                    "group_commands",
-                    "group_ai",
-                    "group_rules",
-                )
-                for s in draft.get("scopes", [])
-            )
-            or not isinstance(draft.get("keywords", []), list)
-            or len(draft.get("keywords", [])) > 10
-            or any(
-                not isinstance(w, str) or not w.startswith("WSL_TEST_") or len(w) > 100
-                for w in draft.get("keywords", [])
-            )
-            or type(draft.get("seconds", 300)) is not int
-            or not 1 <= draft.get("seconds", 300) <= 300
-            or type(draft.get("budget", 10)) is not int
-            or not 1 <= draft.get("budget", 10) <= 10
-        ):
-            raise ValueError("developer_test_invalid")
-        proactive = config.get("proactive_send", {})
-        if (
-            not isinstance(proactive, dict)
-            or type(proactive.get("enabled", False)) is not bool
-        ):
-            raise ValueError("proactive_send_invalid")
-        targets = proactive.get("targets", [])
-        if (
-            not isinstance(targets, list)
-            or len(targets) > 1000
-            or any(
-                not isinstance(target, str) or not target or len(target) > 2048
-                for target in targets
-            )
-        ):
-            raise ValueError("proactive_targets_invalid")
-        config["proactive_send"] = {
-            **proactive,
-            "targets": list(dict.fromkeys(targets)),
-        }
-        if not isinstance(groups, list) or any(
-            not isinstance(group, str)
-            or not group.isascii()
-            or not group.isdigit()
-            or not 0 < int(group) < 1 << 30
-            for group in groups
-        ):
-            raise ValueError("enabled_groups_invalid")
-        config["enabled_groups"] = list(dict.fromkeys(groups))
-        async with registrations.commit_lock:
-            instance = config["id"]
-            tx = None
-            reference = config.get("session_ref")
-            if reference:
-                tx = registrations.claim(owner, instance, reference)
-                if current and current.get("account_id") != tx.account_id:
-                    raise ValueError("account_change_requires_new_instance")
-            elif current is None:
-                raise ValueError("login_required")
-            account = tx.account_id if tx else current["account_id"]
-            if any(
-                bot.get("type") == "wangshangliao"
-                and bot.get("id") != instance
-                and bot.get("account_id") == account
-                for bot in self.config.get("platform", [])
-            ):
-                raise ValueError("account_already_configured")
-            clean = {k: v for k, v in config.items() if k != "session_ref"}
-            clean["account_id"] = account
-            if tx:
-                clean["nickname"] = tx.nickname
-            vault = Vault(instance)
-            previous = vault.load()
-            previous_platforms = list(self.config["platform"])
-            if current:
-                await self.core_lifecycle.platform_manager.terminate_platform(instance)
-            try:
-                if tx:
-                    registrations.claim(owner, instance, reference)
-                    vault.save(
-                        {
-                            **tx.saved,
-                            "registration": {
-                                "owner": owner,
-                                "reference_hash": hashlib.sha256(
-                                    reference.encode()
-                                ).hexdigest(),
-                            },
-                        }
-                    )
-                if current:
-                    self.config["platform"][:] = [
-                        clean if bot.get("id") == instance else bot
-                        for bot in previous_platforms
-                    ]
-                else:
-                    self.config["platform"].append(clean)
-                save_config(self.config, self.config, is_core=True)
-            except BaseException:
-                self.config["platform"][:] = previous_platforms
-                if previous is not None:
-                    vault.save(previous)
-                else:
-                    vault.clear()
-                if current:
-                    await self.core_lifecycle.platform_manager.load_platform(current)
-                raise
-            if tx:
-                code = next(
-                    code
-                    for code, value in registrations.transactions.items()
-                    if value is tx
-                )
-                await registrations.discard(code)
-            await self.core_lifecycle.platform_manager.load_platform(clean)
-
-    async def set_bot_enabled(self, bot_id: str, enabled: bool) -> None:
+    async def set_bot_enabled(
+        self, bot_id: str, enabled: bool, owner: str = ""
+    ) -> None:
         bot = self._find_bot(bot_id)
         if bot is None:
             raise ValueError(f"Bot {bot_id} not found")
         new_config = copy.deepcopy(bot)
         new_config["enable"] = enabled
-        await self.update_bot(bot_id, new_config)
+        await self.update_bot(bot_id, new_config, owner=owner)
 
     async def delete_bot(self, bot_id: str) -> None:
         for idx, bot in enumerate(self.config.get("platform", [])):

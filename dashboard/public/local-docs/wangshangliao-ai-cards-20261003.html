@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>旺商聊历史 AI 名片控制</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊 AI 名片控制</h1>
+<blockquote>
+<p>历史实现（2026-10-20校注）：当前公共合并模式不提供AI名片操作，
+仅保留总控后台固定任务。不要按本页恢复旧工具，见<a href="wangshangliao-index.html">文档目录</a>。</p>
+</blockquote>
+<p>日期：2026-10-03。</p>
+<h2>本次实现</h2>
+<ol>
+<li>管理员私聊按群开启或关闭自动名片规范。<code>config_preview</code> 使用
+<code>target=moderation</code>、目标群及 <code>changes={&quot;card_auto&quot;:true/false}</code>，仅修改该群。
+预览后同一管理员、同一私聊发送 <code>确认设置 &lt;码&gt;</code>，原配置版本未改变才保存。</li>
+<li>单人成员自定义群名片。通过群/成员目录快照的当前页编号选择目标，
+<code>card_member_preview</code> 仅接受 <code>member_number</code> 和 <code>card_name</code>，不能传任意UID。
+先展示群、成员、原名与新名，另发明确确认后 <code>card_execute</code> 才排队执行。</li>
+<li>私聊 <code>规则</code> 可读目标群的当前自动名片开关，查询不会创建草案。</li>
+<li>管理页“对话示例 → 私聊与权限 → 名片设置”展示静态示例。</li>
+</ol>
+<h2>安全边界</h2>
+<ul>
+<li>普通用户和群内管理员对话仍没有管理工具。</li>
+<li>开启自动名片或改名需要已保存的 <code>rename</code> 授权及机器人真实平台权限；AI不能授予权限。</li>
+<li>群主、平台管理员、已接入机器人、不可用账号及不确定目标继续受保护。</li>
+<li>预览十分钟有效，账号、管理员和私聊绑定；同一消息不能预览后立即执行。</li>
+<li>重新查询成员身份，实际写入前再校验原名及身份；成员映射改变不沿用旧快照。</li>
+<li>后台任务每次写入重查管理员身份，排队后撤权也会阻止修改。</li>
+<li>回执未知不盲重试；请求受理或任务排队不等于改名完成。</li>
+<li>自动规范为现有群名片（空则账号名称）前两个完整字符加本群文本后缀 <code>card_suffix</code>。
+单字保留，完全空白使用持久化备用名；反复扫描不叠加，调后缀后重扫该群已处理成员。
+管理员可预览 <code>changes={&quot;card_suffix&quot;:&quot;·群员&quot;}</code> 再另发确认，不是任意命名模板；
+关闭不回滚历史修改。后缀最多128字节，整张名片最多256字节。</li>
+<li>AI与自动踢群限制 <code>manual_kick_only</code> 保持开启，未扩展权限或清空计数。</li>
+<li>审核模型、关键词、递进处罚仍为实例级，本次没有把这些配置改成逐群隔离。</li>
+</ul>
+<h2>验证范围</h2>
+<p><code>tests/test_wangshangliao_ai_cards.py</code> 覆盖单人预览、确认、重复提交、角色/会话隔离、
+过期、撤权、身份改变、参数校验、自动名片逐群更新和配置冲突；沿用已有名片执行
+及目录检查测试。界面通过带模拟写入接口的实际插件iframe检查，生产不保存测试配置。</p>
+<p>当前大海兼职群未授权 <code>rename</code>，不擅自扩权。本轮不对真实群员改名，也不打开
+自动扫描；功能上线后仍需管理员在目标群授权“修改成员名片”。</p>
+<h2>部署结果</h2>
+<ul>
+<li>后端回归1170项通过、1项跳过；前端65项通过，插件页构建及代码检查通过。</li>
+<li>全量测试结束出现一次aiosqlite工作线程在事件循环关闭后的警告，未导致用例失败；
+不把测试通过描述成全部无警告，也不将模拟回执当成真实平台改名。</li>
+<li>实际插件iframe在1280、390、320像素宽度通过检查；新增名片对话示例可展示，
+模拟保存未触碰生产设置。</li>
+<li>服务已重启，<code>wangshangliao_3cf3b038</code> 与 <code>wangshangliao_0acde7ec</code> 均在线。</li>
+<li>重启前后两份机器人配置逐项一致；AI/自动踢出仍关闭，群名片权限未新增，
+自动名片扫描未开启，没有向真实成员提交改名。</li>
+</ul>
+</body></html>

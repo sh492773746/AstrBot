@@ -90,7 +90,7 @@ class DailyRankings:
                             async with db.execute(
                                 "SELECT message FROM content_violations "
                                 "WHERE account=? AND group_id=? AND observed>=? "
-                                "AND status IN ('claimed','warned','muted','kicked','unknown')",
+                                "AND status IN ('claimed','warned','recalled','muted','kicked','unknown')",
                                 (adapter.account, group, start.timestamp()),
                             ) as cursor:
                                 violations = {row[0] for row in await cursor.fetchall()}
