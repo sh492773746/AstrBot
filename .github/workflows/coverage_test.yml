@@ -39,6 +39,15 @@ jobs:
           uv sync --locked --dev --extra wsl
           uv run python -m playwright install --with-deps chromium --only-shell
 
+      - name: Prepare native Linux sandbox tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-all --ro-bind / / /bin/true
+
       - name: Run tests
         timeout-minutes: 70
         shell: bash
@@ -50,9 +59,33 @@ jobs:
           # Offline diagnostics must never receive live model credentials.
           export OPENAI_API_KEY=""
           export ZHIPU_API_KEY=""
-          # Keep time to archive diagnostics even if the instrumented suite stalls.
-          timeout --signal=TERM --kill-after=30s 65m \
-            uv run python -u - <<'PY' 2>&1 | tee coverage-test.log
+          unit="wsl-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            free -m
+            df -h .
+          } > coverage-resources.log
+          status=0
+          # Keep the hosted runner outside the test memory/process boundary.
+          # Regular-file output cannot be held open by detached test children.
+          sudo systemd-run --wait --pipe --collect --unit="$unit" \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            --property="WorkingDirectory=$GITHUB_WORKSPACE" \
+            --property=MemoryMax=4G --property=MemorySwapMax=0 \
+            --property=RuntimeMaxSec=65m --property=TimeoutStopSec=15s \
+            --property=KillMode=control-group \
+            --setenv="PATH=$PATH" --setenv="HOME=$HOME" \
+            --setenv="LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" \
+            --setenv=CI=true --setenv=GITHUB_ACTIONS=true \
+            --setenv="GITHUB_WORKSPACE=$GITHUB_WORKSPACE" \
+            --setenv="GITHUB_REPOSITORY=$GITHUB_REPOSITORY" \
+            --setenv="GITHUB_REF=$GITHUB_REF" --setenv="GITHUB_SHA=$GITHUB_SHA" \
+            --setenv="GITHUB_EVENT_NAME=$GITHUB_EVENT_NAME" \
+            --setenv="RUNNER_OS=$RUNNER_OS" --setenv="RUNNER_TEMP=$RUNNER_TEMP" \
+            --setenv=TESTING=true --setenv=ASTRBOT_TEST_MODE=true \
+            --setenv=ASTRBOT_DISABLE_FILE_LOGGING=1 --setenv=PYTHONUTF8=1 \
+            --setenv="OPENAI_API_KEY=" --setenv="ZHIPU_API_KEY=" \
+            "$GITHUB_WORKSPACE/.venv/bin/python" -u - \
+            > coverage-test.log 2>&1 <<'PY' &
           import os
           import sys
 
@@ -67,6 +100,16 @@ jobs:
           sys.stderr.flush()
           os._exit(result)
           PY
+          service_pid=$!
+          while kill -0 "$service_pid" 2>/dev/null; do
+            sleep 30
+            tail -n 8 coverage-test.log
+          done
+          wait "$service_pid" || status=$?
+          sudo journalctl -u "$unit" --no-pager -n 80 >> coverage-resources.log || true
+          cat coverage-test.log
+          cat coverage-resources.log
+          exit "$status"
 
       - name: Archive coverage evidence
         if: always()
@@ -76,6 +119,7 @@ jobs:
           path: |
             coverage.xml
             coverage-test.log
+            coverage-resources.log
           if-no-files-found: warn
 
       - name: Upload results to Codecov
