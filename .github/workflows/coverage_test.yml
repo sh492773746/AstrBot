@@ -54,7 +54,8 @@ jobs:
 
           result = int(pytest.main([
               "tests", "--cov=astrbot", "--cov-report=xml", "-v",
-              "-o", "log_cli=false", "-o", "log_level=DEBUG",
+              "--durations=25", "-o", "log_cli=false",
+              "-o", "faulthandler_timeout=120",
           ]))
           sys.stdout.flush()
           sys.stderr.flush()

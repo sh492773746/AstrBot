@@ -73,4 +73,10 @@ jobs:
       - name: Run tests
         run: |
           chmod +x scripts/run_pytests_ci.sh
-          bash ./scripts/run_pytests_ci.sh ./tests
+          # Preserve the existing best-effort Windows lane, but report the first
+          # real failure instead of cancelling the entire workflow after 45 min.
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            bash ./scripts/run_pytests_ci.sh ./tests --maxfail=1 --durations=25 -o faulthandler_timeout=120
+          else
+            bash ./scripts/run_pytests_ci.sh ./tests --durations=25 -o faulthandler_timeout=120
+          fi
