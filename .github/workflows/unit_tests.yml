@@ -21,7 +21,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Keep macOS coverage without depending on the constrained arm64 pool.
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
 
     # The Windows lane stays best-effort for now: the suite still has
     # pre-existing Windows-specific failures there. Promote to blocking
