@@ -15,9 +15,10 @@ jobs:
   unit-tests:
     name: Run pytest suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 55 || matrix.os == 'macos-15-intel' && 60 || 45 }}
     env:
       PYTHONUTF8: "1"
+      ASTRBOT_CI_TEST_TIMEOUT_SECONDS: ${{ matrix.os == 'windows-latest' && '2400' || '0' }}
     strategy:
       fail-fast: false
       matrix:
