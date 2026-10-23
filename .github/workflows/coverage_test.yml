@@ -47,7 +47,9 @@ jobs:
           mkdir -p data/config
           mkdir -p data/temp
           export TESTING=true
-          export ZHIPU_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          # Offline diagnostics must never receive live model credentials.
+          export OPENAI_API_KEY=""
+          export ZHIPU_API_KEY=""
           # Keep time to archive diagnostics even if the instrumented suite stalls.
           timeout --signal=TERM --kill-after=30s 65m \
             uv run python -u - <<'PY' 2>&1 | tee coverage-test.log
