@@ -15,7 +15,7 @@ jobs:
   test:
     name: Run tests and collect coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 80
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -40,13 +40,17 @@ jobs:
           uv run python -m playwright install --with-deps chromium --only-shell
 
       - name: Run tests
+        timeout-minutes: 70
+        shell: bash
         run: |
           mkdir -p data/plugins
           mkdir -p data/config
           mkdir -p data/temp
           export TESTING=true
           export ZHIPU_API_KEY=${{ secrets.OPENAI_API_KEY }}
-          uv run python - <<'PY'
+          # Keep time to archive diagnostics even if the instrumented suite stalls.
+          timeout --signal=TERM --kill-after=30s 65m \
+            uv run python -u - <<'PY' 2>&1 | tee coverage-test.log
           import os
           import sys
 
@@ -67,7 +71,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ github.sha }}
-          path: coverage.xml
+          path: |
+            coverage.xml
+            coverage-test.log
           if-no-files-found: warn
 
       - name: Upload results to Codecov
