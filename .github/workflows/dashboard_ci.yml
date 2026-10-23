@@ -35,9 +35,11 @@ jobs:
       - name: Inject Commit SHA
         id: get_sha
         run: |
-          echo "COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          COMMIT_SHA="$(git rev-parse HEAD)"
+          test "$COMMIT_SHA" = "$GITHUB_SHA"
+          echo "COMMIT_SHA=$COMMIT_SHA" >> "$GITHUB_ENV"
           mkdir -p dashboard/dist/assets
-          echo $COMMIT_SHA > dashboard/dist/assets/version
+          printf '%s\n' "$COMMIT_SHA" > dashboard/dist/assets/version
           cd dashboard
           zip -r dist.zip dist
 
@@ -58,6 +60,8 @@ jobs:
           cp astrbot/builtin_stars/wangshangliao_moderation/pages/management/index.html \
             delivery/source/astrbot/builtin_stars/wangshangliao_moderation/pages/management/index.html
           printf '%s\n' "$GITHUB_SHA" > delivery/source/BUILD_COMMIT
+          test "$(cat delivery/source/BUILD_COMMIT)" = \
+            "$(cat delivery/source/astrbot/dashboard/dist/assets/version)"
           tar -czf "delivery/astrbot-${GITHUB_SHA}.tar.gz" -C delivery/source .
           cd delivery
           sha256sum "astrbot-${GITHUB_SHA}.tar.gz" > SHA256SUMS
