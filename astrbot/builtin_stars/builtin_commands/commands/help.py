@@ -1,3 +1,5 @@
+from inspect import getattr_static
+
 import aiohttp
 
 from astrbot.api import star
@@ -68,7 +70,7 @@ class HelpCommand:
         """查看帮助"""
         handler = (
             getattr(event, "handle_builtin_help", None)
-            if callable(getattr(type(event), "handle_builtin_help", None))
+            if callable(getattr_static(event, "handle_builtin_help", None))
             else None
         )
         if handler is not None and await handler():

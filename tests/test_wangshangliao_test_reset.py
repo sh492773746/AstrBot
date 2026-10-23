@@ -42,6 +42,18 @@ def lab(tmp_path, monkeypatch):
         Reset utility and its fixture paths.
     """
     monkeypatch.setattr(module.os, "geteuid", lambda: 0, raising=False)
+    original_stat = Path.stat
+
+    def private_parent_stat(path, *, follow_symlinks=True):
+        result = original_stat(path, follow_symlinks=follow_symlinks)
+        if path == tmp_path:
+            # Simulate only the root-owned external archive parent in this fixture.
+            fields = list(result)
+            fields[4] = 0
+            return os.stat_result(fields)
+        return result
+
+    monkeypatch.setattr(Path, "stat", private_parent_stat)
     root = tmp_path / "application"
     data = root / "data"
     native = data / "platform_data/wangshangliao" / ("a" * 64)
@@ -299,6 +311,27 @@ def test_non_root_operator_cannot_apply_reset(lab, monkeypatch):
     with pytest.raises(module.ResetError, match="apply_requires_root_maintenance_operator"):
         lab.reset.apply(preview["confirmation_sha256"], lab.output)
     assert rows(lab, module.OPEN, "tenants") == before
+    assert not lab.output.exists()
+
+
+@pytest.mark.parametrize("field,value", [(4, 1001), (0, 0o40777)])
+def test_unsafe_external_archive_parent_is_rejected(lab, monkeypatch, field, value):
+    preview = lab.reset.preview()
+    original_stat = Path.stat
+
+    def unsafe_parent_stat(path, *, follow_symlinks=True):
+        result = original_stat(path, follow_symlinks=follow_symlinks)
+        if path == lab.output.parent:
+            fields = list(result)
+            fields[field] = value
+            return os.stat_result(fields)
+        return result
+
+    monkeypatch.setattr(Path, "stat", unsafe_parent_stat)
+    with pytest.raises(
+        module.ResetError, match="new_private_external_backup_directory_required"
+    ):
+        lab.reset.apply(preview["confirmation_sha256"], lab.output)
     assert not lab.output.exists()
 
 

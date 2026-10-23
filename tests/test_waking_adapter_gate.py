@@ -1,7 +1,7 @@
 """Adapter-owned early gates must not weaken the shared waking pipeline."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -134,3 +134,19 @@ def test_builtin_help_does_not_import_the_native_business_extension():
     from astrbot.builtin_stars.builtin_commands.commands import help as help_module
 
     assert "wangshangliao" not in Path(help_module.__file__).read_text()
+
+
+@pytest.mark.asyncio
+async def test_synthesized_mock_help_hook_does_not_override_generic_help(monkeypatch):
+    from astrbot.builtin_stars.builtin_commands.commands import help as help_module
+
+    event = MagicMock()
+    command = help_module.HelpCommand(None)
+    command._query_astrbot_notice = AsyncMock(return_value="")
+    command._build_reserved_command_lines = AsyncMock(return_value=["/existing"])
+    monkeypatch.setattr(
+        help_module, "get_dashboard_version", AsyncMock(return_value="fixture")
+    )
+    await command.help(event)
+    event.handle_builtin_help.assert_not_called()
+    event.set_result.assert_called_once()

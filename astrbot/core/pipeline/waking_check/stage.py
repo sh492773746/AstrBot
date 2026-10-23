@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, Callable
+from inspect import getattr_static
 
 from astrbot import logger
 from astrbot.core.message.components import At, AtAll, Reply
@@ -85,7 +86,7 @@ class WakingCheckStage(Stage):
     ) -> None | AsyncGenerator[None, None]:
         prepare = (
             getattr(event, "prepare_waking_check", None)
-            if callable(getattr(type(event), "prepare_waking_check", None))
+            if callable(getattr_static(event, "prepare_waking_check", None))
             else None
         )
         if prepare is not None and not await prepare(
