@@ -231,13 +231,21 @@ def test_multitenant_retrieval_uses_incremental_index_and_bounded_results(
     application_queries = [
         query
         for query in queries
-        if not query.lstrip().startswith("--") and "'knowledge_fts_config'" not in query
+        # FTS5 also traces implementation-specific reads on newer SQLite builds.
+        if query.lstrip().startswith(
+            (
+                "SELECT * FROM knowledge_spaces WHERE ",
+                "SELECT 1 FROM knowledge_entries WHERE ",
+                "SELECT e.title,e.body FROM knowledge_fts ",
+            )
+        )
     ]
     assert len(application_queries) == 300
     assert sum("MATCH" in query for query in application_queries) == 100
     assert not any(
         "CREATE" in query or "INSERT" in query or "UPDATE" in query
-        for query in application_queries
+        for query in queries
+        if not query.lstrip().startswith("--")
     )
     print(
         json.dumps(

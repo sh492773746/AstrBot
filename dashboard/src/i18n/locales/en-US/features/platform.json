@@ -257,6 +257,7 @@
   },
   "wangshangliao": {
     "online": "Online",
+    "unknown": "Status unavailable",
     "reconnecting": "Reconnecting",
     "reauth_required": "Login required",
     "awaiting_save": "Authenticated; save login to connect",
@@ -264,6 +265,9 @@
     "error": "Connection error",
     "rate_limited": "Rate limited",
     "account_conflict": "Account conflict",
+    "errorHistory": "historical error records",
+    "membersVerified": "Member list verified; actions still require the necessary group permissions",
+    "membersUnavailable": "Member list unverified; related group actions are unavailable, not an account logout",
     "privateDirectoryIncomplete": "Private directory is incomplete: only locally known conversations are listed. Search or scroll to select."
   }
 }

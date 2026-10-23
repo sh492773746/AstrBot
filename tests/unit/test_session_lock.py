@@ -193,7 +193,9 @@ class TestConcurrency:
             )
         )
 
-        monkeypatch.setattr(internal, "session_lock_manager", manager)
+        monkeypatch.setattr(
+            "astrbot.core.provider.event_guard.session_lock_manager", manager
+        )
         monkeypatch.setattr(internal, "call_event_hook", AsyncMock(return_value=False))
         monkeypatch.setattr(internal, "build_main_agent", build_main_agent)
         monkeypatch.setattr(

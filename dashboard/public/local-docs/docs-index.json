@@ -4796,8 +4796,8 @@
       "html": "wangshangliao-maintenance.html",
       "markdown": "wangshangliao-maintenance.md",
       "aggregate": "llms-full.txt",
-      "sha256": "f7433813c244c4a96ff0bd0105e3e715814bab4def22eecaf2a7942e8bc168db",
-      "line_count": 1344,
+      "sha256": "da24484f4364875113d9c3b95f5978e8f9326ef53749d04759c7d13c0541181f",
+      "line_count": 1355,
       "headings": [
         {
           "level": 1,
@@ -4812,244 +4812,250 @@
           "end_line": 49
         },
         {
+          "level": 3,
+          "title": "GitHub CI compatibility and maintenance confirmation tokens",
+          "line": 50,
+          "end_line": 60
+        },
+        {
           "level": 2,
           "title": "2026-10-23 23:39 名单移除与群管规则对齐",
-          "line": 50,
-          "end_line": 93
+          "line": 61,
+          "end_line": 104
         },
         {
           "level": 2,
           "title": "2026-10-23 22:59 名单互斥与退群成员移除已加载",
-          "line": 94,
-          "end_line": 146
+          "line": 105,
+          "end_line": 157
         },
         {
           "level": 2,
           "title": "2026-10-23 黑名单代码加载、在线配置与保护摘要复核",
-          "line": 147,
-          "end_line": 228
+          "line": 158,
+          "end_line": 239
         },
         {
           "level": 2,
           "title": "2026-10-23 黑名单教程与离线产物生成（未发布）",
-          "line": 229,
-          "end_line": 301
+          "line": 240,
+          "end_line": 312
         },
         {
           "level": 2,
           "title": "2026-10-23 黑名单直接禁言新契约与手机确认（待当前验证）",
-          "line": 302,
-          "end_line": 350
+          "line": 313,
+          "end_line": 361
         },
         {
           "level": 2,
           "title": "2026-10-23 本群黑名单、私有图片去重与管理页更新",
-          "line": 351,
-          "end_line": 414
+          "line": 362,
+          "end_line": 425
         },
         {
           "level": 2,
           "title": "2026-10-23 关键词配图与三条定时错峰",
-          "line": 415,
-          "end_line": 438
+          "line": 426,
+          "end_line": 449
         },
         {
           "level": 2,
           "title": "2026-10-23 用户手机确认与图片试点清理",
-          "line": 439,
-          "end_line": 459
+          "line": 450,
+          "end_line": 470
         },
         {
           "level": 2,
           "title": "2026-10-23 定时图片空白气泡的包装格式修复",
-          "line": 460,
-          "end_line": 497
+          "line": 471,
+          "end_line": 508
         },
         {
           "level": 2,
           "title": "2026-10-23 定时发言先图后文与测试群补验",
-          "line": 498,
-          "end_line": 528
+          "line": 509,
+          "end_line": 539
         },
         {
           "level": 2,
           "title": "2026-10-23 红包到时公布与结果排序",
-          "line": 529,
-          "end_line": 545
+          "line": 540,
+          "end_line": 556
         },
         {
           "level": 3,
           "title": "验证与加载",
-          "line": 546,
-          "end_line": 563
+          "line": 557,
+          "end_line": 574
         },
         {
           "level": 2,
           "title": "2026-10-22 三秒三条刷屏阈值热重载",
-          "line": 564,
-          "end_line": 580
+          "line": 575,
+          "end_line": 591
         },
         {
           "level": 2,
           "title": "2026-10-22 深度审查：长规则回复与异步活动边界",
-          "line": 581,
-          "end_line": 608
+          "line": 592,
+          "end_line": 619
         },
         {
           "level": 3,
           "title": "验证与加载",
-          "line": 609,
-          "end_line": 630
+          "line": 620,
+          "end_line": 641
         },
         {
           "level": 2,
           "title": "2026-10-22 固定红包份额、未领取金额与活动备注",
-          "line": 631,
-          "end_line": 651
+          "line": 642,
+          "end_line": 662
         },
         {
           "level": 3,
           "title": "验证与加载",
-          "line": 652,
-          "end_line": 670
+          "line": 663,
+          "end_line": 681
         },
         {
           "level": 2,
           "title": "2026-10-22 图片上传等待恢复与管理员私信录图",
-          "line": 671,
-          "end_line": 693
+          "line": 682,
+          "end_line": 704
         },
         {
           "level": 3,
           "title": "加载与验证边界",
-          "line": 694,
-          "end_line": 713
+          "line": 705,
+          "end_line": 724
         },
         {
           "level": 2,
           "title": "2026-10-22 管理员AI超时与账本关闭竞态补修",
-          "line": 714,
-          "end_line": 732
+          "line": 725,
+          "end_line": 743
         },
         {
           "level": 3,
           "title": "本次部署与复验",
-          "line": 733,
-          "end_line": 759
+          "line": 744,
+          "end_line": 770
         },
         {
           "level": 2,
           "title": "2026-10-22 旧站退役、定时图片与最新管理员指引",
-          "line": 760,
-          "end_line": 792
+          "line": 771,
+          "end_line": 803
         },
         {
           "level": 3,
           "title": "本轮验证与未通过项",
-          "line": 793,
-          "end_line": 826
+          "line": 804,
+          "end_line": 837
         },
         {
           "level": 2,
           "title": "2026-10-22 结账入口合并与常用对话简化（早先阶段）",
-          "line": 827,
-          "end_line": 865
+          "line": 838,
+          "end_line": 876
         },
         {
           "level": 2,
           "title": "2026-10-22 抽奖拆分、当前禁言与受控试点",
-          "line": 866,
-          "end_line": 924
+          "line": 877,
+          "end_line": 935
         },
         {
           "level": 2,
           "title": "2026-10-22 媒体误罚修复与更正",
-          "line": 925,
-          "end_line": 951
+          "line": 936,
+          "end_line": 962
         },
         {
           "level": 2,
           "title": "2026-10-22 仅规则群升级入口",
-          "line": 952,
-          "end_line": 980
+          "line": 963,
+          "end_line": 991
         },
         {
           "level": 2,
           "title": "2026-10-22 江哥群 AI 与 PC28 展示",
-          "line": 981,
-          "end_line": 1013
+          "line": 992,
+          "end_line": 1024
         },
         {
           "level": 2,
           "title": "2026-10-22 防误罚与取消边界",
-          "line": 1014,
-          "end_line": 1045
+          "line": 1025,
+          "end_line": 1056
         },
         {
           "level": 2,
           "title": "调度与持久化",
-          "line": 1046,
-          "end_line": 1057
+          "line": 1057,
+          "end_line": 1068
         },
         {
           "level": 2,
           "title": "正文保留",
-          "line": 1058,
-          "end_line": 1080
+          "line": 1069,
+          "end_line": 1091
         },
         {
           "level": 2,
           "title": "发布与恢复",
-          "line": 1081,
-          "end_line": 1116
+          "line": 1092,
+          "end_line": 1127
         },
         {
           "level": 2,
           "title": "排障",
-          "line": 1117,
-          "end_line": 1118
+          "line": 1128,
+          "end_line": 1129
         },
         {
           "level": 3,
           "title": "公共模式维护窗口",
-          "line": 1119,
-          "end_line": 1205
+          "line": 1130,
+          "end_line": 1216
         },
         {
           "level": 2,
           "title": "文档、页面与代码更新",
-          "line": 1206,
-          "end_line": 1207
+          "line": 1217,
+          "end_line": 1218
         },
         {
           "level": 3,
           "title": "聚合与 AI 索引",
-          "line": 1208,
-          "end_line": 1223
+          "line": 1219,
+          "end_line": 1234
         },
         {
           "level": 3,
           "title": "代码清理边界",
-          "line": 1224,
-          "end_line": 1284
+          "line": 1235,
+          "end_line": 1295
         },
         {
           "level": 2,
           "title": "2026-10-23审核排队修复",
-          "line": 1285,
-          "end_line": 1310
+          "line": 1296,
+          "end_line": 1321
         },
         {
           "level": 2,
           "title": "无回复排查",
-          "line": 1311,
-          "end_line": 1327
+          "line": 1322,
+          "end_line": 1338
         },
         {
           "level": 3,
           "title": "旧AI工具模式（历史排障，不适用于公共合并模式）",
-          "line": 1328,
-          "end_line": 1344
+          "line": 1339,
+          "end_line": 1355
         }
       ]
     },

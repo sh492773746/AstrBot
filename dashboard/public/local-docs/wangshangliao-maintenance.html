@@ -49,6 +49,15 @@ dispatcher also avoids duplicate framework chat stalls while retaining its own
 AI, command and sanction limits; other modes keep the shared limiter. Command
 capabilities remain separate from real join evidence, persistent and idempotent.
 Unknown outcomes are not retried. Older dated evidence below is historical.</p>
+<h3>GitHub CI compatibility and maintenance confirmation tokens</h3>
+<p>The integrated release preserves the current upstream framework and validates
+Linux, macOS and Windows separately. POSIX-only offline maintenance tools are
+tested on supported hosts; production permission checks are not relaxed.
+<code>wsl_test_lab.py</code> now stores one-use confirmation tokens with a random salt and
+PBKDF2-HMAC-SHA256 (600,000 iterations). Legacy or malformed token digests fail
+closed before platform requests; generate and review a fresh preview instead of
+reusing a preview created before this update. No runtime configuration, member
+lists or financial data is included in the GitHub source or application bundle.</p>
 <h2>2026-10-23 23:39 名单移除与群管规则对齐</h2>
 <p>本轮是负责人明确授权的配置操作，不是新的功能发布或实群处罚验收。
 已通过正式的搜索、唯一目标预览、确认提交及读回，移除一条指定的发言白名单记录，

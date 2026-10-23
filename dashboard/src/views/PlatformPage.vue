@@ -492,7 +492,7 @@ function getPlatformIconFor(platform) {
 function getPlatformStat(platformId) {
   return platformStats.value[platformId] ||
     (platforms.value.find(p => p.id === platformId)?.type === 'wangshangliao'
-      ? { status: 'stopped', connection_state: 'stopped' } : null);
+      ? { status: 'unknown', connection_state: 'unknown' } : null);
 }
 
 function getPlatformStatusLabel(platform) {

@@ -651,13 +651,15 @@ class TestLab:
         with self.locked():
             payload = await self.snapshot(action, first=first)
             identity, token = secrets.token_hex(16), secrets.token_urlsafe(24)
+            salt = secrets.token_bytes(16)
+            digest = hashlib.pbkdf2_hmac("sha256", token.encode(), salt, 600_000).hex()
             expires = time.time() + 600
             with closing(sqlite3.connect(self.path)) as db, db:
                 db.execute(
                     "INSERT INTO previews(id,digest,payload,expires) VALUES(?,?,?,?)",
                     (
                         identity,
-                        hashlib.sha256(token.encode()).hexdigest(),
+                        f"pbkdf2_sha256:{salt.hex()}:{digest}",
                         json.dumps(payload),
                         expires,
                     ),
@@ -689,14 +691,29 @@ class TestLab:
                 preview = db.execute(
                     "SELECT * FROM previews WHERE id=?", (identity,)
                 ).fetchone()
+                confirmed = False
+                if preview and isinstance(token, str):
+                    digest = preview["digest"].split(":")
+                    if (
+                        len(digest) == 3
+                        and digest[0] == "pbkdf2_sha256"
+                        and len(digest[1]) == 32
+                        and len(digest[2]) == 64
+                    ):
+                        try:
+                            salt = bytes.fromhex(digest[1])
+                        except ValueError:
+                            salt = None
+                        if salt is not None:
+                            actual = hashlib.pbkdf2_hmac(
+                                "sha256", token.encode(), salt, 600_000
+                            ).hex()
+                            confirmed = hmac.compare_digest(digest[2], actual)
                 if (
                     not preview
                     or preview["used"]
                     or time.time() >= preview["expires"]
-                    or not isinstance(token, str)
-                    or not hmac.compare_digest(
-                        preview["digest"], hashlib.sha256(token.encode()).hexdigest()
-                    )
+                    or not confirmed
                 ):
                     raise ProtocolError("test_lab_confirmation")
                 payload = json.loads(preview["payload"])

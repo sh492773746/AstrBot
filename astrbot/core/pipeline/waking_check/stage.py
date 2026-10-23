@@ -83,7 +83,11 @@ class WakingCheckStage(Stage):
         self,
         event: AstrMessageEvent,
     ) -> None | AsyncGenerator[None, None]:
-        prepare = getattr(event, "prepare_waking_check", None)
+        prepare = (
+            getattr(event, "prepare_waking_check", None)
+            if callable(getattr(type(event), "prepare_waking_check", None))
+            else None
+        )
         if prepare is not None and not await prepare(
             self.ctx.astrbot_config, star_handlers_registry
         ):

@@ -15,8 +15,8 @@ fi
 
 PYTEST_TARGETS=("${@:-./tests}")
 
- echo "[ci] syncing dependencies with uv"
-uv sync --dev --extra wsl
+echo "[ci] syncing dependencies with uv"
+uv sync --locked --dev --extra wsl
 
 echo "[ci] installing the browser used by offline plugin UI tests"
 uv run python -m playwright install --with-deps chromium --only-shell

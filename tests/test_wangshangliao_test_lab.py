@@ -17,6 +17,8 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
+pytest.importorskip("fcntl", reason="POSIX-only maintenance CLI")
+
 from astrbot.core.platform.sources.wangshangliao.business import BusinessError
 from astrbot.core.platform.sources.wangshangliao.business_http import (
     _exchange_business as signed_exchange,
@@ -348,9 +350,11 @@ async def test_first_invite_pending_then_explicit_accept_verified(lab, ordinary,
     preview = await worker.preview("invite", first=True)
     saved = lab.rows("previews")[0]
     assert preview["expires"] == lab.now + 600
-    assert (
-        saved["digest"] == hashlib.sha256(preview["confirmation"].encode()).hexdigest()
-    )
+    algorithm, salt, digest = saved["digest"].split(":")
+    assert algorithm == "pbkdf2_sha256"
+    assert digest == hashlib.pbkdf2_hmac(
+        "sha256", preview["confirmation"].encode(), bytes.fromhex(salt), 600_000
+    ).hex()
     assert preview["confirmation"] not in worker.path.read_bytes().decode("latin-1")
     assert json.loads(saved["payload"])["members"] == preview["members"]
     assert all(isinstance(row, list) for row in preview["members"])
@@ -637,6 +641,31 @@ async def test_preview_one_use_and_group_bound_across_restart(lab):
         await other.reconcile(preview["preview"])
     assert len(lab.calls) == count
     assert len(lab.writes) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", ["legacy", "pbkdf2_sha256:invalid:invalid"])
+async def test_confirmation_uses_salted_kdf_and_rejects_old_or_corrupt_digest(
+    lab, stored
+):
+    preview = await lab.worker.preview("invite")
+    saved = lab.rows("previews")[0]["digest"]
+    algorithm, salt, digest = saved.split(":")
+    assert algorithm == "pbkdf2_sha256"
+    assert len(bytes.fromhex(salt)) == 16
+    assert len(bytes.fromhex(digest)) == 32
+    assert preview["confirmation"] not in saved
+    with closing(sqlite3.connect(lab.worker.path)) as db, db:
+        db.execute(
+            "UPDATE previews SET digest=? WHERE id=?",
+            (stored, preview["preview"]),
+        )
+    count = len(lab.calls)
+    with pytest.raises(ProtocolError, match="test_lab_confirmation"):
+        await lab.worker.execute(preview["preview"], preview["confirmation"])
+    assert len(lab.calls) == count
+    assert not lab.rows("attempts")
+    assert not lab.writes
 
 
 @pytest.mark.asyncio

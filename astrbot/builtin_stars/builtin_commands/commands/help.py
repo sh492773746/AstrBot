@@ -66,7 +66,11 @@ class HelpCommand:
 
     async def help(self, event: AstrMessageEvent) -> None:
         """查看帮助"""
-        handler = getattr(event, "handle_builtin_help", None)
+        handler = (
+            getattr(event, "handle_builtin_help", None)
+            if callable(getattr(type(event), "handle_builtin_help", None))
+            else None
+        )
         if handler is not None and await handler():
             return
         notice = ""

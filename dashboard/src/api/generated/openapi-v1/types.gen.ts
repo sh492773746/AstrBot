@@ -110,6 +110,22 @@ export type action = 'start' | 'poll' | 'login' | 'request_sms' | 'verify_sms' |
 
 export type operation_action = 'mute' | 'unmute' | 'mute_all' | 'unmute_all' | 'announce';
 
+/**
+ * Declare the bounds and side effects of one server-owned capability.
+ */
+export type CapabilitySpec = {
+    schema_version?: 1;
+    id: string;
+    plugin: string;
+    effect?: 'read' | 'write' | 'send' | 'model';
+    timeout?: number;
+    concurrency?: number;
+    critical?: boolean;
+    probe?: boolean;
+};
+
+export type effect = 'read' | 'write' | 'send' | 'model';
+
 export type ChatChunkUploadRequest = {
     upload_id: string;
     chunk_index: number;
@@ -256,6 +272,84 @@ export type CommandPatchRequest = {
     permission_group?: string;
 };
 
+/**
+ * Declare one native command and its compatible execution entry.
+ */
+export type CommandSpec = {
+    schema_version?: 1;
+    id: string;
+    plugin: string;
+    command: string;
+    aliases?: Array<(string)>;
+    locations?: Array<('group' | 'private')>;
+    role?: string;
+    preview?: boolean;
+    retired?: boolean;
+    capability: string;
+    arguments?: {
+        [key: string]: unknown;
+    };
+    effect?: 'read' | 'write' | 'send' | 'model';
+};
+
+export type ComponentCatalogData = {
+    schema_version: number;
+    components: Array<(CapabilitySpec | CommandSpec | PageSpec)>;
+};
+
+export type ComponentCatalogResponse = {
+    status: string;
+    message: (string | null);
+    data: ComponentCatalogData;
+};
+
+export type ComponentRecoveryData = {
+    state: string;
+    version: number;
+};
+
+/**
+ * Select only a registered scope and a versioned server recovery action.
+ */
+export type ComponentRecoveryRequest = {
+    capability: string;
+    scope: Array<(string)>;
+    version: number;
+    operation: 'probe' | 'reset_after_review';
+    reason?: string;
+};
+
+export type operation = 'probe' | 'reset_after_review';
+
+export type ComponentRecoveryResponse = {
+    status: string;
+    message: (string | null);
+    data: ComponentRecoveryData;
+};
+
+export type ComponentStatusData = {
+    entries: Array<ComponentStatusEntry>;
+};
+
+export type ComponentStatusEntry = {
+    capability: string;
+    plugin: string;
+    scope: Array<(string)>;
+    reference: string;
+    state: string;
+    version: number;
+    failures: number;
+    retry_after: number;
+    in_flight: number;
+    error: string;
+};
+
+export type ComponentStatusResponse = {
+    status: string;
+    message: (string | null);
+    data: ComponentStatusData;
+};
+
 export type ConfigRoutesReplaceRequest = {
     routing: {
         [key: string]: (string);
@@ -353,6 +447,10 @@ export type FileUploadRequest = {
 
 export type GhproxyTestRequest = {
     proxy_url: string;
+};
+
+export type HTTPValidationError = {
+    detail?: Array<ValidationError>;
 };
 
 export type ImMessageRequest = {
@@ -461,6 +559,20 @@ export type NeoCandidateActionRequest = {
 export type NeoReleaseActionRequest = {
     release_id: string;
     [key: string]: unknown | string;
+};
+
+/**
+ * Expose a Pydantic schema with bounded presentation hints.
+ */
+export type PageSpec = {
+    schema_version?: 1;
+    id: string;
+    plugin: string;
+    capability: string;
+    fields: {
+        [key: string]: unknown;
+    };
+    confirmation?: boolean;
 };
 
 export type ParameterAttachmentId = string;
@@ -782,6 +894,44 @@ export type UpdateRequest = {
     reboot?: boolean;
     progress_id?: string;
 };
+
+export type ValidationError = {
+    loc: Array<(string | number)>;
+    msg: string;
+    type: string;
+    input?: unknown;
+    ctx?: {
+        [key: string]: unknown;
+    };
+};
+
+export type GetComponentCatalogData = {
+    query?: {
+        plugin?: (string | null);
+    };
+};
+
+export type GetComponentCatalogResponse = (ComponentCatalogResponse);
+
+export type GetComponentCatalogError = (HTTPValidationError);
+
+export type GetComponentStatusData = {
+    query?: {
+        plugin?: (string | null);
+    };
+};
+
+export type GetComponentStatusResponse = (ComponentStatusResponse);
+
+export type GetComponentStatusError = (HTTPValidationError);
+
+export type RecoverComponentData = {
+    body: ComponentRecoveryRequest;
+};
+
+export type RecoverComponentResponse = (ComponentRecoveryResponse);
+
+export type RecoverComponentError = (HTTPValidationError);
 
 export type LoginData = {
     body: LoginRequest;

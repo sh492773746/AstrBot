@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+pytest.importorskip("fcntl", reason="POSIX-only maintenance CLI")
+
 from scripts import check_wsl_activity_pilot as pilot
 
 

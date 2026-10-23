@@ -11,6 +11,8 @@ from unittest.mock import Mock
 
 import pytest
 
+pytest.importorskip("fcntl", reason="POSIX-only maintenance CLI")
+
 from scripts import reset_wsl_test_group as module
 
 
@@ -39,6 +41,7 @@ def lab(tmp_path, monkeypatch):
     Returns:
         Reset utility and its fixture paths.
     """
+    monkeypatch.setattr(module.os, "geteuid", lambda: 0, raising=False)
     root = tmp_path / "application"
     data = root / "data"
     native = data / "platform_data/wangshangliao" / ("a" * 64)
@@ -287,6 +290,16 @@ def rows(lab, name, table):
     """
     with closing(sqlite3.connect(lab.root / name)) as db:
         return db.execute(f'SELECT * FROM "{table}" ORDER BY rowid').fetchall()
+
+
+def test_non_root_operator_cannot_apply_reset(lab, monkeypatch):
+    preview = lab.reset.preview()
+    before = rows(lab, module.OPEN, "tenants")
+    monkeypatch.setattr(module.os, "geteuid", lambda: 1001)
+    with pytest.raises(module.ResetError, match="apply_requires_root_maintenance_operator"):
+        lab.reset.apply(preview["confirmation_sha256"], lab.output)
+    assert rows(lab, module.OPEN, "tenants") == before
+    assert not lab.output.exists()
 
 
 def test_default_preview_is_read_only_and_not_genuine_first_activation(lab):

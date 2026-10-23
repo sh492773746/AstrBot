@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+pytest.importorskip("fcntl", reason="POSIX-only maintenance CLI")
+
 from astrbot.core.platform.sources.wangshangliao import wire
 from scripts import check_wsl_test_activation_live as module
 

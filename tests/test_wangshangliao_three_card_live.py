@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+
+pytest.importorskip("fcntl", reason="POSIX-only maintenance CLI")
 import pytest_asyncio
 
 from scripts import check_wsl_three_card_live as script

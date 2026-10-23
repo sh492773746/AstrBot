@@ -5,6 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
+pytest.importorskip("fcntl", reason="POSIX-only maintenance CLI")
+
 from scripts import check_wsl_cooperative_live as cooperative
 from scripts import check_wsl_quotes_live as quotes
 

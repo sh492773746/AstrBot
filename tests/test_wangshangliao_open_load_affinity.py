@@ -14,7 +14,20 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("resource", reason="POSIX-only load placement utility")
+
 from scripts import check_wsl_open_load as benchmark
+
+
+@pytest.fixture(autouse=True)
+def optional_affinity_api(monkeypatch):
+    """Model Linux affinity APIs in isolated tests on other POSIX runners."""
+    def unsupported(*_):
+        raise NotImplementedError("No native affinity API on this test runner")
+
+    for name in ("sched_setaffinity", "sched_getaffinity"):
+        if not hasattr(benchmark.os, name):
+            monkeypatch.setattr(benchmark.os, name, unsupported, raising=False)
 
 
 def test_synthetic_consultation_binding_keeps_two_slow_models_and_rules(tmp_path):
