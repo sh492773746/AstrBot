@@ -35,6 +35,9 @@ forced read cannot be mistaken for a concurrent coalesced read.
 The dashboard finance-window lock regression rejects recursive acquisition
 directly and exercises an injected shared-lock failure. It does not infer a
 deadlock from the time taken to initialize SQLite on a hosted runner.
+HTTP timeout-phase tests wait until the local server receives the request,
+then cancel the pending response while headers are held behind an event.
+They do not assume TCP setup finishes within a 30 ms total deadline.
 
 CodeQL findings are fixed in application code, not hidden by query exclusions,
 alert dismissal or weaker branch policies. Path access must use a normalized,
