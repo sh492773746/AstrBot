@@ -42,13 +42,15 @@ def resolve_path_within(
     requested = Path(raw)
     if requested.is_absolute():
         raise ValueError("Absolute paths are not allowed")
-    root = Path(base).resolve()
-    candidate = (root / requested).resolve()
-    if allow_root and candidate == root:
-        return candidate
-    if not str(candidate).startswith(str(root) + os.sep):
+    root = os.path.realpath(base)
+    candidate = os.path.realpath(os.path.join(root, raw))
+    if candidate == root:
+        if allow_root:
+            return Path(root)
+        raise ValueError("The allowed directory itself is not a resource")
+    if not candidate.startswith(root.rstrip(os.sep) + os.sep):
         raise ValueError("Path is outside the allowed directory")
-    return candidate
+    return Path(candidate)
 
 
 def get_astrbot_path() -> str:

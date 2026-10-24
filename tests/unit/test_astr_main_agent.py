@@ -32,6 +32,15 @@ from astrbot.core.star.context import Context
 from astrbot.core.star.star import StarMetadata
 
 
+@pytest.fixture(autouse=True)
+def isolated_builtin_skills(tmp_path, monkeypatch):
+    """Keep agent fixtures independent of globally registered preset skills."""
+    monkeypatch.setattr(
+        "astrbot.core.skills.skill_manager.get_astrbot_builtin_plugin_path",
+        lambda: str(tmp_path / "empty_builtin_plugins"),
+    )
+
+
 @pytest.fixture
 def valid_image_path(tmp_path):
     """Create a real image for builder tests that exercise provider selection."""
@@ -1448,7 +1457,13 @@ class TestEnsurePersonaAndSkills:
         [(True, False), (True, True), (False, False)],
     )
     async def test_persona_empty_tools_keeps_local_runtime_builtin_tools(
-        self, mock_event, mock_context, mock_provider, role, allow_execution, allow_network
+        self,
+        mock_event,
+        mock_context,
+        mock_provider,
+        role,
+        allow_execution,
+        allow_network,
     ):
         module = ama
         persona = {"name": "locked", "prompt": "No tools.", "tools": []}
