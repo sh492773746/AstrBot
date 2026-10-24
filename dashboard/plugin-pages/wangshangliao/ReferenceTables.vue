@@ -6,22 +6,18 @@ const props = defineProps<{
   locale: string;
   groupId: string;
   permissions: string[];
-  contentMode: boolean;
+  integrated: boolean;
 }>();
 const t = (zh: string, en: string) => (props.locale.startsWith("zh") ? zh : en);
 const text = (value: string[]) => t(value[0], value[1]);
 const access = (value: string) => {
-  if (value === "kick-mode")
-    return props.contentMode
-      ? t("群内静默", "Silent in groups")
-      : t("允许", "Allowed");
   const labels: Record<string, string[]> = {
     allowed: ["允许", "Allowed"],
     denied: ["无权限", "Denied"],
     "private-only": ["群内静默", "Silent in groups"],
     "group-only": ["仅群内", "Group only"],
     unavailable: ["未提供", "Not available"],
-    tool: ["需 AI 工具", "AI tool required"],
+    verified: ["须开通核验", "Activation checks required"],
   };
   return text(labels[value]);
 };
@@ -34,6 +30,19 @@ const access = (value: string) => {
     :aria-labelledby="`tab-${view}`"
     class="reference-panel"
   >
+    <p class="muted">
+      {{ t("同步日期", "Updated") }}: {{ reference.updated }} ·
+      {{ t("公共合并模式", "Integrated public mode") }}
+    </p>
+    <p>{{ text(reference.scope) }}</p>
+    <p v-if="!integrated" class="warning">
+      {{
+        t(
+          "当前服务不是公共合并模式；此表是公共模式参考，不能据此推断兼容模式授权。",
+          "This service is not in integrated public mode; this public-mode reference does not describe legacy grants.",
+        )
+      }}
+    </p>
     <template v-if="view === 'architecture'">
       <h2>
         {{ t("模块职责与数据边界", "Module responsibilities and boundaries") }}
@@ -70,6 +79,35 @@ const access = (value: string) => {
       </div>
     </template>
     <template v-else>
+      <h2>{{ t("角色与范围", "Roles and scope") }}</h2>
+      <div
+        class="table-scroll"
+        tabindex="0"
+        :aria-label="t('角色权限', 'Role permissions')"
+      >
+        <table class="reference-table authority-table">
+          <thead>
+            <tr>
+              <th scope="col">{{ t("角色", "Role") }}</th>
+              <th scope="col">{{ t("作用范围", "Scope") }}</th>
+              <th scope="col">{{ t("可用权限", "Permitted") }}</th>
+              <th scope="col">{{ t("不包含", "Excluded") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in reference.roles"
+              :key="row.id"
+              :data-role="row.id"
+            >
+              <th scope="row">{{ text(row.name) }}</th>
+              <td>{{ text(row.scope) }}</td>
+              <td>{{ text(row.allowed) }}</td>
+              <td>{{ text(row.denied) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <h2>{{ t("调用权限对照", "Caller permission matrix") }}</h2>
       <div
         class="table-scroll"
@@ -82,13 +120,13 @@ const access = (value: string) => {
               <th scope="col">{{ t("功能／命令", "Feature / command") }}</th>
               <th scope="col">{{ t("普通群员 · 群内", "Member · group") }}</th>
               <th scope="col">
-                {{ t("授权管理员 · 群内", "Authorized admin · group") }}
+                {{ t("本群管理 · 群内", "Group manager · group") }}
               </th>
               <th scope="col">
                 {{ t("普通用户 · 私聊", "Member · private") }}
               </th>
               <th scope="col">
-                {{ t("授权管理员 · 私聊", "Authorized admin · private") }}
+                {{ t("本群管理 · 私聊", "Group manager · private") }}
               </th>
               <th scope="col">
                 {{ t("动作所需已保存授权", "Required saved action grants") }}
@@ -140,8 +178,8 @@ const access = (value: string) => {
                 <span v-if="'proactive' in row && row.proactive">
                   {{
                     t(
-                      "主动发送：机器人页核验",
-                      "Proactive sending: verify in bot editor",
+                      "主动发送：群管页核验",
+                      "Proactive sending: verify in management",
                     )
                   }}
                 </span>

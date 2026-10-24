@@ -1944,6 +1944,12 @@ class PluginManager:
         if star_metadata.star_cls is None:
             return
 
+        from .component_runtime import component_runtime
+        from .components import components
+
+        if any(spec.plugin == star_metadata.name for spec in components.specs.values()):
+            await component_runtime.close(star_metadata.name, unregister=True)
+
         if "__del__" in star_metadata.star_cls_type.__dict__:
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(

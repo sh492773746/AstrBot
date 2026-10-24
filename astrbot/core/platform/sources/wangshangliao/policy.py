@@ -34,6 +34,7 @@ def validate_policy(policy: dict) -> None:
         "recall_enabled",
         "cooldown_seconds",
         "card_auto",
+        "card_suffix",
         "content_rules_since",
         "semantic",
         "auto_kick",
@@ -115,8 +116,23 @@ def validate_policy(policy: dict) -> None:
         )
     ):
         raise ValueError("card_auto_config")
-    keywords = policy.get("keywords", [])
-    for field in ("mute_keywords", "kick_keywords"):
+    suffixes = policy.get("card_suffix", {})
+    if (
+        not isinstance(suffixes, dict)
+        or len(suffixes) > 100
+        or any(
+            not isinstance(group, str)
+            or not group.isascii()
+            or not group.isdigit()
+            or int(group) <= 0
+            or not isinstance(suffix, str)
+            or any(not char.isprintable() and char != "\u200d" for char in suffix)
+            or len(suffix.encode()) > 128
+            for group, suffix in suffixes.items()
+        )
+    ):
+        raise ValueError("card_suffix_config")
+    for field in ("mute_keywords", "kick_keywords", "keywords"):
         words = policy.get(field, [])
         if (
             not isinstance(words, list)
@@ -127,15 +143,6 @@ def validate_policy(policy: dict) -> None:
             )
         ):
             raise ValueError("moderation_keywords")
-    if (
-        not isinstance(keywords, list)
-        or len(keywords) > 50
-        or any(
-            not isinstance(word, str) or not word.strip() or len(word) > 100
-            for word in keywords
-        )
-    ):
-        raise ValueError("moderation_keywords")
     cooldown = policy.get("cooldown_seconds", 60)
     if type(cooldown) is not int or not 10 <= cooldown <= 86400:
         raise ValueError("moderation_cooldown")

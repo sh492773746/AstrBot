@@ -1,4 +1,4 @@
-"""Query read-only invitation attribution through the running local Dashboard."""
+"""Query read-only join-operator or business-invitation records via Dashboard."""
 
 import argparse
 import asyncio
@@ -23,7 +23,9 @@ async def main() -> int:
     parser.add_argument("--group", required=True)
     parser.add_argument("--member", default="")
     parser.add_argument(
-        "--records", action="store_true", help="Read account-visible invitation logs"
+        "--records",
+        action="store_true",
+        help="Read account-visible business invitations instead of NIM join operators",
     )
     parser.add_argument(
         "--all-states", action="store_true", help="Include non-pending log records"
@@ -51,12 +53,18 @@ async def main() -> int:
             if item.get("id") == args.bot
             and item.get("type") == "wangshangliao"
             and item.get("enable")
-            and args.group in item.get("enabled_groups", [])
         ),
         None,
     )
     if not bot:
-        parser.error("The bot/group must be enabled in the local configuration")
+        parser.error("The bot must be enabled in the local configuration")
+    if (
+        not args.group.isascii()
+        or not args.group.isdigit()
+        or len(args.group) > 20
+        or int(args.group) <= 0
+    ):
+        parser.error("Group must be an exact business group ID")
     if args.member and (
         not args.member.isascii()
         or not args.member.isdigit()
@@ -67,7 +75,7 @@ async def main() -> int:
     token = jwt.encode(
         {
             "username": config["dashboard"]["username"],
-            "exp": int(time.time()) + 60,
+            "exp": int(time.time()) + 120,
         },
         config["dashboard"]["jwt_secret"],
         algorithm="HS256",
@@ -75,6 +83,43 @@ async def main() -> int:
     async with httpx.AsyncClient(
         timeout=40, follow_redirects=False, trust_env=False
     ) as client:
+        # Business scopes are persisted by the plugin, not the transport JSON.
+        scope = await client.get(
+            f"http://127.0.0.1:{args.port}/api/v1/plugins/extensions/"
+            "wangshangliao_moderation/settings",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        try:
+            current = scope.json()
+            if not isinstance(current, dict) or not isinstance(
+                current.get("data"), dict
+            ):
+                raise ValueError("Invalid settings response")
+            bots = current["data"].get("bots")
+            if not isinstance(bots, list):
+                raise ValueError("Invalid settings bots")
+            selected = next(
+                (
+                    item
+                    for item in bots
+                    if isinstance(item, dict) and item.get("id") == args.bot
+                ),
+                None,
+            )
+        except (ValueError, AttributeError, TypeError):
+            selected = None
+            current = {}
+        if scope.status_code != 200 or current.get("status") != "ok":
+            print(
+                json.dumps({"status": "unavailable", "http_status": scope.status_code})
+            )
+            return 1
+        if (
+            not selected
+            or not isinstance(selected.get("enabled_groups"), list)
+            or args.group not in selected["enabled_groups"]
+        ):
+            parser.error("The group must be enabled in the current plugin settings")
         response = await client.get(
             f"http://127.0.0.1:{args.port}/api/v1/plugins/extensions/"
             "wangshangliao_moderation/invitations",
@@ -90,6 +135,8 @@ async def main() -> int:
         )
     try:
         result = response.json()
+        if not isinstance(result, dict):
+            raise ValueError("Invalid invitation response")
     except ValueError:
         print(
             json.dumps({"status": "unavailable", "http_status": response.status_code})

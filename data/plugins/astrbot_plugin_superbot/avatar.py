@@ -454,11 +454,14 @@ class Avatar:
                     os.fsync(target.fileno())
                 temporary.chmod(0o600)
                 temporary.replace(final)
-                directory = os.open(self.root, os.O_RDONLY)
-                try:
-                    os.fsync(directory)
-                finally:
-                    os.close(directory)
+                # Windows does not support opening directories with os.open.
+                # The artifact itself is still flushed before the atomic rename.
+                if os.name != "nt":
+                    directory = os.open(self.root, os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
                 with self.store.tx() as db:
                     db.execute(
                         "UPDATE avatar_jobs SET status='ready' WHERE id=?", (job,)

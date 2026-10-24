@@ -3,7 +3,7 @@
 import asyncio
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from PIL import Image, ImageChops
@@ -109,6 +109,29 @@ async def test_lifetime_quota_shared_between_group_private_and_duplicate(avatar)
         await avatar.action(first, payload, token)
     assert avatar.runtime.bot.send_document.await_count == 2
     assert not avatar.store.db.execute("SELECT 1 FROM ledger").fetchone()
+
+
+@pytest.mark.asyncio
+async def test_windows_flushes_artifact_without_opening_directory(avatar, monkeypatch):
+    from data.plugins.astrbot_plugin_superbot import avatar as module
+
+    real_os = module.os
+    portable_os = SimpleNamespace(
+        name="nt",
+        fsync=Mock(wraps=real_os.fsync),
+        open=Mock(side_effect=PermissionError("directory handles unsupported")),
+    )
+    monkeypatch.setattr(module, "os", portable_os)
+    event = update()
+    payload, token = confirmation(avatar, event)
+    await avatar.action(event, payload, token)
+    portable_os.fsync.assert_called_once()
+    portable_os.open.assert_not_called()
+    assert avatar.remaining(2) == 1
+    job = avatar.store.db.execute("SELECT * FROM avatar_jobs").fetchone()
+    assert job["status"] == "ready"
+    assert (avatar.root / (job["id"] + ".png")).is_file()
+    avatar.runtime.bot.send_document.assert_awaited_once()
 
 
 @pytest.mark.asyncio

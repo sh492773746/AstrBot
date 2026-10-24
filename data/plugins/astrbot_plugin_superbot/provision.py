@@ -78,7 +78,7 @@ async def prepare(
     documents = await kb.kb_db.list_documents_by_kb(kb.kb.kb_id)
     names = {doc.doc_name for doc in documents}
     current_names = set()
-    for filename in (("player-help.md", "player-services.md") if sync_knowledge else ()):
+    for filename in ("player-help.md", "player-services.md") if sync_knowledge else ():
         content = (root / filename).read_bytes()
         file_name = (
             "superbot-" + hashlib.sha256(content).hexdigest()[:12] + "-" + filename

@@ -10,6 +10,7 @@ from astrbot.core.agent.runners.deerflow.constants import (
 )
 from astrbot.core.agent.runners.deerflow.deerflow_api_client import DeerFlowAPIClient
 from astrbot.core.db.po import ProviderStat
+from astrbot.core.provider.event_guard import AIRequestDenied
 from astrbot.core.utils.active_event_registry import active_event_registry
 
 THIRD_PARTY_AGENT_RUNNER_KEY = {
@@ -93,6 +94,23 @@ class ConversationCommands:
     def __init__(self, context: star.Context) -> None:
         self.context = context
 
+    async def _conversation_origin(self, message):
+        resolve = getattr(type(message), "get_ai_command_conversation_origin", None)
+        if resolve is not None:
+            try:
+                return await resolve(message, self.context)
+            except Exception as exc:
+                hint = (
+                    "请先发送群列表，再发送：选择群 编号。"
+                    if isinstance(exc, AIRequestDenied)
+                    and str(exc) == "group_selection_required"
+                    else "当前会话不可用，请先确认群选择和权限。"
+                )
+                message.set_result(MessageEventResult().message(hint))
+                return None
+        origin = getattr(type(message), "get_ai_conversation_origin", None)
+        return origin(message, self.context) if origin else message.unified_msg_origin
+
     async def _get_current_persona_id(self, session_id):
         curr = await self.context.conversation_manager.get_curr_conversation_id(
             session_id,
@@ -172,6 +190,15 @@ class ConversationCommands:
         Args:
             message: Command event identifying the session and sender.
         """
+        authorize = getattr(message, "is_ai_admin", None)
+        if authorize and not message.is_private_chat():
+            authorize = None
+        if authorize and not authorize(self.context):
+            message.set_result(MessageEventResult().message("无权限"))
+            return
+        conversation_origin = await self._conversation_origin(message)
+        if conversation_origin is None:
+            return
         cfg = self.context.get_config(umo=message.unified_msg_origin)
         agent_runner_type = cfg["agent_runner"]["runner_type"]
         active_event_registry.stop_all(message.unified_msg_origin, exclude=message)
@@ -182,9 +209,9 @@ class ConversationCommands:
                 agent_runner_type,
             )
 
-        cpersona = await self._get_current_persona_id(message.unified_msg_origin)
+        cpersona = await self._get_current_persona_id(conversation_origin)
         cid = await self.context.conversation_manager.new_conversation(
-            message.unified_msg_origin,
+            conversation_origin,
             message.get_platform_id(),
             persona_id=cpersona,
         )
@@ -199,7 +226,15 @@ class ConversationCommands:
 
     async def stats(self, message: AstrMessageEvent) -> None:
         """Show token usage statistics for the current conversation."""
-        umo = message.unified_msg_origin
+        authorize = getattr(message, "is_ai_admin", None)
+        if authorize and not message.is_private_chat():
+            authorize = None
+        if authorize and not authorize(self.context):
+            message.set_result(MessageEventResult().message("无权限"))
+            return
+        umo = await self._conversation_origin(message)
+        if umo is None:
+            return
         cid = await self.context.conversation_manager.get_curr_conversation_id(umo)
 
         if not cid:
@@ -233,6 +268,9 @@ class ConversationCommands:
             )
             stats = result.one()
 
+        if authorize and not authorize(self.context):
+            message.set_result(MessageEventResult().message("无权限"))
+            return
         if stats.record_count == 0:
             message.set_result(
                 MessageEventResult().message(

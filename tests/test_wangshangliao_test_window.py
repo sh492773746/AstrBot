@@ -6,24 +6,54 @@ import pytest
 from astrbot.core.platform.sources.wangshangliao.test_window import TestWindow as Window
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
+pytestmark = pytest.mark.usefixtures("wsl_command_classifier")
 
-@pytest.mark.parametrize("text", ["/help", "/帮助", "/群管帮助"])
+
+@pytest.mark.parametrize("text", ["/help", "/帮助", "/群管帮助", "/new", "/stats"])
 def test_private_help_aliases_admitted(text):
     from astrbot.core.platform.sources.wangshangliao.wire import b64
-    a = SimpleNamespace(account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event())
-    b = SimpleNamespace(account="2", stopping=asyncio.Event())
+
+    a = SimpleNamespace(
+        account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event()
+    )
+    b = SimpleNamespace(account="2", nim_account="902", stopping=asyncio.Event())
     w = Window(a, b, [], ["private_commands"], [], 300, 1)
     a.test_window = w
     assert w.send_command(b, "private/1/" + b64(b"901"), text, "m")
-    assert w.admit("private/2/peer", "m", {"sender": "2", "text": text}) == "private_commands"
+    assert (
+        w.admit(
+            "private/2/OTAy",
+            "m",
+            {"sender": "2", "transport_peer": "902", "text": text},
+        )
+        == "private_commands"
+    )
     assert not w.admit("5", "m2", {"sender": "2", "text": text})
+
+
+@pytest.mark.parametrize(
+    "text", ["/new", "/stats", "/new other", "/stats other", "/reset", "/exec"]
+)
+def test_framework_commands_are_never_admitted_by_ai_only_window(text):
+    from astrbot.core.platform.sources.wangshangliao.wire import b64
+
+    receiver = SimpleNamespace(
+        account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event()
+    )
+    sender = SimpleNamespace(account="2", stopping=asyncio.Event())
+    window = Window(receiver, sender, [], ["private_ai"], [], 300, 1)
+    receiver.test_window = window
+    assert not window.send_command(sender, "private/1/" + b64(b"901"), text, "m")
+    assert not window.admit("private/2/peer", "m", {"sender": "2", "text": text})
 
 
 def test_private_ai_scope_is_bounded_and_not_commands():
     from astrbot.core.platform.sources.wangshangliao.wire import b64
 
-    a = SimpleNamespace(account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event())
-    b = SimpleNamespace(account="2", stopping=asyncio.Event())
+    a = SimpleNamespace(
+        account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event()
+    )
+    b = SimpleNamespace(account="2", nim_account="902", stopping=asyncio.Event())
     w = Window(a, b, [], ["private_ai"], [], 300, 1)
     a.test_window = w
     target = "private/1/" + b64(b"901")
@@ -31,14 +61,25 @@ def test_private_ai_scope_is_bounded_and_not_commands():
     assert w.send_command(b, target, "hello", "m")
     assert not w.admit("private/2/peer", "c", {"sender": "2", "text": "/群管 禁言 1"})
     assert not w.admit("5", "g", {"sender": "2", "text": "hello"})
-    assert w.admit("private/2/peer", "m", {"sender": "2", "text": "hello"}) == "private_ai"
-    assert not w.admit("private/2/peer", "n", {"sender": "2", "text": "again"})
-    assert w.reply("private/2/peer", "m")
-    assert not w.reply("private/2/peer", "m")
+    assert (
+        w.admit(
+            "private/2/OTAy",
+            "m",
+            {"sender": "2", "transport_peer": "902", "text": "hello"},
+        )
+        == "private_ai"
+    )
+    assert not w.admit(
+        "private/2/OTAy", "n", {"sender": "2", "transport_peer": "902", "text": "again"}
+    )
+    assert w.reply("private/2/OTAy", "m")
+    assert not w.reply("private/2/OTAy", "m")
 
 
 def test_group_ai_requires_native_mention_and_is_bounded():
-    a = SimpleNamespace(account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event())
+    a = SimpleNamespace(
+        account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event()
+    )
     b = SimpleNamespace(account="2", stopping=asyncio.Event())
     w = Window(a, b, ["5"], ["group_ai"], [], 300, 1)
     payload = {"sender": "2", "text": "@bot hello", "mentions": ["901"]}
@@ -59,7 +100,9 @@ def test_group_ai_requires_native_mention_and_is_bounded():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enabled,active", [(True, True), (False, True), (True, False)])
-async def test_group_ai_event_requires_reply_switch_and_live_window(monkeypatch, enabled, active):
+async def test_group_ai_event_requires_reply_switch_and_live_window(
+    monkeypatch, enabled, active
+):
     from unittest.mock import AsyncMock
 
     from astrbot.api.event import MessageChain
@@ -76,9 +119,14 @@ async def test_group_ai_event_requires_reply_switch_and_live_window(monkeypatch,
     msg.sender = MessageMember("2", "Test")
     msg.message_str, msg.message = "hello", [Plain("hello")]
     platform = SimpleNamespace(
-        account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event(),
-        members={"5": {"2": "902"}}, config={"reply_groups": {"5": enabled}},
-        send_reply_text=AsyncMock(), meta=lambda: PlatformMetadata("wangshangliao", "test", id="test"),
+        account="1",
+        nim_account="901",
+        enabled_groups={"5"},
+        stopping=asyncio.Event(),
+        members={"5": {"2": "902"}},
+        config={"reply_groups": {"5": enabled}},
+        send_reply_text=AsyncMock(),
+        meta=lambda: PlatformMetadata("wangshangliao", "test", id="test"),
     )
     sender = SimpleNamespace(account="2", stopping=asyncio.Event())
     window = Window(platform, sender, ["5"], ["group_ai"], [], 300, 1)
@@ -109,13 +157,30 @@ async def test_ai_event_reply_respects_private_switch(monkeypatch, enabled):
     msg = AstrBotMessage()
     msg.type = MessageType.FRIEND_MESSAGE
     msg.self_id = "1"
-    msg.session_id = "1/private/2/peer"
+    msg.session_id = "1/private/2/OTAy"
     msg.group_id = ""
     msg.message_id = "m"
     msg.sender = MessageMember("2", "Test")
     msg.message_str = "hello"
     msg.message = [Plain("hello")]
-    platform = SimpleNamespace(account="1", config={"reply_private": enabled}, send_reply_text=AsyncMock(), meta=lambda: PlatformMetadata("wangshangliao", "test", id="test"))
+    platform = SimpleNamespace(
+        account="1",
+        config={"reply_private": enabled},
+        send_reply_text=AsyncMock(),
+        meta=lambda: PlatformMetadata("wangshangliao", "test", id="test"),
+    )
+    platform.enabled_groups = set()
+    platform.stopping = asyncio.Event()
+    sender = SimpleNamespace(account="2", nim_account="902", stopping=asyncio.Event())
+    platform.test_window = Window(platform, sender, [], ["private_ai"], [], 300, 1)
+    assert (
+        platform.test_window.admit(
+            "private/2/OTAy",
+            "m",
+            {"sender": "2", "transport_peer": "902", "text": "hello"},
+        )
+        == "private_ai"
+    )
     event = native.WangshangliaoEvent(msg, platform, True)
     event.set_extra("wsl_test_scope", "private_ai")
     await event.send(MessageChain([Plain("reply")]))
@@ -127,7 +192,9 @@ async def test_ai_event_reply_respects_private_switch(monkeypatch, enabled):
 def test_private_outbound_shares_window_and_never_opens_chat():
     from astrbot.core.platform.sources.wangshangliao.wire import b64
 
-    a = SimpleNamespace(account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event())
+    a = SimpleNamespace(
+        account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event()
+    )
     b = SimpleNamespace(account="2", nim_account="902", stopping=asyncio.Event())
     w = Window(a, b, [], ["private_commands"], [], 300, 1)
     a.test_window = w
@@ -144,37 +211,60 @@ def test_private_outbound_shares_window_and_never_opens_chat():
 
 def test_window_scope_budget_and_result():
     a = SimpleNamespace(account="1", enabled_groups={"5"}, stopping=asyncio.Event())
-    b = SimpleNamespace(account="2", stopping=asyncio.Event(), config={"id": "b"})
-    w = Window(a, b, ["5"], ["private_commands", "group_rules"], ["WSL_TEST_ONLY"], 300, 1)
+    b = SimpleNamespace(
+        account="2", nim_account="902", stopping=asyncio.Event(), config={"id": "b"}
+    )
+    w = Window(
+        a, b, ["5"], ["private_commands", "group_rules"], ["WSL_TEST_ONLY"], 300, 1
+    )
     assert not w.admit("private/2/peer", "0", {"sender": "2", "text": "hello"})
-    payload = {"sender": "2", "text": "/群管 帮助"}
-    assert w.admit("private/2/peer", "1", payload) == "private_commands"
-    assert w.admit("private/2/peer", "1", payload) == "private_commands"
-    assert not w.admit("private/2/peer", "2", payload)
-    assert w.reply("private/2/peer", "1")
-    assert not w.reply("private/2/peer", "1")
+    payload = {"sender": "2", "transport_peer": "902", "text": "/群管 帮助"}
+    assert w.admit("private/2/OTAy", "1", payload) == "private_commands"
+    assert w.admit("private/2/OTAy", "1", payload) == "private_commands"
+    assert not w.admit("private/2/OTAy", "2", payload)
+    assert w.reply("private/2/OTAy", "1")
+    assert not w.reply("private/2/OTAy", "1")
     b.stopping.set()
     assert not w.active()
 
 
-@pytest.mark.parametrize("field,value", [
-    ("groups", [{}]), ("scopes", [[]]), ("seconds", True),
-    ("seconds", 301), ("budget", 11), ("budget", 0),
-    ("scopes", []), ("groups", ["6"]),
-    ("scopes", ["group_commands"]),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("groups", [{}]),
+        ("scopes", [[]]),
+        ("seconds", True),
+        ("seconds", 301),
+        ("budget", 11),
+        ("budget", 0),
+        ("scopes", []),
+        ("groups", ["6"]),
+        ("scopes", ["group_commands"]),
+    ],
+)
 def test_invalid_window_arguments(field, value):
     a = SimpleNamespace(account="1", enabled_groups={"5"}, stopping=asyncio.Event())
     b = SimpleNamespace(account="2", stopping=asyncio.Event())
-    arguments = {"groups": [], "scopes": ["private_commands"], "keywords": [], "seconds": 300, "budget": 10}
+    arguments = {
+        "groups": [],
+        "scopes": ["private_commands"],
+        "keywords": [],
+        "seconds": 300,
+        "budget": 10,
+    }
     arguments[field] = value
     with pytest.raises(ProtocolError):
         Window(a, b, **arguments)
 
 
-@pytest.mark.parametrize("side,field", [("receiver", "account"), ("sender", "account"), ("sender", "nim_account")])
+@pytest.mark.parametrize(
+    "side,field",
+    [("receiver", "account"), ("sender", "account"), ("sender", "nim_account")],
+)
 def test_account_replacement_closes_window(side, field):
-    a = SimpleNamespace(account="1", nim_account="n1", enabled_groups={"5"}, stopping=asyncio.Event())
+    a = SimpleNamespace(
+        account="1", nim_account="n1", enabled_groups={"5"}, stopping=asyncio.Event()
+    )
     b = SimpleNamespace(account="2", nim_account="n2", stopping=asyncio.Event())
     w = Window(a, b, [], ["private_commands"], [], 300, 10)
     setattr(getattr(w, side), field, "replacement")
@@ -183,15 +273,25 @@ def test_account_replacement_closes_window(side, field):
 
 
 def test_group_scope_identity_keyword_and_expiry():
-    a = SimpleNamespace(account="1", nim_account="n1", enabled_groups={"5"}, stopping=asyncio.Event())
+    a = SimpleNamespace(
+        account="1", nim_account="n1", enabled_groups={"5"}, stopping=asyncio.Event()
+    )
     b = SimpleNamespace(account="2", stopping=asyncio.Event())
-    w = Window(a, b, ["5"], ["group_commands", "group_rules"], ["WSL_TEST_ONLY"], 300, 10)
-    payload = {"sender": "2", "text": "@bot /群管 帮助", "mention_spans": [{"uid": "n1", "nick": "bot", "start": 0, "end": 4}]}
+    w = Window(
+        a, b, ["5"], ["group_commands", "group_rules"], ["WSL_TEST_ONLY"], 300, 10
+    )
+    payload = {
+        "sender": "2",
+        "text": "@bot /群管 帮助",
+        "mention_spans": [{"uid": "n1", "nick": "bot", "start": 0, "end": 4}],
+    }
     assert not w.admit("6", "m", payload)
     assert not w.admit("5", "m", {**payload, "sender": "3"})
     assert w.admit("5", "m", payload) == "group_commands"
     assert not w.admit("5", "other", {"sender": "2", "text": "normal chat"})
-    assert w.admit("5", "rule", {"sender": "2", "text": "WSL_TEST_ONLY"}) == "group_rules"
+    assert (
+        w.admit("5", "rule", {"sender": "2", "text": "WSL_TEST_ONLY"}) == "group_rules"
+    )
     assert not w.reply("5", "rule")
     w.expires = 0
     assert not w.reply("5", "m")

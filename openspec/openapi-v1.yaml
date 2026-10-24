@@ -97,6 +97,105 @@ tags:
   - name: Webhooks
 
 paths:
+  /api/v1/plugins/runtime/catalog:
+    get:
+      tags:
+      - Plugins
+      summary: Component Catalog
+      description: 'Return server-only declarations without executable bindings.
+
+        Dashboard JWT authentication only; developer API keys are not accepted.'
+      operationId: getComponentCatalog
+      parameters:
+      - name: plugin
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 160
+          - type: 'null'
+          title: Plugin
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComponentCatalogResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - BearerAuth: []
+  /api/v1/plugins/runtime/status:
+    get:
+      tags:
+      - Plugins
+      summary: Component Status
+      description: 'Return cooperative runtime state without message bodies or secrets.
+
+        Dashboard JWT authentication only; developer API keys are not accepted.'
+      operationId: getComponentStatus
+      parameters:
+      - name: plugin
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 160
+          - type: 'null'
+          title: Plugin
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComponentStatusResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - BearerAuth: []
+  /api/v1/plugins/runtime/recover:
+    post:
+      tags:
+      - Plugins
+      summary: Recover Component
+      description: 'Recover only an exact declared scope after authenticated server review.
+
+        Dashboard JWT authentication only; developer API keys are not accepted.'
+      operationId: recoverComponent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComponentRecoveryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComponentRecoveryResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - BearerAuth: []
+
   /api/v1/auth/login:
     post:
       tags: [Auth]
@@ -5566,6 +5665,383 @@ components:
         type: string
 
   schemas:
+    CapabilitySpec:
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+          title: Schema Version
+          default: 1
+        id:
+          type: string
+          pattern: ^[A-Za-z0-9_.:/-]{1,160}$
+          title: Id
+        plugin:
+          type: string
+          maxLength: 160
+          minLength: 1
+          title: Plugin
+        effect:
+          type: string
+          enum:
+          - read
+          - write
+          - send
+          - model
+          title: Effect
+          default: read
+        timeout:
+          type: number
+          maximum: 300.0
+          exclusiveMinimum: 0.0
+          title: Timeout
+          default: 10
+        concurrency:
+          type: integer
+          maximum: 8.0
+          minimum: 1.0
+          title: Concurrency
+          default: 2
+        critical:
+          type: boolean
+          title: Critical
+          default: true
+        probe:
+          type: boolean
+          title: Probe
+          default: false
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - plugin
+      title: CapabilitySpec
+      description: Declare the bounds and side effects of one server-owned capability.
+    CommandSpec:
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+          title: Schema Version
+          default: 1
+        id:
+          type: string
+          pattern: ^[A-Za-z0-9_.:/-]{1,160}$
+          title: Id
+        plugin:
+          type: string
+          maxLength: 160
+          minLength: 1
+          title: Plugin
+        command:
+          type: string
+          title: Command
+        aliases:
+          items:
+            type: string
+          type: array
+          title: Aliases
+          default: []
+        locations:
+          items:
+            type: string
+            enum:
+            - group
+            - private
+          type: array
+          title: Locations
+          default:
+          - group
+          - private
+        role:
+          type: string
+          title: Role
+          default: group_manager
+        preview:
+          type: boolean
+          title: Preview
+          default: false
+        retired:
+          type: boolean
+          title: Retired
+          default: false
+        capability:
+          type: string
+          title: Capability
+        arguments:
+          additionalProperties: true
+          type: object
+          title: Arguments
+        effect:
+          type: string
+          enum:
+          - read
+          - write
+          - send
+          - model
+          title: Effect
+          default: write
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - plugin
+      - command
+      - capability
+      title: CommandSpec
+      description: Declare one native command and its compatible execution entry.
+    ComponentCatalogData:
+      properties:
+        schema_version:
+          type: integer
+          title: Schema Version
+        components:
+          items:
+            anyOf:
+            - $ref: '#/components/schemas/CapabilitySpec'
+            - $ref: '#/components/schemas/CommandSpec'
+            - $ref: '#/components/schemas/PageSpec'
+          type: array
+          title: Components
+      type: object
+      required:
+      - schema_version
+      - components
+      title: ComponentCatalogData
+    ComponentCatalogResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Message
+        data:
+          $ref: '#/components/schemas/ComponentCatalogData'
+      type: object
+      required:
+      - status
+      - message
+      - data
+      title: ComponentCatalogResponse
+    ComponentRecoveryData:
+      properties:
+        state:
+          type: string
+          title: State
+        version:
+          type: integer
+          title: Version
+      type: object
+      required:
+      - state
+      - version
+      title: ComponentRecoveryData
+    ComponentRecoveryRequest:
+      properties:
+        capability:
+          type: string
+          maxLength: 160
+          minLength: 1
+          title: Capability
+        scope:
+          items:
+            type: string
+          type: array
+          maxItems: 8
+          title: Scope
+        version:
+          type: integer
+          minimum: 0.0
+          title: Version
+        operation:
+          type: string
+          enum:
+          - probe
+          - reset_after_review
+          title: Operation
+        reason:
+          type: string
+          maxLength: 300
+          title: Reason
+          default: ''
+      additionalProperties: false
+      type: object
+      required:
+      - capability
+      - scope
+      - version
+      - operation
+      title: ComponentRecoveryRequest
+      description: Select only a registered scope and a versioned server recovery action.
+    ComponentRecoveryResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Message
+        data:
+          $ref: '#/components/schemas/ComponentRecoveryData'
+      type: object
+      required:
+      - status
+      - message
+      - data
+      title: ComponentRecoveryResponse
+    ComponentStatusData:
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/ComponentStatusEntry'
+          type: array
+          title: Entries
+      type: object
+      required:
+      - entries
+      title: ComponentStatusData
+    ComponentStatusEntry:
+      properties:
+        capability:
+          type: string
+          title: Capability
+        plugin:
+          type: string
+          title: Plugin
+        scope:
+          items:
+            type: string
+          type: array
+          title: Scope
+        reference:
+          type: string
+          title: Reference
+        state:
+          type: string
+          title: State
+        version:
+          type: integer
+          title: Version
+        failures:
+          type: integer
+          title: Failures
+        retry_after:
+          type: number
+          title: Retry After
+        in_flight:
+          type: integer
+          title: In Flight
+        error:
+          type: string
+          title: Error
+      type: object
+      required:
+      - capability
+      - plugin
+      - scope
+      - reference
+      - state
+      - version
+      - failures
+      - retry_after
+      - in_flight
+      - error
+      title: ComponentStatusEntry
+    ComponentStatusResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Message
+        data:
+          $ref: '#/components/schemas/ComponentStatusData'
+      type: object
+      required:
+      - status
+      - message
+      - data
+      title: ComponentStatusResponse
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    PageSpec:
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+          title: Schema Version
+          default: 1
+        id:
+          type: string
+          pattern: ^[A-Za-z0-9_.:/-]{1,160}$
+          title: Id
+        plugin:
+          type: string
+          maxLength: 160
+          minLength: 1
+          title: Plugin
+        capability:
+          type: string
+          title: Capability
+        fields:
+          additionalProperties: true
+          type: object
+          title: Fields
+        confirmation:
+          type: boolean
+          title: Confirmation
+          default: true
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - plugin
+      - capability
+      - fields
+      title: PageSpec
+      description: Expose a Pydantic schema with bounded presentation hints.
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+
     RuntimeInfo:
       type: object
       description: The AstrBot backend runtime, including when running inside a container. Values are captured at application startup.

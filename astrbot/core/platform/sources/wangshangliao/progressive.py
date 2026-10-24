@@ -2,17 +2,20 @@
 
 import asyncio
 import hashlib
+import inspect
 import json
-import time
-from contextlib import closing
 
-from .automatic import database, mute_and_escalate
+from . import automatic
+from .actions import ActionRequest
+from .automatic import mute_and_escalate
 from .event import is_managed_account
 from .policy import authorize_action
+from .progression_store import ProgressionStore
+from .test_rules import advertising_path, rule_target
 from .wire import ProtocolError
 
 
-def authorize(adapter, group, member, peer):
+def authorize(adapter, group, member, peer, message=""):
     """Recheck both capabilities and the frozen identity before every action."""
     policy = adapter.config.get("moderation", {})
     authorize_action(adapter.config, group, "recall")
@@ -23,17 +26,51 @@ def authorize(adapter, group, member, peer):
         or not policy.get("recall_enabled")
         or member == adapter.account
         or is_managed_account(member)
+        and not rule_target(adapter, group, member, message)
         or not peer
         or adapter.members.get(group, {}).get(member) != peer
     ):
         raise ProtocolError("progressive_not_authorized")
 
 
-async def enforce(adapter, group, member, message):
+async def enforce(
+    adapter,
+    group,
+    member,
+    message,
+    *,
+    execution_check=None,
+    operation=None,
+    recall_after_mute=False,
+):
     """Attempt both actions once; never treat a partial outcome as full success."""
     account = adapter.account
+    test_path = advertising_path(adapter, group, member, message)
+    path = (
+        test_path or automatic.instance_dir(adapter.config["id"]) / "moderation.sqlite3"
+    )
+    store = getattr(adapter, "_progression_store", None)
+    if store is None or store.path != path:
+        store = adapter._progression_store = ProgressionStore(path)
     peer = adapter.members.get(group, {}).get(member)
-    authorize(adapter, group, member, peer)
+
+    async def check():
+        authorize(adapter, group, member, peer, message)
+        if advertising_path(adapter, group, member, message) != test_path:
+            raise ProtocolError("test_advertising_scope")
+        if adapter.account != account:
+            raise ProtocolError("progressive_account_changed")
+        if execution_check is not None:
+            checked = execution_check()
+            if inspect.isawaitable(checked):
+                await checked
+        authorize(adapter, group, member, peer, message)
+        if advertising_path(adapter, group, member, message) != test_path:
+            raise ProtocolError("test_advertising_scope")
+        if adapter.account != account:
+            raise ProtocolError("progressive_account_changed")
+
+    await check()
     locks = getattr(adapter, "progressive_locks", None)
     if locks is None:
         locks = adapter.progressive_locks = {}
@@ -42,46 +79,51 @@ async def enforce(adapter, group, member, message):
         int(hashlib.sha256(f"{account}/{group}/{member}".encode()).hexdigest(), 16) % 64
     )
     async with locks.setdefault(slot, asyncio.Lock()):
-        authorize(adapter, group, member, peer)
-        if adapter.account != account:
-            raise ProtocolError("progressive_account_changed")
-        operation = (
+        await check()
+        operation = operation or (
             "progressive/"
             + hashlib.sha256(
                 json.dumps([account, group, member, message]).encode()
             ).hexdigest()
         )
-        with closing(database(adapter)) as db, db:
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS progressive_actions("
-                "operation TEXT PRIMARY KEY,account TEXT,group_id TEXT,member TEXT,"
-                "message TEXT,recall_status TEXT,result TEXT,created REAL)"
+        warnings, previous = await asyncio.to_thread(
+            store.reserve, operation, account, group, member, message, peer
+        )
+        if previous is not None:
+            adapter.diagnostics.emit(
+                "progressive", "duplicate_ignored", message, group=group
             )
-            previous = db.execute(
-                "SELECT result FROM progressive_actions WHERE operation=?", (operation,)
-            ).fetchone()
-            if previous:
-                adapter.diagnostics.emit(
-                    "progressive", "duplicate_ignored", message, group=group
-                )
-                return json.loads(previous[0])
-            db.execute(
-                "INSERT INTO progressive_actions VALUES(?,?,?,?,?,'unknown',?,?)",
-                (
-                    operation,
-                    account,
-                    group,
-                    member,
-                    message,
-                    json.dumps({"status": "unknown", "recall_status": "unknown"}),
-                    time.time(),
-                ),
-            )
-        recall_status = "unknown"
-        result = {"status": "unknown", "action": "mute"}
+            return previous
+        recall_status = "rejected"
+        result = {
+            "status": "rejected",
+            "submitted": False,
+            "action": "recall" if warnings < 3 else "mute",
+        }
         try:
+            # Database contention can outlive a grant or account change.
+            await check()
+            if warnings >= 3 and recall_after_mute:
+                recall_status = "none"
+                result = await mute_and_escalate(
+                    adapter, operation, group, member, message, execution_check=check
+                )
+                return {**result, "recall_status": recall_status}
             try:
-                recall_status = await adapter.recall_violation(group, message, member)
+                recall_status = "unknown"
+                receipt = await adapter.execute_action(
+                    ActionRequest.bind(
+                        adapter,
+                        f"recall/{account}/{group}/{message}",
+                        "recall",
+                        int(group),
+                        member=int(member),
+                        expected_nim=peer,
+                        message=message,
+                    ),
+                    authorize=check,
+                )
+                recall_status = receipt["status"]
                 if recall_status not in {"accepted", "verified", "rejected"}:
                     recall_status = "unknown"
             except Exception:
@@ -89,21 +131,36 @@ async def enforce(adapter, group, member, message):
                     "progressive_recall", "failed_or_unknown", message, failed=True
                 )
             # Recall failure must not silently skip muting; revoked authority must.
-            authorize(adapter, group, member, peer)
-            if adapter.account != account:
-                raise ProtocolError("progressive_account_changed")
-            result = await mute_and_escalate(adapter, operation, group, member, message)
+            await check()
+            if warnings < 3:
+                if warnings >= 0:
+                    await asyncio.to_thread(
+                        store.warning,
+                        account,
+                        group,
+                        member,
+                        message,
+                        recall_status,
+                        peer,
+                    )
+                result = {
+                    "status": recall_status,
+                    "action": "recall",
+                    **(
+                        {"warning_number": warnings + 1}
+                        if warnings >= 0
+                        else {"cycle_wait": True}
+                    ),
+                }
+                return {**result, "recall_status": recall_status}
+            result = await mute_and_escalate(
+                adapter, operation, group, member, message, execution_check=check
+            )
             return {**result, "recall_status": recall_status}
         finally:
-            with closing(database(adapter)) as db, db:
-                db.execute(
-                    "UPDATE progressive_actions SET recall_status=?,result=? WHERE operation=?",
-                    (
-                        recall_status,
-                        json.dumps({**result, "recall_status": recall_status}),
-                        operation,
-                    ),
-                )
+            await asyncio.to_thread(
+                store.finish, operation, recall_status, result, peer
+            )
             for action, status in (
                 ("recall", recall_status),
                 (result.get("action", "mute"), result.get("status", "unknown")),

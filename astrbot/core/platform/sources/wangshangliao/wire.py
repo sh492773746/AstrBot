@@ -11,9 +11,15 @@ import lz4.block
 import nacl.bindings
 import xxhash
 import zstandard
-from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+from google.protobuf import (
+    descriptor_pb2,
+    descriptor_pool,
+    message_factory,
+    unknown_fields,
+)
 
 LIMIT = 1024 * 1024
+INVITATION_LOG_LIMIT = 3 * LIMIT
 
 
 class ProtocolError(ValueError):
@@ -147,16 +153,25 @@ def read_packet(data: bytes) -> tuple[int, int, int, int, bytes]:
     return service, command, serial, code, data[offset:]
 
 
-def binding(request_id: int, plain: bytes, device: int) -> tuple[int, bytes]:
-    """Build the request-bound business AAD."""
+def binding(
+    request_id: int, plain: bytes, device: int, *, version: int = 0x019C411FDEAF
+) -> tuple[int, bytes]:
+    """Build the request-bound AAD for the reviewed client protocol version."""
     digest = xxhash.xxh3_64_intdigest(plain) if plain else 0
     aad = xxhash.xxh3_128_intdigest(
-        struct.pack("<QQQQ", request_id, digest, device, 0x019C411FDEAF)
+        struct.pack("<QQQQ", request_id, digest, device, version)
     ).to_bytes(16, "little")
     return digest, aad
 
 
-def seal_business(key: bytes, request_id: int, plain: bytes, device: int) -> bytes:
+def seal_business(
+    key: bytes,
+    request_id: int,
+    plain: bytes,
+    device: int,
+    *,
+    version: int = 0x019C411FDEAF,
+) -> bytes:
     """Encrypt a raw-block Zstandard envelope identical to the Rust encoder."""
     if len(plain) > LIMIT:
         raise ProtocolError("body_limit")
@@ -175,31 +190,58 @@ def seal_business(key: bytes, request_id: int, plain: bytes, device: int) -> byt
         struct.pack("<Q", request_id) + compressed
     ).to_bytes(16, "little")
     sealed = nacl.bindings.crypto_aead_chacha20poly1305_encrypt(
-        bytes(compressed), binding(request_id, plain, device)[1], material[:8], key
+        bytes(compressed),
+        binding(request_id, plain, device, version=version)[1],
+        material[:8],
+        key,
     )
     return sealed[-16:] + material + sealed[:-16]
 
 
-def open_business(key: bytes, aad: bytes, body: bytes) -> bytes:
-    """Authenticate before bounded decompression of the response."""
-    if not 33 <= len(body) <= LIMIT + 4096:
+def open_business(key: bytes, aad: bytes, body: bytes, *, limit: int = LIMIT) -> bytes:
+    """Authenticate before bounded decompression of the response.
+
+    Args:
+        key: Server-only symmetric authentication key.
+        aad: Request-bound authentication data.
+        body: Encrypted response envelope.
+        limit: Reviewed byte limit for compressed input, output and window.
+
+    Returns:
+        Authenticated, bounded response bytes.
+
+    Raises:
+        ProtocolError: If authentication, framing or any size bound fails.
+    """
+    if (
+        type(limit) is not int
+        or not 0 < limit <= INVITATION_LOG_LIMIT
+        or not 33 <= len(body) <= limit + 4096
+    ):
         raise ProtocolError("body_limit")
     try:
         compressed = nacl.bindings.crypto_aead_chacha20poly1305_decrypt(
             body[32:] + body[:16], aad, body[16:24], key
         )
-        size = zstandard.frame_content_size(compressed)
-        if (
-            size not in (zstandard.CONTENTSIZE_UNKNOWN, zstandard.CONTENTSIZE_ERROR)
-            and size > LIMIT
+        frame = zstandard.get_frame_parameters(compressed)
+        size = frame.content_size
+        if frame.window_size > limit or (
+            size
+            not in (
+                zstandard.CONTENTSIZE_UNKNOWN,
+                zstandard.CONTENTSIZE_ERROR,
+            )
+            and size > limit
         ):
             raise ProtocolError("body_limit")
-        plain = zstandard.ZstdDecompressor(max_window_size=LIMIT).decompress(
-            compressed, max_output_size=LIMIT, allow_extra_data=False
+        plain = zstandard.ZstdDecompressor(max_window_size=limit).decompress(
+            compressed, max_output_size=limit, allow_extra_data=False
         )
-        if len(plain) > LIMIT:
+        if len(plain) > limit:
             raise ProtocolError("body_limit")
         return plain
+    except ProtocolError:
+        raise
     except Exception:
         raise ProtocolError("body_authentication_or_compression") from None
 
@@ -227,6 +269,14 @@ _definitions = {
     ],
     "Source": [(1, "id", 5, None), (2, "name", 9, None)],
     "Content": [(1, "data", 9, None)],
+    "IncomingAsset": [(1, "uri", 9, None)],
+    "IncomingImage": [
+        (1, "asset", 11, "IncomingAsset"),
+        (2, "width", 5, None),
+        (3, "height", 5, None),
+        (4, "size", 5, None),
+        (5, "is_sticker", 8, None),
+    ],
     "Mention": [
         (1, "start", 5, None),
         (2, "end", 5, None),
@@ -234,6 +284,12 @@ _definitions = {
         (4, "nick", 9, None),
     ],
     "Mentions": [(1, "content", 11, "Content"), (2, "people", 11, "Mention")],
+    # Official desktop 2.8.3 api.common.MessageReply; quote is separate from payload.
+    "MessageReply": [
+        (1, "client_id", 9, None),
+        (2, "server_id", 9, None),
+        (100, "content", 11, "Content"),
+    ],
     "ApplicationMessage": [
         (1, "sender", 11, "Source"),
         (2, "target", 11, "Source"),
@@ -242,9 +298,11 @@ _definitions = {
         (5, "session", 5, None),
         (6, "version", 5, None),
         (11, "format", 5, None),
+        (14, "appoint", 5, None),
         (50, "client_id", 9, None),
         (100, "content", 11, "Content"),
         (105, "mentions", 11, "Mentions"),
+        (301, "reply", 11, "MessageReply"),
     ],
     "Envelope": [
         (1, "header", 6, None),
@@ -253,6 +311,21 @@ _definitions = {
         (4, "body", 12, None),
         (6, "aad", 4, None),
         (7, "tag", 12, None),
+    ],
+    "MessagePacket": [
+        (1, "msg", 9, None),
+        (2, "sign", 9, None),
+        (3, "version", 5, None),
+    ],
+    "MessageSign": [
+        (1, "id", 4, None),
+        (2, "nid", 5, None),
+        (3, "version", 4, None),
+        (4, "client", 5, None),
+        (5, "expired_at", 4, None),
+        (6, "public_key", 9, None),
+        (10, "key_sign", 9, None),
+        (11, "msg_sign", 9, None),
     ],
 }
 for _name, _fields in _definitions.items():
@@ -275,15 +348,99 @@ LoginToken = message_factory.GetMessageClass(
 ApplicationMessage = message_factory.GetMessageClass(
     _pool.FindMessageTypeByName("wsl.ApplicationMessage")
 )
+IncomingImage = message_factory.GetMessageClass(
+    _pool.FindMessageTypeByName("wsl.IncomingImage")
+)
 Envelope = message_factory.GetMessageClass(_pool.FindMessageTypeByName("wsl.Envelope"))
+MessagePacket = message_factory.GetMessageClass(
+    _pool.FindMessageTypeByName("wsl.MessagePacket")
+)
+MessageSign = message_factory.GetMessageClass(
+    _pool.FindMessageTypeByName("wsl.MessageSign")
+)
 Source = message_factory.GetMessageClass(_pool.FindMessageTypeByName("wsl.Source"))
 Content = message_factory.GetMessageClass(_pool.FindMessageTypeByName("wsl.Content"))
 Mention = message_factory.GetMessageClass(_pool.FindMessageTypeByName("wsl.Mention"))
 Mentions = message_factory.GetMessageClass(_pool.FindMessageTypeByName("wsl.Mentions"))
 
 
+def image_metadata(message):
+    """Read bounded native image metadata without changing the text codec.
+
+    Args:
+        message: Already authenticated ApplicationMessage.
+
+    Returns:
+        Reviewed image asset metadata, or None for unsupported image shapes.
+    """
+    fields = [
+        field
+        for field in unknown_fields.UnknownFieldSet(message)
+        if field.field_number == 101
+    ]
+    if (
+        message.format != 1
+        or message.HasField("content")
+        or message.HasField("mentions")
+        or len(fields) != 1
+        or fields[0].wire_type != 2
+        or len(fields[0].data) > 4096
+    ):
+        return None
+    try:
+        image = IncomingImage.FromString(fields[0].data)
+        asset = image.asset.uri
+        if (
+            not asset.isascii()
+            or not asset.isdecimal()
+            or not 1 <= len(asset) <= 20
+            or asset.startswith("0")
+            or not 0 < int(asset) < 1 << 64
+            or not 1 <= image.width <= 16384
+            or not 1 <= image.height <= 16384
+            or image.width * image.height > 16_000_000
+            or not 0 < image.size <= 5 * 1024 * 1024
+            or image.is_sticker
+        ):
+            return None
+        return {
+            "asset": asset,
+            "width": image.width,
+            "height": image.height,
+            "size": image.size,
+        }
+    except Exception:
+        return None
+
+
+def _message_envelope(encoded):
+    """Normalize the scalar wire variants accepted by the official message codec."""
+    envelope = Envelope.FromString(encoded)
+    for field in unknown_fields.UnknownFieldSet(envelope):
+        name = {1: "header", 3: "nonce", 6: "aad"}.get(field.field_number)
+        if name and field.wire_type in (0, 1):
+            current = getattr(envelope, name)
+            if current and current != field.data:
+                raise ProtocolError("message_envelope_conflict")
+            setattr(envelope, name, field.data)
+    return envelope
+
+
 def open_message(key: bytes, text: str):
-    """Authenticate a custom message and verify its inner routing header."""
+    """Authenticate a custom message and verify its inner routing header.
+
+    Args:
+        key: Deployment-owned message authentication key.
+        text: Bounded encoded application envelope.
+
+    Returns:
+        Authenticated application message.
+
+    Raises:
+        ProtocolError: Fixed decode failure with a payload-free stage in ``reason``.
+    """
+    phase = "wrapper"
+    shape = ""
     try:
         if len(text) > LIMIT * 2:
             raise ProtocolError("message_limit")
@@ -292,21 +449,70 @@ def open_message(key: bytes, text: str):
             if set(wrapper) != {"b"}:
                 raise ProtocolError("message_wrapper")
             text = wrapper["b"]
-        envelope = Envelope.FromString(unb64(text))
-        if not envelope.aad or len(envelope.tag) != 16:
-            raise ProtocolError("message_unsigned")
+        phase = "encoding"
+        encoded = unb64(text)
+        envelope = _message_envelope(encoded)
+        phase = "envelope"
+        if len(envelope.tag) != 16:
+            fields = {
+                (field.number, {4: 0, 6: 1, 12: 2}[field.type])
+                for field, _ in envelope.ListFields()
+            }
+            for index, field in enumerate(unknown_fields.UnknownFieldSet(envelope)):
+                if index >= 16:
+                    break
+                fields.add((min(field.field_number, 17), field.wire_type))
+            shape = "_".join(f"f{number}w{kind}" for number, kind in sorted(fields))
+            packet = MessagePacket.FromString(encoded)
+            if not packet.msg or not packet.sign:
+                raise ProtocolError("message_unsigned")
+            phase = "packet_version"
+            if packet.version != 1:
+                raise ProtocolError("message_packet_version")
+            phase = "packet_signature"
+            signature = unb64(packet.sign)
+            if not 24 < len(signature) <= 65536:
+                raise ProtocolError("message_packet_signature")
+            # Official 3.7.3 uses the same project key for both AEAD layers.
+            # The metadata is parsed, never used as a sender or permission source.
+            signed_metadata = nacl.bindings.crypto_aead_chacha20poly1305_decrypt(
+                signature[24:] + signature[8:24],
+                struct.pack("<Q", packet.version),
+                signature[:8],
+                key,
+            )
+            MessageSign.FromString(signed_metadata)
+            phase = "packet_message"
+            text = packet.msg
+            if text.startswith("{"):
+                wrapper = json.loads(text)
+                if set(wrapper) != {"b"}:
+                    raise ProtocolError("message_wrapper")
+                text = wrapper["b"]
+            envelope = _message_envelope(unb64(text))
+            if len(envelope.tag) != 16:
+                raise ProtocolError("message_unsigned")
+        phase = "authentication"
         compressed = nacl.bindings.crypto_aead_chacha20poly1305_decrypt(
             envelope.body + envelope.tag,
             struct.pack("<Q", envelope.aad),
             struct.pack("<Q", envelope.nonce),
             key,
         )
-        if len(compressed) < 4 or int.from_bytes(compressed[:4], "little") > LIMIT:
-            raise ProtocolError("message_limit")
-        plain = lz4.block.decompress(compressed)
-        if len(plain) != int.from_bytes(compressed[:4], "little"):
-            raise ProtocolError("message_size")
+        phase = "compression"
+        if envelope.aad:
+            if len(compressed) < 4 or int.from_bytes(compressed[:4], "little") > LIMIT:
+                raise ProtocolError("message_limit")
+            plain = lz4.block.decompress(compressed)
+            if len(plain) != int.from_bytes(compressed[:4], "little"):
+                raise ProtocolError("message_size")
+        else:
+            if len(compressed) > LIMIT:
+                raise ProtocolError("message_limit")
+            plain = compressed
+        phase = "schema"
         message = ApplicationMessage.FromString(plain)
+        phase = "routing"
         if not (
             0 < message.sender.id < 1 << 30
             and 0 < message.target.id < 1 << 30
@@ -324,7 +530,10 @@ def open_message(key: bytes, text: str):
             raise ProtocolError("message_binding")
         return message
     except Exception:
-        raise ProtocolError("message_decode") from None
+        error = ProtocolError("message_decode")
+        error.reason = phase
+        error.shape = shape if phase == "envelope" else ""
+        raise error from None
 
 
 def seal_message(key: bytes, message, nonce: int, aad: int, timestamp: int) -> str:
@@ -339,6 +548,18 @@ def seal_message(key: bytes, message, nonce: int, aad: int, timestamp: int) -> s
         and aad
     ):
         raise ProtocolError("message_binding")
+    if message.HasField("reply") and (
+        message.session != 2
+        or message.appoint != 1
+        or not 0 < len(message.reply.client_id.encode()) <= 128
+        or not message.reply.server_id.isascii()
+        or not message.reply.server_id.isdigit()
+        or len(message.reply.server_id) > 20
+        or not 0 < int(message.reply.server_id) < 1 << 64
+        or not message.reply.content.data.strip()
+        or len(message.reply.content.data.encode()) > 1024
+    ):
+        raise ProtocolError("quote_binding")
     if message.HasField("mentions"):
         if (
             message.session != 2

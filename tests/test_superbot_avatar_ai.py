@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -216,7 +216,19 @@ async def transport(ai, handler):
 
 
 @pytest.mark.asyncio
-async def test_queue_confirm_only_no_paid_preview_and_success(ai):
+@pytest.mark.parametrize("windows", [False, True])
+async def test_queue_confirm_only_no_paid_preview_and_success(ai, monkeypatch, windows):
+    portable_os = None
+    if windows:
+        from data.plugins.astrbot_plugin_superbot import avatar_ai as module
+
+        real_os = module.os
+        portable_os = SimpleNamespace(
+            name="nt",
+            fsync=Mock(wraps=real_os.fsync),
+            open=Mock(side_effect=PermissionError("directory handles unsupported")),
+        )
+        monkeypatch.setattr(module, "os", portable_os)
     calls = []
 
     def handler(request):
@@ -263,6 +275,9 @@ async def test_queue_confirm_only_no_paid_preview_and_success(ai):
     await ai.delivery_tick()
     assert len(calls) == 3
     assert ai.remaining(2) == 1
+    if portable_os is not None:
+        portable_os.fsync.assert_called_once()
+        portable_os.open.assert_not_called()
 
 
 @pytest.mark.asyncio

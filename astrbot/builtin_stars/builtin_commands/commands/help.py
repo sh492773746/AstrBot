@@ -1,3 +1,5 @@
+from inspect import getattr_static
+
 import aiohttp
 
 from astrbot.api import star
@@ -66,19 +68,12 @@ class HelpCommand:
 
     async def help(self, event: AstrMessageEvent) -> None:
         """查看帮助"""
-        if event.get_platform_name() == "wangshangliao":
-            from astrbot.builtin_stars.wangshangliao_moderation.commands import (
-                HELP,
-            )
-
-            event.set_extra(
-                "wsl_command_result", bool(event.get_extra("wsl_test_scope"))
-            )
-            try:
-                if event.is_private_chat():
-                    await event.send(event.plain_result(HELP))
-            finally:
-                event.stop_event()
+        handler = (
+            getattr(event, "handle_builtin_help", None)
+            if callable(getattr_static(event, "handle_builtin_help", None))
+            else None
+        )
+        if handler is not None and await handler():
             return
         notice = ""
         try:

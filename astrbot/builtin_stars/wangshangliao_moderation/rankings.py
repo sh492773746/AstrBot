@@ -15,6 +15,10 @@ from astrbot.api.event import MessageChain
 from astrbot.api.message_components import At, Plain
 from astrbot.core.platform.sources.wangshangliao.event import is_managed_account
 from astrbot.core.platform.sources.wangshangliao.storage import instance_dir
+from astrbot.core.platform.sources.wangshangliao.test_rules import (
+    flood_fixture,
+    rule_target,
+)
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
 from .syntax import recognize_command
@@ -27,32 +31,20 @@ class DailyRankings:
         self.lock = asyncio.Lock()
         self.cache = {}
 
-    async def read(
-        self,
-        adapter,
-        group: str,
-        sender: str,
-        *,
-        page: int = 1,
-        native_mentions: bool = False,
-    ) -> str | MessageChain:
-        """Return a twenty-member page of today's rankings.
+    async def snapshot(self, adapter, group: str, *, settled=False):
+        """Read today's bounded ranking, optionally allowing moderation to settle.
 
         Args:
             adapter: Native adapter owning the authenticated inbox.
             group: Enabled business group, never a displayed group number.
-            sender: Authenticated caller's business UID.
-            page: Positive one-based page number.
-            native_mentions: Render verified group identities as native mentions.
+            settled: Exclude the newest thirty seconds for automatic exemptions.
 
         Returns:
-            A concise text or native message chain based on received evidence.
+            Date, day-end timestamp and ranked UID/name/count tuples.
 
         Raises:
             ProtocolError: If scope, message storage or a bounded scan is invalid.
         """
-        if type(page) is not int or not 1 <= page <= 99999:
-            raise ProtocolError("ranking_page")
         if (
             not adapter.config.get("enable", True)
             or group not in adapter.config.get("enabled_groups", [])
@@ -66,7 +58,15 @@ class DailyRankings:
         )
         end = start + timedelta(days=1)
         date = start.strftime("%Y-%m-%d")
-        key = (adapter.config["id"], adapter.account, group, date)
+        fixture = flood_fixture(adapter, group)
+        key = (
+            adapter.config["id"],
+            adapter.account,
+            group,
+            date,
+            settled,
+            fixture.operation if fixture and fixture.ranking else "",
+        )
         async with self.lock:
             cached = self.cache.get(key)
             if cached and time.monotonic() < cached[0]:
@@ -90,19 +90,67 @@ class DailyRankings:
                             async with db.execute(
                                 "SELECT message FROM content_violations "
                                 "WHERE account=? AND group_id=? AND observed>=? "
-                                "AND status IN ('claimed','warned','muted','kicked','unknown')",
+                                "AND status IN ('claimed','warned','recalled','muted','kicked','unknown')",
                                 (adapter.account, group, start.timestamp()),
                             ) as cursor:
                                 violations = {row[0] for row in await cursor.fetchall()}
+                        async with db.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        ) as cursor:
+                            tables = {row[0] for row in await cursor.fetchall()}
+                        if {"flood_recalls", "flood_batches"} <= tables:
+                            async with db.execute(
+                                "SELECT r.message FROM flood_recalls r JOIN flood_batches b ON b.operation=r.batch "
+                                "WHERE b.account=? AND b.group_id=? AND b.last_seen>=? "
+                                "AND r.status IN ('accepted','verified','unknown')",
+                                (adapter.account, group, start.timestamp()),
+                            ) as cursor:
+                                violations.update(
+                                    row[0] for row in await cursor.fetchall()
+                                )
+                        if "moderation_action_audit" in tables:
+                            async with db.execute(
+                                "SELECT message FROM moderation_action_audit "
+                                "WHERE account=? AND group_id=? AND action='recall' "
+                                "AND status IN ('accepted','verified','unknown') AND created>=?",
+                                (adapter.account, group, start.timestamp()),
+                            ) as cursor:
+                                violations.update(
+                                    row[0] for row in await cursor.fetchall()
+                                )
                 messages = []
                 scanned = 0
                 async with aiosqlite.connect(
                     f"{path.resolve().as_uri()}?mode=ro", uri=True
                 ) as db:
                     async with db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ) as cursor:
+                        tables = {row[0] for row in await cursor.fetchall()}
+                    if "observed_recalls" in tables:
+                        async with db.execute(
+                            "SELECT message_id FROM observed_recalls WHERE account=? AND group_id=? "
+                            "AND received_at>=?",
+                            (adapter.account, group, start.timestamp()),
+                        ) as cursor:
+                            violations.update(row[0] for row in await cursor.fetchall())
+                    if "outbox" in tables:
+                        async with db.execute(
+                            "SELECT i.message FROM inbox i JOIN outbox o ON o.key=? || i.message "
+                            "WHERE i.account=? AND i.team=? AND i.received_at>=? "
+                            "AND o.state IN ('accepted','verified','unknown','sending')",
+                            (
+                                f"recall/{adapter.account}/{group}/",
+                                adapter.account,
+                                group,
+                                start.timestamp(),
+                            ),
+                        ) as cursor:
+                            violations.update(row[0] for row in await cursor.fetchall())
+                    async with db.execute(
                         "SELECT message,payload,state FROM inbox "
-                        "WHERE account=? AND team=? AND received_at>=?",
-                        (adapter.account, group, start.timestamp()),
+                        "WHERE account=? AND team=? AND received_at>=? AND received_at<?",
+                        (adapter.account, group, start.timestamp(), end.timestamp()),
                     ) as cursor:
                         while rows := await cursor.fetchmany(500):
                             scanned += len(rows)
@@ -136,6 +184,11 @@ class DailyRankings:
                                     or int(user) <= 0
                                     or user == adapter.account
                                     or is_managed_account(user)
+                                    and not (
+                                        fixture
+                                        and fixture.ranking
+                                        and rule_target(adapter, group, user, str(mid))
+                                    )
                                     or not isinstance(text, str)
                                     or len(text) > 16384
                                     or recognize_command(text)
@@ -147,7 +200,10 @@ class DailyRankings:
                                 if (
                                     not start.timestamp()
                                     <= stamp
-                                    < min(end.timestamp(), now + 1)
+                                    < min(
+                                        end.timestamp(),
+                                        now - 30 if settled else now + 1,
+                                    )
                                 ):
                                     continue
                                 # Strip only a transport-verified leading bot mention.
@@ -221,6 +277,32 @@ class DailyRankings:
             or adapter.account != key[1]
         ):
             raise ProtocolError("ranking_scope")
+        return date, end.timestamp(), ranked
+
+    async def read(
+        self,
+        adapter,
+        group: str,
+        sender: str,
+        *,
+        page: int = 1,
+        native_mentions: bool = False,
+    ) -> str | MessageChain:
+        """Return a twenty-member page from the shared current-day snapshot.
+
+        Args:
+            adapter: Authenticated native adapter.
+            group: Enabled business group.
+            sender: Authenticated caller's UID.
+            page: Positive one-based page.
+            native_mentions: Render verified members with native mentions.
+
+        Returns:
+            Text or a native message chain.
+        """
+        if type(page) is not int or not 1 <= page <= 99999:
+            raise ProtocolError("ranking_page")
+        _date, _end, ranked = await self.snapshot(adapter, group)
         offset = (page - 1) * 20
         entries = ranked[offset : offset + 20]
         header = f"\U0001f4ac 今日发言排行\n第 {page} 页 / 每页 20 条\n\n"

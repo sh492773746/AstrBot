@@ -1,3 +1,5 @@
+import asyncio
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -9,6 +11,7 @@ from astrbot.core.platform.sources.wangshangliao.policy import (
     validate_policy,
 )
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
+from tests.fixtures.wsl_actions import bind_action_port
 
 
 def fresh_payload(text="fixture"):
@@ -19,7 +22,7 @@ def fresh_payload(text="fixture"):
 def keyword_adapter(tmp_path, monkeypatch):
     monkeypatch.setattr(policy, "instance_dir", lambda _: tmp_path)
     monkeypatch.setattr(policy.time, "time", lambda: 1790950000.0)
-    return SimpleNamespace(
+    return bind_action_port(SimpleNamespace(
         config={
             "id": "keyword-fixture",
             "enabled_groups": ["5"],
@@ -45,7 +48,47 @@ def keyword_adapter(tmp_path, monkeypatch):
         send_text=AsyncMock(return_value="accepted"),
         recall_violation=AsyncMock(return_value="accepted"),
         execute_moderation=AsyncMock(),
-    )
+    ))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["permission", "account", "cancel"])
+async def test_keyword_writer_wait_does_not_apply_stale_rule(
+    keyword_adapter, tmp_path, change
+):
+    adapter = keyword_adapter
+    blocker = sqlite3.connect(tmp_path / "moderation.sqlite3")
+    blocker.execute("BEGIN IMMEDIATE")
+    work = asyncio.create_task(policy.handle(adapter, "5", "blocked", fresh_payload()))
+    try:
+        await asyncio.sleep(0.05)
+        assert not work.done()
+        if change == "permission":
+            adapter.config["moderation"]["permissions"] = {}
+        elif change == "account":
+            adapter.account = "another"
+        else:
+            work.cancel()
+        blocker.rollback()
+        if change == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(work, 3)
+        else:
+            assert await asyncio.wait_for(work, 3)
+        assert (
+            blocker.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+            == []
+        )
+        adapter.send_text.assert_not_awaited()
+        adapter.recall_violation.assert_not_awaited()
+        adapter.execute_moderation.assert_not_awaited()
+    finally:
+        blocker.rollback()
+        blocker.close()
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -84,7 +127,9 @@ async def test_keyword_unknown_or_old_time_never_warns_or_punishes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["body", "envelope"])
-async def test_keyword_valid_transport_time_still_warns_then_mutes(keyword_adapter, source):
+async def test_keyword_valid_transport_time_still_warns_then_mutes(
+    keyword_adapter, source
+):
     payload = fresh_payload()
     if source == "envelope":
         payload.update(created_at=0, recall_route={"time": "1790950000000"})
@@ -92,14 +137,18 @@ async def test_keyword_valid_transport_time_still_warns_then_mutes(keyword_adapt
         await policy.handle(keyword_adapter, "5", mid, payload)
     assert keyword_adapter.send_text.await_count == 1
     assert keyword_adapter.recall_violation.await_count == 2
-    keyword_adapter.execute_moderation.assert_awaited_once_with(
+    keyword_adapter.execute_moderation.assert_awaited_once()
+    assert keyword_adapter.execute_moderation.await_args.args[:4] == (
         "message/5/second", "mute", 5, 2
     )
+    assert keyword_adapter.execute_moderation.await_args.kwargs["minutes"] == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["incomplete", "disabled", "revoked"])
-async def test_keyword_rechecks_directory_and_authorization_after_lookup(keyword_adapter, change):
+async def test_keyword_rechecks_directory_and_authorization_after_lookup(
+    keyword_adapter, change
+):
     adapter = keyword_adapter
     roster = adapter.get_moderation_members.return_value
 
@@ -136,6 +185,10 @@ async def test_keyword_rechecks_directory_and_authorization_after_lookup(keyword
         {"semantic": {"action": "kick"}},
         {"auto_kick": {"5": "yes"}},
         {"auto_kick": {"../5": True}},
+        {"card_suffix": {"5": True}},
+        {"card_suffix": {"../5": "后缀"}},
+        {"card_suffix": {"5": "x" * 129}},
+        {"card_suffix": {"5": "换\n行"}},
     ],
 )
 def test_invalid_policy(value):
@@ -153,6 +206,7 @@ def test_valid_semantic_and_automatic_kick_policy():
                 "context_limit": 20,
             },
             "auto_kick": {"5": True},
+            "card_suffix": {"5": "·员工👨‍👩‍👧‍👦", "6": ""},
         }
     )
 
@@ -219,22 +273,23 @@ async def test_automation_requires_grant_identity_and_member(
         get_moderation_members=AsyncMock(
             return_value={
                 "complete": True,
-                "groupMemberInfo": [{"userId": 2, "nimId": peer, "groupRole": role}]
+                "groupMemberInfo": [{"userId": 2, "nimId": peer, "groupRole": role}],
             }
         ),
         diagnostics=SimpleNamespace(emit=Mock()),
         execute_moderation=AsyncMock(),
         send_text=AsyncMock(return_value="accepted"),
     )
+    bind_action_port(adapter)
     assert await policy.handle(adapter, "5", "m", fresh_payload())
     assert adapter.send_text.called is expected
     assert not adapter.execute_moderation.called
     if expected:
-        assert await policy.handle(
-            adapter, "5", "next", fresh_payload()
-        )
+        assert await policy.handle(adapter, "5", "next", fresh_payload())
         assert adapter.execute_moderation.await_count == 1
-        adapter.execute_moderation.assert_awaited_with("message/5/next", "mute", 5, 2)
+        assert adapter.execute_moderation.await_args.args[:4] == (
+            "message/5/next", "mute", 5, 2
+        )
         await policy.handle(adapter, "5", "next", fresh_payload())
         assert adapter.execute_moderation.await_count == 1
         monkeypatch.setattr(policy.time, "time", lambda: 9999999999)
@@ -243,8 +298,8 @@ async def test_automation_requires_grant_identity_and_member(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text,action", [("mute kick", "mute"), ("kick", "kick")])
-async def test_warning_recall_then_penalty(tmp_path, monkeypatch, text, action):
+@pytest.mark.parametrize("text", ["mute kick", "kick"])
+async def test_warning_recall_then_penalty(tmp_path, monkeypatch, text):
     monkeypatch.setattr(policy, "instance_dir", lambda _: tmp_path)
     adapter = SimpleNamespace(
         config={
@@ -266,7 +321,7 @@ async def test_warning_recall_then_penalty(tmp_path, monkeypatch, text, action):
                 "complete": True,
                 "groupMemberInfo": [
                     {"userId": "2", "nimId": "22", "groupRole": "GROUP_ROLE_MEMBER"}
-                ]
+                ],
             }
         ),
         recall_violation=AsyncMock(side_effect=TimeoutError),
@@ -274,13 +329,30 @@ async def test_warning_recall_then_penalty(tmp_path, monkeypatch, text, action):
         execute_moderation=AsyncMock(),
         diagnostics=SimpleNamespace(emit=Mock()),
     )
+    bind_action_port(adapter)
     for mid in ("first", "first", "second"):
         await policy.handle(adapter, "5", mid, fresh_payload(text))
     assert adapter.recall_violation.await_count == 2
     assert adapter.send_text.await_count == 1
-    adapter.execute_moderation.assert_awaited_once_with(
-        "message/5/second", action, 5, 2
+    adapter.execute_moderation.assert_awaited_once()
+    assert adapter.execute_moderation.await_args.args[:4] == (
+        "message/5/second", "mute", 5, 2
     )
+
+
+@pytest.mark.asyncio
+async def test_legacy_kick_keyword_only_needs_mute_capability(
+    keyword_adapter,
+):
+    adapter = keyword_adapter
+    settings = adapter.config["moderation"]
+    settings["mute_keywords"] = []
+    settings["kick_keywords"] = ["kick"]
+    settings["permissions"]["5"] = ["mute", "recall"]
+    for mid in ("first", "second"):
+        await policy.handle(adapter, "5", mid, fresh_payload("kick"))
+    assert adapter.execute_moderation.await_count == 1
+    assert adapter.execute_moderation.await_args.args[1] == "mute"
 
 
 @pytest.mark.asyncio
@@ -310,16 +382,15 @@ async def test_warning_delivery_state_controls_next_violation(
                 "complete": True,
                 "groupMemberInfo": [
                     {"userId": "2", "nimId": "22", "groupRole": "GROUP_ROLE_MEMBER"}
-                ]
+                ],
             }
         ),
         diagnostics=SimpleNamespace(emit=Mock()),
         send_text=AsyncMock(side_effect=[first_result, "accepted"]),
         execute_moderation=AsyncMock(),
     )
+    bind_action_port(adapter)
     for mid in ("first", "first", "second"):
-        await policy.handle(
-            adapter, "5", mid, fresh_payload("bad /群管 not-a-command")
-        )
+        await policy.handle(adapter, "5", mid, fresh_payload("bad /群管 not-a-command"))
     assert adapter.send_text.await_count == warning_count
     assert adapter.execute_moderation.await_count == penalty_count

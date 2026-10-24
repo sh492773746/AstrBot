@@ -132,7 +132,7 @@ async def test_migration_retention_and_dedup(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_is_bounded_and_recovers_overflow(tmp_path):
+async def test_dispatch_is_bounded_and_recovers_overflow(tmp_path, wsl_active_policy):
     adapter = WangshangliaoAdapter(
         {"id": "maintenance-test", "account_id": "a"}, {}, asyncio.Queue()
     )
@@ -144,7 +144,7 @@ async def test_dispatch_is_bounded_and_recovers_overflow(tmp_path):
     peak = 0
     finished = asyncio.Event()
 
-    async def process(team, *, single):
+    async def process(team, *, single, sender, control=False):
         nonlocal peak
         assert single and team not in active
         active.add(team)
@@ -159,24 +159,26 @@ async def test_dispatch_is_bounded_and_recovers_overflow(tmp_path):
             calls.append((team, row[0]))
             await adapter.ledger.mark("a", team, row[0], "processed")
         active.remove(team)
-        if len(calls) == 1102:
+        if len(calls) == 256:
             finished.set()
 
     adapter.process_group = process
     for n in range(1100):
-        await adapter.ledger.ingest("a", f"private/{n}/peer", "0", {})
+        await adapter.ledger.ingest(
+            "a", f"private/{n}/peer", "0", {"transport_peer": str(n)}
+        )
     for n in (1, 2):
         await adapter.ledger.ingest("a", "private/0/peer", str(n), {})
     task = asyncio.create_task(adapter.dispatch_pending())
     try:
         await asyncio.wait_for(finished.wait(), 15)
         assert peak <= 16
-        assert [mid for team, mid in calls if team == "private/0/peer"] == [
-            "0",
-            "1",
-            "2",
-        ]
-        assert len(set(calls)) == 1102
+        assert [mid for team, mid in calls if team == "private/0/peer"] == ["0"]
+        assert len(set(calls)) == 256
+        async with adapter.ledger.db.execute(
+            "SELECT COUNT(*) FROM inbox WHERE state='queue_full'"
+        ) as cursor:
+            assert (await cursor.fetchone())[0] == 846
     finally:
         adapter.stopping.set()
         task.cancel()
@@ -204,7 +206,7 @@ async def test_stop_during_remote_read_is_terminal(tmp_path, monkeypatch, recove
 
     adapter = SimpleNamespace(
         account="1",
-        config={"id": "test", "moderation": {}},
+        config={"id": "test", "moderation": {}, "enabled_groups": ["10"]},
         connection_state="online",
         meta=lambda: SimpleNamespace(name="wangshangliao"),
         get_moderation_members=roster,
@@ -238,13 +240,13 @@ async def test_stop_during_remote_read_is_terminal(tmp_path, monkeypatch, recove
     )
     try:
         await asyncio.wait_for(entered.wait(), 1)
-        service.stop(adapter, "job", "admin")
+        await service.stop(adapter, "job", "admin")
         release.set()
         if recover:
             await asyncio.sleep(0.05)
         else:
             await task
-        persisted = service.status(adapter, "job", "admin")
+        persisted = await service.status(adapter, "job", "admin")
         assert persisted["state"] == "stopped" and persisted["stop_requested"]
         service.run.assert_not_called()
     finally:

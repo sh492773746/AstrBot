@@ -71,6 +71,7 @@ async def main():
                     },
                     "auto_kick": {"100001": True, "100002": False},
                     "card_auto": {},
+                    "card_suffix": {"100001": "·群员", "100002": "·另群"},
                 },
             }
         ],
@@ -189,7 +190,7 @@ async def main():
                 current = fixture["bots"][0]
                 current["moderation"].update(copy.deepcopy(body["policy"]))
                 group = body["group_id"]
-                for field in ("permissions", "auto_kick", "card_auto"):
+                for field in ("permissions", "auto_kick", "card_auto", "card_suffix"):
                     current["moderation"].setdefault(field, {})[group] = body["group"][
                         field
                     ]
@@ -224,6 +225,13 @@ async def main():
         assert await frame.locator("#recall").is_disabled()
         assert await frame.locator("#cooldown").is_disabled()
         await frame.locator("#timeout").fill("15")
+        await frame.get_by_role("tab", name="群授权", exact=True).click()
+        assert await frame.locator("#card-suffix").input_value() == "·群员"
+        assert await frame.locator("#card-auto").is_disabled()
+        await frame.locator('input[value="rename"]').check()
+        await frame.locator("#card-auto").check()
+        await frame.locator("#card-suffix").fill("·新群员")
+        await frame.get_by_role("tab", name="审核配置", exact=True).click()
         await frame.locator(".scope-bar select").nth(1).select_option("100002")
         await frame.get_by_role("dialog").wait_for()
         await frame.get_by_role("button", name="继续编辑", exact=True).click()
@@ -235,6 +243,8 @@ async def main():
         assert saves[0]["policy"]["progressive_mute"] is True
         assert saves[0]["policy"]["recall_enabled"] is True
         assert saves[0]["group_id"] == "100001"
+        assert saves[0]["group"]["card_suffix"] == "·新群员"
+        assert fixture["bots"][0]["moderation"]["card_suffix"]["100002"] == "·另群"
         assert fixture["bots"][0]["moderation"]["permissions"]["100002"] == [
             "mute",
             "unmute",
@@ -249,6 +259,8 @@ async def main():
         await frame.get_by_role("button", name="还原", exact=True).click()
         await frame.locator(".scope-bar select").nth(1).select_option("100002")
         await frame.get_by_role("tab", name="群授权", exact=True).click()
+        assert await frame.locator("#card-suffix").input_value() == "·另群"
+        assert await frame.locator("#card-auto").is_disabled()
         assert not await frame.locator("#auto-kick").is_checked()
         await frame.locator("#auto-kick").check()
         await (
@@ -431,6 +443,13 @@ async def main():
                         .wait_for()
                     )
                     assert len(saves) == saves_before_examples, saves
+                if tab == "群授权":
+                    assert (
+                        await frame.locator("#card-suffix").input_value() == "·新群员"
+                    )
+                    await frame.locator("#panel-permissions").screenshot(
+                        path=f"/tmp/wsl-card-suffix-{width}.png"
+                    )
             if width < 640:
                 matrix_scroll = frame.locator("#panel-matrix .table-scroll").first
                 assert await matrix_scroll.evaluate(

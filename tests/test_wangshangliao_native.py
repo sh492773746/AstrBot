@@ -3,8 +3,9 @@
 import asyncio
 import base64
 import json
+import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
@@ -16,6 +17,7 @@ from astrbot.core.platform.sources.wangshangliao import wire
 from astrbot.core.platform.sources.wangshangliao.adapter import (
     WangshangliaoAdapter,
     message_timestamp,
+    team_invite_notification,
 )
 from astrbot.core.platform.sources.wangshangliao.business import (
     BusinessClient,
@@ -26,6 +28,12 @@ from astrbot.core.platform.sources.wangshangliao.event import mentioned
 from astrbot.core.platform.sources.wangshangliao.nim import NimClient
 from astrbot.core.platform.sources.wangshangliao.registration import RegistrationManager
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger, Vault
+
+
+@pytest.fixture(autouse=True)
+def active_plugin_policy(wsl_active_policy):
+    """Provide the active plugin policy boundary for transport-only fixtures."""
+    return wsl_active_policy
 
 
 @pytest.mark.parametrize(
@@ -44,8 +52,51 @@ from astrbot.core.platform.sources.wangshangliao.storage import Ledger, Vault
         ("", 0, 0),
     ],
 )
-def test_message_timestamp_uses_server_time_not_receipt_time(server_time, inner_time, expected):
-    assert message_timestamp(SimpleNamespace(created_at=inner_time), {7: server_time}) == expected
+def test_message_timestamp_uses_server_time_not_receipt_time(
+    server_time, inner_time, expected
+):
+    assert (
+        message_timestamp(SimpleNamespace(created_at=inner_time), {7: server_time})
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("outer", "expected"),
+    [
+        (
+            {
+                0: "1",
+                2: "22",
+                8: "5",
+                10: '{"id":0,"data":{"ids":["33","44"]}}',
+            },
+            {
+                "kind": "team_invite",
+                "inviter_peer": "22",
+                "member_peers": ["33", "44"],
+            },
+        ),
+        (
+            {
+                0: "1",
+                2: "22",
+                8: "5",
+                10: '{"id":0,"data":"{\\"ids\\":[\\"33\\",\\"33\\"]}"}',
+            },
+            {
+                "kind": "team_invite",
+                "inviter_peer": "22",
+                "member_peers": ["33"],
+            },
+        ),
+        ({0: "1", 2: "22", 8: "5", 10: '{"id":1,"data":{"ids":["33"]}}'}, None),
+        ({0: "1", 2: "22", 8: "5", 10: '{"id":0,"data":{"ids":["x"]}}'}, None),
+        ({0: "1", 2: "22", 8: "100", 10: '{"id":0,"data":{"ids":["33"]}}'}, None),
+    ],
+)
+def test_team_invite_notification_accepts_only_native_team_invites(outer, expected):
+    assert team_invite_notification(outer) == expected
 
 
 @pytest.fixture
@@ -356,7 +407,8 @@ async def test_real_crypto_login_binding(deployment, corruption, has_message_key
 
 
 @pytest.mark.asyncio
-async def test_nim_single_reader_interleaved_pushes_and_receipts():
+@pytest.mark.parametrize("burst,consume", [(1, True), (80, True), (80, False)])
+async def test_nim_single_reader_interleaved_pushes_and_receipts(burst, consume):
     async def socket(request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
@@ -365,23 +417,24 @@ async def test_nim_single_reader_interleaved_pushes_and_receipts():
             if (service, command) == (2, 3):
                 reply = wire.properties([(102, b"connection-fixture")])
             elif (service, command) == (8, 2):
-                await ws.send_bytes(
-                    wire.packet(
-                        8,
-                        3,
-                        44,
-                        wire.properties(
-                            [
-                                (0, b"1"),
-                                (1, b"team"),
-                                (2, b"sender"),
-                                (7, b"123"),
-                                (8, b"100"),
-                                (12, b"55"),
-                            ]
-                        ),
+                for index in range(burst):
+                    await ws.send_bytes(
+                        wire.packet(
+                            8,
+                            3,
+                            44,
+                            wire.properties(
+                                [
+                                    (0, b"1"),
+                                    (1, b"team"),
+                                    (2, b"sender"),
+                                    (7, b"123"),
+                                    (8, b"100"),
+                                    (12, str(55 + index).encode()),
+                                ]
+                            ),
+                        )
                     )
-                )
                 reply = wire.properties([(7, b"123"), (12, b"56")])
             else:
                 reply = b""
@@ -398,19 +451,436 @@ async def test_nim_single_reader_interleaved_pushes_and_receipts():
     try:
         async with aiohttp.ClientSession() as http:
             client = NimClient(http)
+            consumer = None
             try:
                 await client.open_socket(f"ws://127.0.0.1:{port}/socket", [])
+                if not consume:
+                    with pytest.raises(
+                        wire.ProtocolError, match="nim_push_backpressure"
+                    ):
+                        await client.request(8, 2)
+                    assert client.closed.is_set()
+                    assert client.pushes.qsize() == 32
+                    assert not client.pending
+                    return
+
+                async def drain():
+                    await asyncio.sleep(0.05)
+                    assert client.pushes.qsize() <= 32
+                    return [
+                        await asyncio.wait_for(client.pushes.get(), 1)
+                        for _ in range(burst)
+                    ]
+
+                consumer = asyncio.create_task(drain())
                 response, heartbeat = await asyncio.gather(
                     client.request(8, 2), client.heartbeat()
                 )
                 assert response[0] == 200 and heartbeat is None
-                assert (await asyncio.wait_for(client.pushes.get(), 1))[:2] == (8, 3)
+                incoming = await consumer
+                assert all(packet[:2] == (8, 3) for packet in incoming)
+                assert [
+                    wire.read_properties(packet[4])[0][12] for packet in incoming
+                ] == [str(55 + index).encode() for index in range(burst)]
                 assert not client.pending
             finally:
+                if consumer:
+                    consumer.cancel()
+                    await asyncio.gather(consumer, return_exceptions=True)
                 await client.close()
                 assert client.closed.is_set()
     finally:
         await runner.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known_group", [True, False])
+async def test_unopened_group_activation_routes_without_at_or_framework(
+    tmp_path, deployment, monkeypatch, known_group
+):
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
+
+    adapter = WangshangliaoAdapter(
+        {"id": "candidate", "account_id": "12", "enabled_groups": []},
+        {},
+        asyncio.Queue(),
+    )
+    adapter.ledger = Ledger(tmp_path / "native.sqlite3")
+    await adapter.ledger.open()
+    adapter.business = SimpleNamespace(deployment=deployment)
+    adapter.groups = {"34": "1005"} if known_group else {}
+    adapter.members = {"34": {"13": "1001"}}
+    adapter.nim = SimpleNamespace(acknowledge=AsyncMock())
+    candidate = Mock()
+    monkeypatch.setattr(
+        runtime,
+        "open_service",
+        SimpleNamespace(
+            active=True,
+            settings={"paused": False},
+            integrated=False,
+            admit_candidate=candidate,
+        ),
+    )
+    inner = wire.ApplicationMessage(
+        sender={"id": 13},
+        target={"id": 34},
+        session=2,
+        device=1,
+        format=0,
+        version=2,
+        content={"data": "开通"},
+    )
+    outer = {
+        0: "1",
+        1: "1005",
+        2: "1001",
+        7: "123",
+        8: "100",
+        10: wire.seal_message(bytes(32), inner, 1, 2, 3),
+        12: "55",
+    }
+    try:
+        await adapter.ingest(outer)
+        candidate.assert_called_once()
+        assert candidate.call_args.args[0:2] == (adapter, "34")
+        adapter.nim.acknowledge.assert_awaited_once_with(1, "55")
+        assert adapter._event_queue.empty()
+        async with adapter.ledger.db.execute("SELECT COUNT(*) FROM inbox") as cursor:
+            assert (await cursor.fetchone())[0] == 0
+    finally:
+        await adapter.ledger.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route", ["private", "group", "disabled-group", "known-candidate", "new-candidate"]
+)
+async def test_ingest_decodes_authenticated_body_only_once(
+    tmp_path, deployment, monkeypatch, route
+):
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
+
+    adapter = WangshangliaoAdapter(
+        {
+            "id": "decode-once",
+            "account_id": "12",
+            "enabled_groups": ["34"] if route == "group" else [],
+        },
+        {},
+        asyncio.Queue(),
+    )
+    adapter.ledger = Ledger(tmp_path / "decode.sqlite3")
+    await adapter.ledger.open()
+    adapter.business = SimpleNamespace(deployment=deployment)
+    adapter.groups = {} if route == "new-candidate" else {"34": "1005"}
+    adapter.members = {"34": {"13": "1001"}}
+    adapter.nim_account = "self-nim"
+    adapter.nim = SimpleNamespace(acknowledge=AsyncMock())
+    candidate = Mock()
+    monkeypatch.setattr(
+        runtime,
+        "open_service",
+        SimpleNamespace(
+            active=True,
+            settings={"paused": False},
+            integrated=False,
+            admit_candidate=candidate,
+            chat_tasks={},
+            chat_users=set(),
+        ),
+    )
+    private = route == "private"
+    activation = route.endswith("candidate")
+    inner = wire.ApplicationMessage(
+        sender={"id": 13},
+        target={"id": 12 if private else 34},
+        session=1 if private else 2,
+        device=1,
+        format=0,
+        content={"data": "开通" if activation else "hello"},
+    )
+    outer = {
+        0: "0" if private else "1",
+        1: "self-nim" if private else "1005",
+        2: "1001",
+        7: "123",
+        8: "100",
+        10: wire.seal_message(bytes(32), inner, 1, 2, 3),
+        12: "55",
+    }
+    decode = Mock(wraps=wire.open_message)
+    monkeypatch.setattr(wire, "open_message", decode)
+    try:
+        await adapter.ingest(outer)
+        decode.assert_called_once_with(bytes(32), outer[10])
+        adapter.nim.acknowledge.assert_awaited_once_with(int(outer[0]), "55")
+        assert candidate.call_count == int(activation)
+        async with adapter.ledger.db.execute(
+            "SELECT state,payload FROM inbox"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        if activation:
+            assert rows == []
+        else:
+            assert len(rows) == 1 and rows[0][0] == "pending"
+            assert json.loads(rows[0][1])["sender"] == "13"
+    finally:
+        await adapter.ledger.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("private", [False, True])
+@pytest.mark.parametrize("spoof", [False, True])
+@pytest.mark.parametrize(
+    ("format_id", "kind"),
+    [(1, "image"), (3, "video"), (9, "forward"), (2, None), (6, None), (13, None)],
+)
+async def test_native_images_enter_group_flood_ingress_only_with_trusted_identity(
+    tmp_path, deployment, monkeypatch, private, spoof, format_id, kind
+):
+    import struct
+
+    import lz4.block
+    import nacl.bindings
+
+    from astrbot.builtin_stars.wangshangliao_moderation import feature_image
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
+
+    monkeypatch.setattr(runtime, "open_service", None)
+    observer = Mock()
+    monkeypatch.setattr(runtime, "observer", observer)
+    adapter = WangshangliaoAdapter(
+        {"id": "image-ingress", "account_id": "12", "enabled_groups": ["34"]},
+        {},
+        asyncio.Queue(),
+    )
+    adapter.business = SimpleNamespace(deployment=deployment)
+    adapter.groups = {"34": "1005"}
+    adapter.members = {"34": {"13": "1001"}}
+    adapter.refresh_member_mapping = AsyncMock()
+    adapter.nim_account = "self-nim"
+    adapter.nim = SimpleNamespace(acknowledge=AsyncMock())
+    adapter.ledger = Ledger(tmp_path / "images.sqlite3")
+    await adapter.ledger.open()
+    message = feature_image.ImageMessage(
+        sender={"id": 13, "name": "ordinary"},
+        target={"id": 12 if private else 34},
+        session=1 if private else 2,
+        device=1,
+        format=format_id,
+        image={
+            "asset": {"uri": next(iter(feature_image.REVIEWED_ASSETS.values()))},
+            "width": 1024,
+            "height": 1024,
+            "size": 1000,
+        },
+    )
+    sealed = nacl.bindings.crypto_aead_chacha20poly1305_encrypt(
+        lz4.block.compress(message.SerializeToString(), store_size=True),
+        struct.pack("<Q", 2),
+        struct.pack("<Q", 1),
+        bytes(32),
+    )
+    envelope = wire.Envelope(
+        header=message.sender.id << 34
+        | message.target.id << 4
+        | message.session << 2
+        | 1,
+        timestamp=3,
+        nonce=1,
+        aad=2,
+        body=sealed[:-16],
+        tag=sealed[-16:],
+    )
+    outer = {
+        0: "0" if private else "1",
+        1: "self-nim" if private else "1005",
+        2: "forged-peer" if spoof else "1001",
+        7: str(int(time.time() * 1000)),
+        8: "100",
+        10: json.dumps({"b": wire.b64(envelope.SerializeToString())}),
+        11: "image-client",
+        12: "55",
+    }
+    try:
+        await adapter.ingest(outer)
+        async with adapter.ledger.db.execute("SELECT state,payload FROM inbox") as c:
+            rows = await c.fetchall()
+        assert len(rows) == 1
+        state, encoded = rows[0]
+        if not private and not spoof and kind:
+            payload = json.loads(encoded)
+            assert state == "pending"
+            assert payload["kind"] == kind and payload["text"] == ""
+            assert payload["sender"] == "13"
+            assert payload["recall_route"]["peer"] == "1001"
+            assert payload["mentions"] == []
+            observer.assert_called_once()
+        elif private and not spoof and kind == "image":
+            payload = json.loads(encoded)
+            assert state == "pending"
+            assert payload["kind"] == "image" and payload["text"] == ""
+            assert payload["sender"] == "13" and payload["transport_peer"] == "1001"
+            assert payload["image"]["asset"] == message.image.asset.uri
+            assert payload["mentions"] == []
+            observer.assert_called_once()
+        else:
+            assert state != "pending"
+            observer.assert_not_called()
+        adapter.nim.acknowledge.assert_awaited_once_with(int(outer[0]), "55")
+    finally:
+        await adapter.ledger.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("private", "fault"),
+    [
+        (True, "target"),
+        (True, "session"),
+        (True, "self"),
+        (True, "cipher"),
+        (False, "target"),
+        (False, "session"),
+        (False, "peer"),
+        (False, "cipher"),
+    ],
+)
+async def test_ingest_decode_reuse_keeps_identity_and_cipher_checks(
+    tmp_path, deployment, monkeypatch, private, fault
+):
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
+
+    monkeypatch.setattr(runtime, "open_service", None)
+    adapter = WangshangliaoAdapter(
+        {"id": "decode-rejected", "account_id": "12", "enabled_groups": ["34"]},
+        {},
+        asyncio.Queue(),
+    )
+    adapter.ledger = Ledger(tmp_path / "rejected.sqlite3")
+    await adapter.ledger.open()
+    adapter.business = SimpleNamespace(deployment=deployment)
+    adapter.groups = {"34": "1005"}
+    adapter.members = {"34": {"13": "1001"}}
+    adapter.refresh_member_mapping = AsyncMock()
+    adapter.nim_account = "self-nim"
+    adapter.nim = SimpleNamespace(acknowledge=AsyncMock())
+    inner = wire.ApplicationMessage(
+        sender={"id": 12 if fault == "self" else 13},
+        target={"id": 99 if fault == "target" else 12 if private else 34},
+        session=(2 if private else 1) if fault == "session" else 1 if private else 2,
+        device=1,
+        format=0,
+        content={"data": "hello"},
+    )
+    outer = {
+        0: "0" if private else "1",
+        1: "self-nim" if private else "1005",
+        2: "forged-peer" if fault == "peer" else "1001",
+        8: "100",
+        10: wire.seal_message(
+            bytes([1]) * 32 if fault == "cipher" else bytes(32), inner, 1, 2, 3
+        ),
+        12: "55",
+    }
+    decode = Mock(wraps=wire.open_message)
+    monkeypatch.setattr(wire, "open_message", decode)
+    try:
+        if private and fault != "cipher":
+            with pytest.raises(wire.ProtocolError, match="private_message_identity"):
+                await adapter.ingest(outer)
+            adapter.nim.acknowledge.assert_not_awaited()
+        else:
+            await adapter.ingest(outer)
+            adapter.nim.acknowledge.assert_awaited_once_with(int(outer[0]), "55")
+        decode.assert_called_once()
+        async with adapter.ledger.db.execute("SELECT state FROM inbox") as cursor:
+            rows = await cursor.fetchall()
+        assert rows == (
+            []
+            if private and fault != "cipher"
+            else [("unsupported" if fault == "cipher" else "rejected_identity",)]
+        )
+        assert adapter._event_queue.empty()
+    finally:
+        await adapter.ledger.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("private", [False, True])
+@pytest.mark.parametrize("disposition", ["admitted", "queue-full", "ack-retry"])
+async def test_ingest_wakeup_requires_admission_but_recovers_ack_retry(
+    tmp_path, deployment, monkeypatch, private, disposition
+):
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
+
+    monkeypatch.setattr(runtime, "open_service", None)
+    observe = Mock(wraps=runtime.observe)
+    monkeypatch.setattr(runtime, "observe", observe)
+    adapter = WangshangliaoAdapter(
+        {"id": "admission-wakeup", "account_id": "12", "enabled_groups": ["34"]},
+        {},
+        asyncio.Queue(),
+    )
+    adapter.ledger = Ledger(tmp_path / "wakeup.sqlite3")
+    await adapter.ledger.open()
+    adapter.business = SimpleNamespace(deployment=deployment)
+    adapter.groups = {"34": "1005"}
+    adapter.members = {"34": {"13": "1001"}}
+    adapter.nim_account = "self-nim"
+    team = "private/13/" + wire.b64(b"1001") if private else "34"
+    rejected = disposition == "queue-full"
+    if rejected:
+        await adapter.ledger.db.executemany(
+            "INSERT INTO inbox(account,team,message,sender,payload,state) "
+            "VALUES('12',?,?,?,'{}','pending')",
+            [(team, f"old{i}", f"peer{i}") for i in range(256 if private else 4096)],
+        )
+        await adapter.ledger.db.commit()
+    ack_attempts = 0
+
+    async def acknowledge(kind, mid):
+        nonlocal ack_attempts
+        ack_attempts += 1
+        assert not adapter.dispatch_wakeup.is_set()
+        # The ACK sees the committed admission result, never speculative state.
+        async with adapter.ledger.db.execute(
+            "SELECT state FROM inbox WHERE account='12' AND team=? AND message=?",
+            (team, mid),
+        ) as cursor:
+            assert await cursor.fetchone() == ("queue_full" if rejected else "pending",)
+        if disposition == "ack-retry" and ack_attempts == 1:
+            raise OSError("offline ACK failure")
+
+    adapter.nim = SimpleNamespace(acknowledge=AsyncMock(side_effect=acknowledge))
+    inner = wire.ApplicationMessage(
+        sender={"id": 13},
+        target={"id": 12 if private else 34},
+        session=1 if private else 2,
+        device=1,
+        format=0,
+        content={"data": "hello"},
+    )
+    outer = {
+        0: "0" if private else "1",
+        1: "self-nim" if private else "1005",
+        2: "1001",
+        8: "100",
+        10: wire.seal_message(bytes(32), inner, 1, 2, 3),
+        12: "55",
+    }
+    try:
+        if disposition == "ack-retry":
+            with pytest.raises(OSError, match="ACK failure"):
+                await adapter.ingest(outer)
+            assert not adapter.dispatch_wakeup.is_set()
+        await adapter.ingest(outer)
+        assert adapter.dispatch_wakeup.is_set() is not rejected
+        assert observe.call_count == int(not rejected)
+        assert ack_attempts == (2 if disposition == "ack-retry" else 1)
+    finally:
+        await adapter.ledger.close()
 
 
 @pytest.mark.asyncio
@@ -622,6 +1092,76 @@ async def test_bot_save_failure_retry_duplicate_and_logout(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("saved_account", ["34", "12"])
+async def test_saved_instance_login_cannot_replace_account(
+    tmp_path, monkeypatch, deployment, saved_account
+):
+    """Preserve account isolation while allowing the original account to reauthenticate."""
+    from astrbot.core.platform.sources.wangshangliao import registration, storage
+    from astrbot.dashboard.services import config_service
+
+    manager = RegistrationManager(lambda: deployment, LoginFixture)
+    monkeypatch.setattr(registration, "registrations", manager)
+    monkeypatch.setattr(storage, "instance_dir", lambda instance: tmp_path / instance)
+    current = {
+        "id": "account-bound-bot",
+        "type": "wangshangliao",
+        "enable": False,
+        "account_id": saved_account,
+        "enabled_groups": ["34"],
+    }
+    config = {"platform": [dict(current)]}
+    platform_manager = SimpleNamespace(
+        load_platform=AsyncMock(), terminate_platform=AsyncMock(), astrbot_config=config
+    )
+    service = config_service.BotConfigService(
+        SimpleNamespace(astrbot_config=config, platform_manager=platform_manager)
+    )
+    persist = Mock()
+    monkeypatch.setattr(config_service, "save_config", persist)
+    vault = Vault(current["id"], tmp_path / current["id"])
+    vault.save({"fixture": "original-session"})
+    original = (vault.root / "session.sealed").read_bytes()
+    try:
+        started = await manager.action(
+            "admin", {"action": "start", "instance_id": current["id"]}
+        )
+        ready = await manager.action(
+            "admin",
+            {
+                "action": "login",
+                "instance_id": current["id"],
+                "registration_code": started["registration_code"],
+                "account": "fixture",
+                "password": "fixture",
+                "validate_str": "human",
+            },
+        )
+        candidate = {**current, "session_ref": ready["session_ref"], "account_id": "12"}
+        if saved_account != "12":
+            with pytest.raises(
+                ValueError, match="account_change_requires_new_instance"
+            ):
+                await service.update_bot(current["id"], candidate, "admin")
+            assert config["platform"] == [current]
+            assert (vault.root / "session.sealed").read_bytes() == original
+            assert manager.claim("admin", current["id"], ready["session_ref"])
+            platform_manager.terminate_platform.assert_not_awaited()
+            platform_manager.load_platform.assert_not_awaited()
+            persist.assert_not_called()
+        else:
+            await service.update_bot(current["id"], candidate, "admin")
+            assert config["platform"][0]["account_id"] == "12"
+            assert "session_ref" not in config["platform"][0]
+            assert not manager.transactions
+            platform_manager.terminate_platform.assert_awaited_once_with(current["id"])
+            platform_manager.load_platform.assert_awaited_once()
+            persist.assert_called_once()
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_registration_strict_input_and_missing_deployment(monkeypatch, tmp_path):
     from astrbot.core.utils import astrbot_path
 
@@ -652,6 +1192,17 @@ async def test_registration_strict_input_and_missing_deployment(monkeypatch, tmp
         ("/v1/group/get-group-apply-list", {"groupId": 34, "v": "0"}),
         ("/v1/group/get-apply-logs", {}),
         ("/v1/group/get-apply-logs", {"lastId": "0"}),
+        ("/v1/friend/friend-apply-list", {"lastId": 0}),
+        (
+            "/v1/friend/friend-apply-handler",
+            {
+                "flId": 123456789012,
+                "state": "FRIENDLOG_STATE_AGREE",
+                "nickName": "",
+                "classId": 0,
+                "friendCircle": {"notSeeMe": False, "notSeeHim": True},
+            },
+        ),
     ],
 )
 async def test_http_signed_encrypted_exchange(deployment, route, params):
@@ -818,8 +1369,9 @@ async def test_real_eventbus_waits_for_model_and_suppresses_ordinary_reply(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("burst", [1, 65])
 async def test_native_lifecycle_reconnect_cursor_and_stop(
-    tmp_path, monkeypatch, deployment
+    tmp_path, monkeypatch, deployment, burst
 ):
     from astrbot.core.platform.sources.wangshangliao import adapter as module
     from astrbot.core.platform.sources.wangshangliao import storage
@@ -862,7 +1414,11 @@ async def test_native_lifecycle_reconnect_cursor_and_stop(
         def __init__(self, http):
             self.closed = asyncio.Event()
             self.error = "disconnected"
-            self.pushes = DisconnectQueue() if not instances else asyncio.Queue()
+            self.pushes = (
+                DisconnectQueue(maxsize=4)
+                if not instances
+                else asyncio.Queue(maxsize=4)
+            )
             self.acks = []
             instances.append(self)
 
@@ -885,11 +1441,23 @@ async def test_native_lifecycle_reconnect_cursor_and_stop(
                 (10, text.encode()),
                 (12, b"55"),
             ]
+            self.sample = fields
             self.pushes.put_nowait((8, 3, 0, 200, wire.properties(fields)))
 
         async def request(self, service, command, body):
             fields, _ = wire.read_properties(body)
             cursors.append(fields[2])
+            if len(instances) == 1:
+                for index in range(1, burst):
+                    fields = [
+                        (key, str(55 + index).encode() if key == 12 else value)
+                        for key, value in self.sample
+                    ]
+                    await self.pushes.put((8, 3, 0, 200, wire.properties(fields)))
+                async with native.ledger.db.execute(
+                    "SELECT cursor FROM sync WHERE account='12'"
+                ) as cursor:
+                    assert await cursor.fetchone() is None
             if len(instances) > 1:
                 reconnected.set()
             return 200, (50).to_bytes(8, "little")
@@ -936,7 +1504,7 @@ async def test_native_lifecycle_reconnect_cursor_and_stop(
     await ledger.open()
     try:
         async with ledger.db.execute("SELECT COUNT(*) FROM inbox") as cursor:
-            assert (await cursor.fetchone())[0] == 1
+            assert (await cursor.fetchone())[0] == burst
     finally:
         await ledger.close()
 
@@ -1106,6 +1674,7 @@ async def test_authenticated_group_selection(deployment):
         (429, 0, "12", "rate_limited"),
         (429, 0, "bad", "rate_limited"),
         (503, 0, None, "http_rejected"),
+        (200, 1039, None, "phone_not_found"),
     ],
 )
 async def test_provider_error_classification(deployment, status, code, retry, label):
@@ -1136,6 +1705,8 @@ async def test_provider_error_classification(deployment, status, code, retry, la
             client.jwt = "fixture"
             with pytest.raises(BusinessError, match=label) as raised:
                 await client.request("/v1/user/RefreshToken", {})
+            if code == 1039:
+                assert raised.value.number == 1039
             if code == 401 or status == 401:
                 assert client.jwt == ""
                 with pytest.raises(BusinessError, match="reauth_required"):
@@ -1165,6 +1736,38 @@ async def test_waiting_request_rechecks_invalidated_credentials(deployment):
             client.lock.release()
         with pytest.raises(BusinessError, match="reauth_required"):
             await pending
+
+
+@pytest.mark.asyncio
+async def test_friend_request_guard_checked_after_shared_http_lock(deployment):
+    from astrbot.core.platform.sources.wangshangliao.business_http import (
+        request_business,
+    )
+
+    authorized = True
+
+    def guard():
+        if not authorized:
+            raise wire.ProtocolError("friend_approval_authority_changed")
+
+    async with aiohttp.ClientSession() as http:
+        client = BusinessClient(deployment, http)
+        client.jwt = "fixture"
+        await client.lock.acquire()
+        pending = asyncio.create_task(
+            request_business(
+                client, "/v1/friend/friend-apply-handler", {}, authorize=guard
+            )
+        )
+        try:
+            await asyncio.sleep(0)
+            assert not pending.done()
+            authorized = False
+        finally:
+            client.lock.release()
+        with pytest.raises(wire.ProtocolError, match="authority_changed"):
+            await pending
+        assert client.last_request == 0
 
 
 @pytest.mark.asyncio
@@ -1284,7 +1887,13 @@ async def test_independent_sms_login_without_password(deployment):
         assert result["status"] == "sms_required"
         params = tx.client.request.call_args.args[1]
         assert "passwd" not in params and "Key" not in params
-        assert params["phone"]["nationalNumber"] == "13800000000"
+        assert params["phone"] == {
+            "countryCode": 86,
+            "nationalNumber": 13800000000,
+            "maskedNationalNumber": "",
+        }
+        assert type(params["phone"]["countryCode"]) is int
+        assert type(params["phone"]["nationalNumber"]) is int
         result = await manager.action(
             "admin",
             {
@@ -1306,7 +1915,224 @@ async def test_independent_sms_login_without_password(deployment):
         )
         assert result["status"] == "authenticated"
         assert tx.client.login.call_args.args[0]["type"] == "LOGIN_TYPE_SMS"
+        assert tx.client.login.call_args.args[0]["phone"] == params["phone"]
         assert "sms-fixture-key" not in json.dumps(result)
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "expected", "provider_code"),
+    [
+        (BusinessError("business_rejected", 1201), "business_rejected", 1201),
+        (BusinessError("transport"), "transport", None),
+        (None, "sms_challenge", None),
+        ({}, "sms_challenge", None),
+        ({"key": ""}, "sms_challenge", None),
+        ({"key": "x" * 8193}, "sms_challenge", None),
+        ({"key": 123}, "sms_challenge", None),
+    ],
+)
+async def test_rejected_sms_does_not_create_challenge(
+    deployment, response, expected, provider_code
+):
+    manager = RegistrationManager(lambda: deployment, LoginFixture)
+    try:
+        view = await manager.action(
+            "admin", {"action": "start", "instance_id": "sms-failure"}
+        )
+        base = {
+            "instance_id": "sms-failure",
+            "registration_code": view["registration_code"],
+            "validate_str": "private-proof",
+        }
+        tx = manager.transactions[view["registration_code"]]
+        tx.client.request = AsyncMock(
+            side_effect=response if isinstance(response, Exception) else None,
+            return_value=response,
+        )
+        tx.client.login = AsyncMock()
+        result = await manager.action(
+            "admin", dict(base, action="request_sms", account="13800000000")
+        )
+        assert result["status"] == "failed"
+        assert result["error"] == expected
+        assert result["error_action"] == "request_sms"
+        assert result["provider_code"] == provider_code
+        assert 55 <= result["resend_after"] <= 60
+        assert not tx.challenge
+        assert "13800000000" not in json.dumps(result)
+        assert "private-proof" not in json.dumps(result)
+        result = await manager.action(
+            "admin", dict(base, action="request_sms", account="13800000000")
+        )
+        assert result["error"] == "sms_cooldown"
+        assert result["provider_code"] is None
+        assert tx.client.request.await_count == 1
+        result = await manager.action(
+            "admin", dict(base, action="verify_sms", verification_code="123456")
+        )
+        assert result["error"] == "sms_challenge"
+        tx.client.login.assert_not_awaited()
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [BusinessError("business_rejected", 1202), None, {}, {"key": ""}],
+)
+async def test_failed_resend_preserves_confirmed_sms_challenge(deployment, response):
+    manager = RegistrationManager(lambda: deployment, LoginFixture)
+    try:
+        view = await manager.action(
+            "admin", {"action": "start", "instance_id": "sms-resend"}
+        )
+        base = {
+            "instance_id": "sms-resend",
+            "registration_code": view["registration_code"],
+            "validate_str": "private-proof",
+        }
+        tx = manager.transactions[view["registration_code"]]
+        tx.client.request = AsyncMock(return_value={"key": "confirmed-key"})
+        await manager.action(
+            "admin", dict(base, action="request_sms", account="13800000000")
+        )
+        tx.sms_resend_at = 0
+        tx.client.request = AsyncMock(
+            side_effect=response if isinstance(response, Exception) else None,
+            return_value=response,
+        )
+        result = await manager.action("admin", dict(base, action="resend_sms"))
+        assert result["status"] == "sms_required"
+        assert result["error_action"] == "resend_sms"
+        assert tx.challenge["key"] == "confirmed-key"
+        assert 55 <= result["resend_after"] <= 60
+        result = await manager.action(
+            "admin", dict(base, action="verify_sms", verification_code="123456")
+        )
+        assert result["status"] == "authenticated"
+        assert result["resend_after"] == 0
+        assert result["error_action"] == ""
+        assert result["provider_code"] is None
+        tx.client.request.assert_awaited_once()
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["login", "request_sms"])
+@pytest.mark.parametrize("number", [1201, -1201, 0, True, "private-code", 1 << 40])
+async def test_login_reports_only_safe_provider_code_and_action(
+    deployment, monkeypatch, action, number
+):
+    from astrbot.core.platform.sources.wangshangliao import diagnostics
+
+    logs = []
+    monkeypatch.setattr(
+        diagnostics.logger, "log", lambda level, msg, *args: logs.append(msg % args)
+    )
+    manager = RegistrationManager(lambda: deployment, LoginFixture)
+    try:
+        view = await manager.action(
+            "admin", {"action": "start", "instance_id": "code-fixture"}
+        )
+        tx = manager.transactions[view["registration_code"]]
+        failure = BusinessError("business_rejected", number)
+        tx.client.login = AsyncMock(side_effect=failure)
+        tx.client.request = AsyncMock(side_effect=failure)
+        result = await manager.action(
+            "admin",
+            {
+                "instance_id": "code-fixture",
+                "registration_code": view["registration_code"],
+                "action": action,
+                "account": "13800000000",
+                "password": "private-password",
+                "validate_str": "private-proof",
+            },
+        )
+        safe = number if type(number) is int and 0 < abs(number) < 1 << 31 else None
+        assert result["provider_code"] == safe
+        assert result["error_action"] == action
+        assert f"action={action}" in logs[-1]
+        assert (
+            "route=sms_anon" in logs[-1]
+            if action == "request_sms"
+            else ("route=user_login" in logs[-1])
+        )
+        assert f"provider_code={safe if safe is not None else '-'}" in logs[-1]
+        for secret in (
+            "13800000000",
+            "private-password",
+            "private-proof",
+            "private-code",
+        ):
+            assert secret not in "".join(logs)
+            assert secret not in json.dumps(result)
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_sms_provider_retry_after_is_respected(deployment):
+    manager = RegistrationManager(lambda: deployment, LoginFixture)
+    try:
+        view = await manager.action("admin", {"action": "start", "instance_id": "bot"})
+        tx = manager.transactions[view["registration_code"]]
+        tx.client.request = AsyncMock(
+            side_effect=BusinessError("rate_limited", 429, 120)
+        )
+        result = await manager.action(
+            "admin",
+            {
+                "instance_id": "bot",
+                "registration_code": view["registration_code"],
+                "action": "request_sms",
+                "account": "13800000000",
+                "validate_str": "private-proof",
+            },
+        )
+        assert result["error"] == "rate_limited"
+        assert 115 <= result["resend_after"] <= 120
+        assert result["provider_code"] == 429
+        assert result["status"] == "failed"
+        assert not tx.challenge
+        tx.client.request.assert_awaited_once()
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["login", "request_sms", "verify_sms", "resend_sms"])
+async def test_missing_verification_is_distinct_from_bad_login_input(
+    deployment, monkeypatch, action
+):
+    monkeypatch.setenv("ASTRBOT_YIDUN_SOLVER_URL", "")
+    manager = RegistrationManager(lambda: deployment, LoginFixture)
+    try:
+        view = await manager.action("admin", {"action": "start", "instance_id": "bot"})
+        tx = manager.transactions[view["registration_code"]]
+        tx.challenge = {"phone": {"nationalNumber": "13800000000"}, "key": "key"}
+        tx.client.request = AsyncMock()
+        tx.client.login = AsyncMock()
+        result = await manager.action(
+            "admin",
+            {
+                "instance_id": "bot",
+                "registration_code": view["registration_code"],
+                "action": action,
+                "account": "13800000000",
+                "password": "private-password",
+                "verification_code": "123456",
+            },
+        )
+        assert result["error"] == "captcha_required"
+        assert result["error_action"] == action
+        tx.client.request.assert_not_awaited()
+        tx.client.login.assert_not_awaited()
     finally:
         await manager.close()
 
@@ -1322,7 +2148,9 @@ async def test_managed_bot_messages_never_dispatch(tmp_path, monkeypatch, group)
         [{"type": "wangshangliao", "account_id": "13", "enable": False}],
     )
     adapter = WangshangliaoAdapter(
-        {"id": "fixture", "account_id": "12"}, {}, asyncio.Queue()
+        {"id": "fixture", "account_id": "12", "enabled_groups": ["34"]},
+        {},
+        asyncio.Queue(),
     )
     adapter.ledger = Ledger(tmp_path / "bot-exclusion.sqlite")
     await adapter.ledger.open()
@@ -1448,5 +2276,14 @@ async def test_reply_and_proactive_settings_survive_save_reload(tmp_path, monkey
         fresh = config_service.BotConfigService(
             SimpleNamespace(astrbot_config=loaded, platform_manager=manager)
         )
-        assert fresh.get_bot("persist")["bot"] == setting
-        assert manager.load_platform.call_args.args[0] == setting
+        expected = {
+            **setting,
+            "proactive_send": {"enabled": enabled, "targets": []},
+            "ai_routes": {"admin_provider_id": "", "groups": {}},
+        }
+        assert fresh.get_bot("persist")["bot"] == expected
+        assert manager.load_platform.call_args.args[0] == {
+            key: value
+            for key, value in expected.items()
+            if not key.startswith("_business_")
+        }

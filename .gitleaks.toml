@@ -1,13 +1,109 @@
-title = "AstrBot fork secret scanning"
+title = "Reviewed production-source snapshot"
 
 [extend]
 useDefault = true
 
 [[allowlists]]
-description = "Known non-secret media-cache identifier, redaction fixture and public protocol constant"
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
 regexTarget = "line"
-regexes = [
-  '''cache_key = "mines_trophy_v1" if trophy else "mines_explosion_v1"''',
-  '''API Key=sk-synthetic123456789''',
-  '''SEED_KEY = "fd6a43ae25f74398b61c03c83be37449"''',
-]
+paths = ['''astrbot/core/platform/sources/wangshangliao/_solver_vendor/网易_滑块增强版_协议\.py''']
+regexes = ['''SEED_KEY = "fd6a43ae25f74398b61c03c83be37449"''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''dashboard/src/components/config/AstrBotCoreConfigWrapper\.vue''']
+regexes = ['''href="https://qm\.qq\.com/cgi-bin/qm/qr\?k=EYGsuUTfe00_iOu9JTXS7_TEpMkXOvwv&jump_from=webapi&authKey=uUEMKCROfsseS\+8IzqPjzV3y1tzy4AkykwTib2jNkOFdzezF9s9XknqnIaf3CDft"''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''docs/en/faq\.md''']
+regexes = ['''➜  Initial password: UiYVpZxnW8k22IWqf0ru5pOy''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''data/plugins/astrbot_plugin_superbot/mines\.py''']
+regexes = ['''cache_key = "mines_trophy_v1" if trophy else "mines_explosion_v1"''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''docs/zh/faq\.md''']
+regexes = ['''➜  Initial password: UiYVpZxnW8k22IWqf0ru5pOy''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_kook/data/kook_ws_event_group_system_message_update_role\.json''']
+regexes = ['''"verifyToken": "kW4FH_ASHio1hosd",''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_kook/data/kook_ws_event_message_with_card_2\.json''']
+regexes = ['''"verifyToken": "kW4FH_ASHio1hosd",''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_kook/data/kook_ws_event_private_message\.json''']
+regexes = ['''"verifyToken": "kW4FH_ASHio1hosd",''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_kook/data/kook_ws_event_private_system_message\.json''']
+regexes = ['''"verifyToken": "kW4FH_ASHio1hosd",''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_kook/data/kook_ws_event_group_message\.json''']
+regexes = ['''"verifyToken": "kW4FH_ASHio1hosd",''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_kook/data/kook_ws_event_group_message_with_mention\.json''']
+regexes = ['''"verifyToken": "kW4FH_ASHio1hosd",''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_kook/data/kook_ws_event_message_with_card_1\.json''']
+regexes = ['''"verifyToken": "kW4FH_ASHio1hosd",''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_computer_config\.py''']
+regexes = ['''"sandbox": \{"shipyard_neo_access_token": "sk-bay-secret123"\}''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_wangshangliao_conversation_guidance\.py''']
+regexes = ['''"API Key=sk-synthetic123456789\\n"''']
+
+[[allowlists]]
+description = "Reviewed non-secret public constant or synthetic fixture"
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/unit/test_config\.py''']
+regexes = ['''"password": "77b90590a8945a7d36c963981a307dc9",''']

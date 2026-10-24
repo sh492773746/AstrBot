@@ -2,24 +2,29 @@
 
 import asyncio
 import base64
-import json
 import os
 import stat
-import struct
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import aiohttp
-import nacl.bindings
 import xxhash
 from nacl.public import PublicKey, SealedBox
 from nacl.signing import SigningKey
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from . import wire
+
+SECURITY_ERRORS = {
+    1400: "secondary_security_code_required",
+    1401: "account_clearing",
+    1402: "secondary_security_unverified",
+    1403: "secondary_security_code_invalid",
+    1404: "secondary_security_locked",
+    1405: "secondary_security_phone_required",
+}
 
 
 class Deployment(BaseModel):
@@ -36,6 +41,7 @@ class Deployment(BaseModel):
     captcha_id: str
     app_key: str
     device_id: str
+    protocol_version: Literal["3.7.1", "3.7.3", "2.8.3"] = "3.7.1"
 
     def key(self, name: str) -> bytes:
         """Decode a fixed-size deployment key without echoing its value."""
@@ -132,14 +138,26 @@ class BusinessClient:
         self.mac = b""
         self.last_request = 0
         self.lock = asyncio.Lock()
+        self.protocol_version = getattr(deployment, "protocol_version", "3.7.1")
+        self.security_required = False
+        self.auth_error = ""
+        if self.protocol_version in {"3.7.3", "2.8.3"}:
+            public = bytes(SigningKey(deployment.key("signing_seed")).verify_key)
+            self.fields[0] = xxhash.xxh3_64_intdigest(public)
+            self.fields[1:3] = [3 if self.protocol_version == "3.7.3" else 1, 1]
+            if self.protocol_version == "3.7.3":
+                self.mac = public[16:32]
 
-    async def request(self, route: str, params: dict, exchange: bytes | None = None):
+    async def request(
+        self, route: str, params: dict, exchange: bytes | None = None, *, authorize=None
+    ):
         """Send a bounded signed request without redirects or automatic retries.
 
         Args:
             route: Reviewed business route.
             params: Operation-specific JSON object.
             exchange: Sealed login exchange, only for login.
+            authorize: Optional lifecycle check repeated after HTTP lock admission.
 
         Returns:
             Validated provider data.
@@ -147,160 +165,43 @@ class BusinessClient:
         Raises:
             BusinessError: On expiry, rejection, transport or malformed response.
         """
-        allowed = {
-            "/v1/user/login",
-            "/v1/user/get-change-device-verify",
-            "/v1/verify/sms-anon",
-            "/v1/user/RefreshToken",
-            "/v1/group/get-group-list",
-            "/v1/group/get-group-members",
-            "/v1/group/get-group-apply-list",
-            "/v1/group/get-apply-logs",
-            "/v1/group/set-member-mute",
-            "/v1/group/set-member-nickname",
-            "/v1/group/remove-group-member",
-            "/v1/group/member-mute-cancel",
-            "/v1/group/set-group-mute",
-            "/v1/group/add-notice",
-            "/v1/group/notice-list",
-        }
-        anonymous = {
-            "/v1/user/login",
-            "/v1/user/get-change-device-verify",
-            "/v1/verify/sms-anon",
-        }
-        if route not in allowed:
-            raise BusinessError("unsupported_route")
-        async with self.lock:
-            # A preceding request may invalidate authentication while we wait.
-            if not self.jwt and route not in anonymous:
-                raise BusinessError("reauth_required", 401)
-            now = time.time_ns()
-            request_id = max(now, self.last_request + 1)
-            self.last_request = request_id
-            plain = json.dumps(
-                params, ensure_ascii=False, separators=(",", ":")
-            ).encode()
-            body = wire.seal_business(
-                self.deployment.key("body_key"), request_id, plain, self.fields[0]
-            )
-            fields = list(self.fields)
-            digest, aad = wire.binding(request_id, plain, fields[0])
-            fields[5:8] = [request_id, len(plain), digest]
-            fields[9], fields[12] = now // 1_000_000_000, 1
-            fields[8] = (
-                int.from_bytes(
-                    nacl.bindings.crypto_shorthash_siphash24(
-                        struct.pack("<QQQ", fields[0], request_id, fields[9]), self.mac
-                    ),
-                    "little",
-                )
-                if self.mac
-                else 0
-            )
-            metadata = wire.metadata(fields)
-            signer = SigningKey(self.deployment.key("signing_seed"))
-            headers = {
-                k: v
-                for k, v in self.deployment.headers.items()
-                if k in {"x-version", "x-device", "accept", "content-type"}
-            }
-            headers.update(
-                {
-                    "x-request": wire.b64(metadata),
-                    "x-seed": wire.b64(bytes(signer.verify_key)),
-                    "x-hash": wire.b64(signer.sign(metadata).signature),
-                    "x-trace-id": f"{fields[0]}.{request_id}",
-                }
-            )
-            if self.jwt:
-                headers.update(
-                    {
-                        "x-id": str(fields[3]),
-                        "x-token": str(fields[3]),
-                        "x-jwt": self.jwt,
-                    }
-                )
-            if exchange:
-                headers["x-context"] = wire.b64(exchange)
-            try:
-                async with self.http.post(
-                    self.deployment.origin.rstrip("/") + route,
-                    headers=headers,
-                    data=body,
-                    allow_redirects=False,
-                    timeout=aiohttp.ClientTimeout(total=20),
-                ) as response:
-                    if response.status == 401:
-                        self.jwt, self.mac = "", b""
-                        raise BusinessError("reauth_required", 401)
-                    if response.status == 429:
-                        retry_after = 30.0
-                        value = response.headers.get("Retry-After", "")
-                        try:
-                            retry_after = float(value)
-                        except ValueError:
-                            try:
-                                retry_after = (
-                                    parsedate_to_datetime(value)
-                                    - datetime.now(timezone.utc)
-                                ).total_seconds()
-                            except (ValueError, TypeError, OverflowError):
-                                pass
-                        raise BusinessError(
-                            "rate_limited", 429, max(1, min(retry_after, 86400))
-                        )
-                    if response.status != 200:
-                        raise BusinessError("http_rejected", response.status)
-                    chunks = bytearray()
-                    async for chunk in response.content.iter_chunked(65536):
-                        chunks.extend(chunk)
-                        if len(chunks) > wire.LIMIT + 4096:
-                            raise BusinessError("response_limit")
-                decoded = (
-                    bytes(chunks)
-                    if chunks.startswith(b'{"')
-                    else wire.open_business(
-                        self.deployment.key("body_key"), aad, bytes(chunks)
-                    )
-                )
-                value = json.loads(decoded)
-                if type(value.get("code")) is not int:
-                    raise BusinessError("response_shape")
-                if value["code"] != 0:
-                    if value["code"] == 401:
-                        self.jwt, self.mac = "", b""
-                        raise BusinessError("reauth_required", 401)
-                    feedback = {
-                        "账号或密码错误": "invalid_credentials",
-                        "密码错误": "invalid_credentials",
-                        "验证码错误": "invalid_sms",
-                        "短信验证码错误": "invalid_sms",
-                        "验证码已过期": "sms_expired",
-                    }
-                    raise BusinessError(
-                        feedback.get(value.get("msg"), "business_rejected"),
-                        value["code"],
-                    )
-                return value["data"]
-            except BusinessError:
-                raise
-            except (aiohttp.ClientError, asyncio.TimeoutError):
-                raise BusinessError("transport") from None
-            except Exception:
-                raise BusinessError("response_invalid") from None
+        from .business_http import request_business
+
+        return await request_business(
+            self, route, params, exchange, authorize=authorize
+        )
 
     async def login(self, params: dict):
         """Authenticate and bind the sealed reply before installing credentials."""
         self.jwt, self.mac = "", b""
+        self.security_required = False
+        self.auth_error = ""
         self.fields[3] = self.fields[4] = 0
         signer = SigningKey(self.deployment.key("signing_seed"))
         public = bytes(signer.verify_key)
         self.fields[0] = xxhash.xxh3_64_intdigest(public)
+        current = self.protocol_version == "3.7.3"
+        if current:
+            self.fields[1:3] = [3, 1]
+            self.mac = public[16:32]
+            # Public release metadata from the signature-verified 3.7.3 APK.
+            # SecurityUtil uses uppercase SHA-256: colon-separated signer, then APK.
+            params = {
+                **params,
+                "version": "3.7.3",
+                "appVersion": 335,
+                "appHash": (
+                    "3C:F2:35:2F:6D:B2:85:67:98:25:B1:2F:06:5E:FC:5C:"
+                    "7A:AC:0F:6D:74:67:DA:4E:F9:50:05:58:C4:42:F1:96="
+                    "02ED673B263F7EA80B307ADE1967C49A7264F955CDF33EB36F7673591029E195"
+                ),
+            }
+        elif self.protocol_version == "2.8.3":
+            self.fields[1:3] = [1, 1]
         now = time.time_ns()
         exchange = wire.Exchange(
             device=self.fields[0],
-            kind=1,
+            kind=3 if current else 1,
             public_key=public,
             seconds=now // 1_000_000_000,
             correlation=now,
@@ -311,6 +212,24 @@ class BusinessClient:
         )
         data = await self.request("/v1/user/login", params, sealed)
         try:
+            if current:
+                # The current SDK uses the authenticated response and device key,
+                # not the legacy sealed response token or its server-issued MAC.
+                if (
+                    not isinstance(data, dict)
+                    or type(data.get("uid")) is not int
+                    or not 0 < data["uid"] < 1 << 31
+                    or not isinstance(data.get("jwtToken"), str)
+                    or not 0 < len(data["jwtToken"]) <= 8192
+                    or any(c.isspace() for c in data["jwtToken"])
+                    or type(data.get("safeCodeRequired", False)) is not bool
+                    or type(data.get("safeCodeSet", False)) is not bool
+                ):
+                    raise ValueError
+                self.fields[3], self.fields[4] = data["uid"], 0
+                self.jwt, self.mac = data["jwtToken"], public[16:32]
+                self.security_required = data.get("safeCodeRequired", False)
+                return data
             token = wire.LoginToken.FromString(
                 SealedBox(signer.to_curve25519_private_key()).decrypt(
                     wire.unb64(data["token"], 65584)
@@ -331,9 +250,88 @@ class BusinessClient:
                 raise ValueError
             self.fields[3], self.fields[4] = token.uid, token.kind & 0xFFFFFFFF
             self.jwt, self.mac = data["jwtToken"], token.mac[:16]
+            if self.protocol_version == "2.8.3":
+                if any(
+                    type(data.get(name, False)) is not bool
+                    for name in ("safeCodeRequired", "safeCodeSet")
+                ):
+                    raise ValueError
+                self.security_required = data.get("safeCodeRequired", False)
             return data
         except Exception:
+            self.jwt, self.mac = "", b""
             raise BusinessError("login_binding") from None
+
+    async def verify_security_code(self, code: str) -> None:
+        """Complete the provider's current login challenge without retaining code.
+
+        Args:
+            code: Six ASCII digits entered in the authenticated Dashboard.
+
+        Raises:
+            BusinessError: If the challenge, response or credential rotation fails.
+        """
+        if (
+            self.protocol_version not in {"3.7.3", "2.8.3"}
+            or not self.security_required
+            or not isinstance(code, str)
+            or len(code) != 6
+            or not code.isascii()
+            or not code.isdigit()
+        ):
+            raise BusinessError("security_code_input")
+        await self.request("/v1/user/verify_safe_code", {"code": code})
+        if not self.jwt or self.security_required:
+            raise BusinessError("security_rotation_missing")
+
+    async def refresh_nim_token(self) -> str:
+        """Fetch a validated IM token using the saved session's protocol.
+
+        Returns:
+            The current IM login token.
+
+        Raises:
+            BusinessError: If authentication is incomplete or the response is invalid.
+        """
+        if self.security_required:
+            raise BusinessError("secondary_security_unverified", 1402)
+        if self.protocol_version in {"3.7.3", "2.8.3"}:
+            params = {}
+
+            def bind_credentials():
+                if self.security_required:
+                    raise BusinessError("secondary_security_unverified", 1402)
+                params.update(
+                    nimDeviceId=self.deployment.device_id,
+                    uid=self.fields[3],
+                    loginToken=self.jwt,
+                )
+
+            result = await self.request(
+                "/v1/user/get-nim-token",
+                params,
+                authorize=bind_credentials,
+            )
+        else:
+            result = await self.request("/v1/user/RefreshToken", {})
+        token = result.get("nimToken") if isinstance(result, dict) else None
+        if (
+            not isinstance(token, str)
+            or not 0 < len(token) <= 8192
+            or any(c.isspace() for c in token)
+        ):
+            raise BusinessError("refresh_shape")
+        kind = result.get("kind", "NIM_LOGIN_KIND_STATIC")
+        auth_types = {
+            "NIM_LOGIN_KIND_STATIC": 0,
+            "NIM_LOGIN_KIND_DYNAMIC": 1,
+            "NIM_LOGIN_KIND_CALLBACK": 2,
+        }
+        if not isinstance(kind, str) or kind not in auth_types:
+            raise BusinessError("nim_auth_type_invalid")
+        from .nim import LoginToken
+
+        return LoginToken(token, auth_types[kind])
 
     def export(self) -> dict:
         """Return credentials exclusively for encrypted persistence."""
@@ -344,6 +342,8 @@ class BusinessClient:
             "device": self.fields[0],
             "jwt": self.jwt,
             "mac": wire.b64(self.mac),
+            "protocol_version": self.protocol_version,
+            "security_required": self.security_required,
         }
 
     def restore(self, saved: dict) -> None:
@@ -353,9 +353,24 @@ class BusinessClient:
         mac = wire.unb64(saved["mac"], 16)
         if len(mac) != 16 or not saved["jwt"] or any(c in saved["jwt"] for c in "\r\n"):
             raise BusinessError("session_binding")
+        protocol = saved.get("protocol_version", "3.7.1")
+        if (
+            not isinstance(protocol, str)
+            or protocol not in {"3.7.1", "3.7.3", "2.8.3"}
+            or saved.get("security_required", False) is not False
+        ):
+            raise BusinessError("session_binding")
         self.fields[0], self.fields[3], self.fields[4] = (
             saved["device"],
             saved["uid"],
             saved["kind"],
         )
         self.jwt, self.mac = saved["jwt"], mac
+        self.protocol_version = protocol
+        self.auth_error = ""
+        if protocol == "3.7.3":
+            self.fields[1:3] = [3, 1]
+        elif protocol == "2.8.3":
+            self.fields[1:3] = [1, 1]
+        else:
+            self.fields[1:3] = self.deployment.metadata[1:3]

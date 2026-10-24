@@ -37,6 +37,13 @@ class AgentRequestSubStage(Stage):
         await self.agent_sub_stage.initialize(ctx)
 
     async def process(self, event: AstrMessageEvent) -> AsyncGenerator[None, None]:
+        supported = getattr(type(event), "ai_supported_runner_types", None)
+        if (
+            supported is not None
+            and self.ctx.astrbot_config["agent_runner"]["runner_type"] not in supported
+        ):
+            event.stop_event()
+            return
         if not self.ctx.astrbot_config["provider_settings"]["enable"]:
             logger.debug(
                 "This pipeline does not enable AI capability, skip processing."

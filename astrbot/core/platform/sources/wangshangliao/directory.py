@@ -5,6 +5,79 @@ import time
 from .wire import ProtocolError
 
 
+async def muted_member_ids(
+    adapter, group: str, *, authorize=None, expected_member=None
+) -> set[str]:
+    """Read the current native mute list without inferring historical state.
+
+    Args:
+        adapter: Connected native adapter with the current group mapping.
+        group: Positive business group identity.
+        authorize: Synchronous account and management guard.
+        expected_member: Optional business/transport identity pair fixed by preview.
+
+    Returns:
+        Unique business identities currently muted by the platform.
+
+    Raises:
+        ProtocolError: If the response is incomplete or contains invalid identities.
+    """
+    if not group.isascii() or not group.isdigit() or int(group) <= 0:
+        raise ProtocolError("mute_list_group")
+    nim, business, account = adapter.nim, adapter.business, str(adapter.account)
+    catalog = getattr(adapter, "group_catalog", {})
+    team = adapter.groups.get(group) or catalog.get(group, {}).get("team")
+    if authorize is not None:
+        authorize()
+    if nim is None or not team:
+        raise ProtocolError("mute_list_unavailable")
+    # This also runs inside HTTP authorization: do not acquire the adapter's
+    # refresh lock, which another task may hold while waiting for the HTTP lock.
+    roster = await member_directory(business, group)
+    if authorize is not None:
+        authorize()
+    if (
+        expected_member is not None
+        and sum(
+            (str(row.get("userId")), str(row.get("nimId"))) == expected_member
+            and row.get("groupRole") == "GROUP_ROLE_MEMBER"
+            for row in roster.get("groupMemberInfo", [])
+        )
+        != 1
+    ):
+        raise ProtocolError("mute_list_identity")
+    data = await nim.get_team_muted_members(str(team))
+    if authorize is not None:
+        authorize()
+    if (
+        adapter.nim is not nim
+        or adapter.business is not business
+        or str(adapter.account) != account
+        or (
+            adapter.groups.get(group)
+            or getattr(adapter, "group_catalog", {}).get(group, {}).get("team")
+        )
+        != team
+        or not roster.get("complete")
+    ):
+        raise ProtocolError("mute_list_incomplete")
+    members, peers = set(), set()
+    for item in roster.get("groupMemberInfo", []):
+        uid, peer = str(item["userId"]), str(item.get("nimId", ""))
+        if not peer or peer in peers:
+            raise ProtocolError("mute_list_identity")
+        peers.add(peer)
+        if peer in data:
+            members.add(uid)
+    if (
+        not set(data).issubset(peers)
+        or not peers
+        or str(adapter.nim_account) not in peers
+    ):
+        raise ProtocolError("mute_list_incomplete")
+    return members
+
+
 async def member_directory(client, group: str, *, require_mapping: bool = True) -> dict:
     """Collect the member roster without publishing partial identity mappings.
 
@@ -197,7 +270,16 @@ async def group_directory(client, account: str) -> dict:
                 break
         except ProtocolError as exc:
             group["role_reason"] = "member_request_failed"
-            if str(exc) in {"reauth_required", "rate_limited"}:
+            if str(exc) in {
+                "reauth_required",
+                "rate_limited",
+                "secondary_security_code_required",
+                "secondary_security_unverified",
+                "secondary_security_code_invalid",
+                "secondary_security_locked",
+                "secondary_security_phone_required",
+                "account_clearing",
+            }:
                 raise
     return {
         "groups": list(groups.values()),

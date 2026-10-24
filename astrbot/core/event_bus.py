@@ -112,6 +112,19 @@ class EventBus:
             event (AstrMessageEvent): 事件对象
 
         """
+        if event.get_platform_name() == "wangshangliao":
+            from .platform.sources.wangshangliao.diagnostics import reference
+
+            logger.info(
+                "Wangshangliao event route=%s instance=%s actor=%s group=%s correlation=%s",
+                "private" if event.is_private_chat() else "group",
+                reference(event.platform.config.get("id", "")),
+                reference(event.get_sender_id()),
+                reference(event.get_group_id()),
+                reference(event.message_obj.message_id),
+                extra={"category": "user_chat"},
+            )
+            return
         # 如果有发送者名称: [平台名] 发送者名称/发送者ID: 消息概要
         if event.get_sender_name():
             logger.info(

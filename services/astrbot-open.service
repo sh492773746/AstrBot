@@ -1,0 +1,9 @@
+[Unit]
+Description=Retired AstrBot independent Wangshangliao service (disabled)
+ConditionPathExists=/nonexistent/astrbot-open-retired-do-not-start
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/false
+Restart=no
+NoNewPrivileges=true

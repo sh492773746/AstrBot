@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Public hardening acceptance</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">Documentation</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>Public Hardening Acceptance: October 14, 2026</h1>
+<blockquote>
+<p>Historical evidence, annotated October 20, 2026. Pause, budget and failure statements
+below apply to those runs. See <a href="wangshangliao-architecture-permissions-en.html">current architecture</a>.</p>
+</blockquote>
+<p>See <a href="wangshangliao-remediation-20261015-en.html">October 15 remediation</a> for the current
+fixes. Historical checks below do not establish deployment or live acceptance
+of the latest core revision.</p>
+<h2>Scope</h2>
+<p>The existing AstrBot process and signed-in accounts remain in use; no separate
+public worker was restored. Formal groups1516387 and1488006 remain disabled
+until separately approved. Public paid-model admission stays off pending an
+enforced supplier budget. No cashback amounts, attribution, payment states or
+reward rules were changed; all1468 protected financial rows retain their hash.</p>
+<h2>Implemented</h2>
+<ul>
+<li>Native NIM identity binding for private authority, quotas and first-use state.
+Public events bypass general framework commands and management tools.</li>
+<li>Complete activation context, current membership/bot/generation/version checks,
+durable pending invitation evidence and single-use hashed ten-minute codes.
+Later voluntary joins, departures and kicks block retained old invitations.</li>
+<li>Bounded friend-read backoff and version-checked reconciliation without
+resending uncertain approvals. Friend deletion remains completely absent.</li>
+<li>Model validation before quota reservation; definitely unsent calls consume
+no quota, including cancellation concurrent with reservation commit.
+Uncertain dispatched calls remain recorded; exit prevents late replies.</li>
+<li>Bounded queues, text limits, evidence-loss holds and reviewed recovery without
+replaying sanctions; retention preserves unresolved operations.</li>
+<li>Persisted account names, integrated-mode feature image selection, allocated
+versus running counts and no false unsaved prompt during bot loading.</li>
+<li>Additive entry-audit and ordered inviter-page indexes; skip unused payment
+eligibility aggregates outside pending views and select the latest matching
+inviter name before joining its roster record. Financial authority, snapshot
+consistency and ledger contents remain unchanged.</li>
+</ul>
+<h2>Verified</h2>
+<p>Offline Wangshangliao, Telegram and relevant framework tests: <strong>2972 passed,
+zero skipped</strong>, including all seven reproduced boundary failures. The three
+dependency deprecation warnings are recorded. Browser and rollback conditions
+were supplied with actual dependencies, rather than skipped.
+Full frontend, API-client, HTML and PDF generation passed. Management pages and
+all30 guides were checked at390px/1440px.</p>
+<p>Controlled group1459282 passed native commands, manager confirmation/revocation,
+last-manager protection, keywords, three recall warnings,5/15/60-minute mutes,
+both flood thresholds with mute-before-complete-recall, announcement, reversible
+card change, group mute/unmute, permission denial, real scheduled boundaries,
+lottery deduplication, kick/reinvite attribution and ownership preservation.
+Controlled configuration and member state were restored; formal groups and
+protected finances remained unchanged. Existing-group code activation is not
+represented as a fresh group's first-invitation test.</p>
+<p>Native evidence:
+<code>/opt/backups/wsl-integrated-live-20261014T151241/evidence.json</code>.
+Maintenance and permission rollback metadata:
+<code>/opt/backups/wsl-public-hardening-20261014/</code>.
+The uninterrupted1800.11-second observation passed, with no restart, all ten
+enabled platforms running and protected finances/formal groups unchanged.
+Evidence: <code>/opt/backups/wsl-shared-soak-20261014T071235/evidence.json</code>.</p>
+<h3>Supplemental Checks</h3>
+<p>331 financial regressions passed, including six new read regressions and two
+ordered-index upgrade regressions.468 read-only old/new query comparisons
+returned identical data. The cashier loaded the optimization without restarting
+the shared AstrBot process. Protected financial/configuration hashes and paused
+formal groups remain unchanged.
+Backup, query-plan and deployment evidence:
+<code>/opt/backups/wsl-query-supplement-20261014T081146/evidence.json</code>.</p>
+<p>All four new mixed-load runs were retained:</p>
+<table>
+<thead>
+<tr>
+<th>Evidence time, UTC</th>
+<th>Ledger baseline P95</th>
+<th>Loaded P95</th>
+<th>Growth</th>
+<th>Rule P95</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>08:06:10</td>
+<td>22.072ms</td>
+<td>44.373ms</td>
+<td>101.04%</td>
+<td>18.048ms</td>
+</tr>
+<tr>
+<td>08:17:25</td>
+<td>14.929ms</td>
+<td>43.487ms</td>
+<td>191.30%</td>
+<td>12.858ms</td>
+</tr>
+<tr>
+<td>08:21:26</td>
+<td>13.309ms</td>
+<td>33.921ms</td>
+<td>154.87%</td>
+<td>14.502ms</td>
+</tr>
+<tr>
+<td>08:34:31, client frames prebuilt</td>
+<td>12.904ms</td>
+<td>30.120ms</td>
+<td>133.42%</td>
+<td>12.828ms</td>
+</tr>
+</tbody>
+</table>
+<p>Final query CPU P95 was12.862 to16.272ms; waiting P95 was0.108 to14.132ms.
+Raw wall/thread-CPU samples are retained. CPU time does not replace end-to-end
+latency or relax the10% target. Both computation and waiting increased; these
+timings do not establish a unique root cause.
+The final run moved simulated client encryption before measurement; server
+decoding, persistence, dispatch and rules remain timed. Correcting that boundary
+did not pass the target or replace the original failure evidence.
+The temporary synthetic worker exercises native decoding, persistence, dispatch
+and rules using local fake models, not the full automatic-sanction pipeline of
+twenty real activated groups.</p>
+<h3>Cashier Read Optimization</h3>
+<p>545 related regressions passed. All 498 old/new read-only query variants still
+match with reader reuse enabled. The implementation shares filtered inviter
+aggregation between totals and outer pagination, skips empty search/detail work,
+reads risk membership once per snapshot and adds the partial
+<code>evidence_cashier_confirmation</code> index.
+Only the standalone cashier retains up to four exclusively leased idle readers.
+It caches neither authority nor results; writes remain separate and each read
+rechecks authority and releases its snapshot. The cashier loaded the code without
+restarting AstrBot. All columns of the 1468 ledger rows, rules and invitation
+evidence match the consistent backup. Formal groups and configuration are unchanged.
+Evidence: <code>/opt/backups/wsl-cashback-query-20261014T225339+0800/evidence.json</code>.
+See <a href="wangshangliao-database.html">database maintenance</a> for implementation limits.</p>
+<p>All new samples are retained. Times below are Asia/Shanghai; evidence filenames use UTC.</p>
+<table>
+<thead>
+<tr>
+<th>Stage / local time</th>
+<th>Baseline P95</th>
+<th>Loaded P95</th>
+<th>Growth</th>
+<th>Rule P95</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Before changes, 22:54:58</td>
+<td>28.765ms</td>
+<td>14.773ms</td>
+<td>-48.64%</td>
+<td>11.801ms</td>
+</tr>
+<tr>
+<td>SQL only, 23:12:07</td>
+<td>12.149ms</td>
+<td>23.635ms</td>
+<td>94.55%</td>
+<td>13.990ms</td>
+</tr>
+<tr>
+<td>SQL only, 23:13:12</td>
+<td>12.343ms</td>
+<td>18.820ms</td>
+<td>52.47%</td>
+<td>13.045ms</td>
+</tr>
+<tr>
+<td>SQL only, 23:14:17</td>
+<td>13.836ms</td>
+<td>28.748ms</td>
+<td>107.78%</td>
+<td>16.839ms</td>
+</tr>
+<tr>
+<td>Reader reuse, 23:28:00</td>
+<td>8.701ms</td>
+<td>7.708ms</td>
+<td>-11.41%</td>
+<td>9.893ms</td>
+</tr>
+<tr>
+<td>Reader reuse, 23:29:05</td>
+<td>6.826ms</td>
+<td>11.732ms</td>
+<td>71.87%</td>
+<td>13.202ms</td>
+</tr>
+<tr>
+<td>Reader reuse, 23:30:13</td>
+<td>6.175ms</td>
+<td>50.460ms</td>
+<td>717.17%</td>
+<td>15.011ms</td>
+</tr>
+<tr>
+<td>Extra GC diagnostic, 23:36:19</td>
+<td>7.469ms</td>
+<td>18.453ms</td>
+<td>147.07%</td>
+<td>13.949ms</td>
+</tr>
+</tbody>
+</table>
+<p>SQL-only baseline medians were 9.697/9.620/10.159ms, versus
+4.451/4.501/4.522ms with reader reuse. Normal cost decreased, but only one of
+three reuse runs met the relative-growth target, so stable acceptance is not approved.
+The 50.460ms spike remains in <code>/opt/backups/wsl-native-load-20261014T153013.json</code>.
+The final diagnostic is <code>/opt/backups/wsl-native-load-20261014T153619.json</code>.
+Diagnostic GC totaled 25.451ms, with an 8.213ms maximum collection and 821
+involuntary process switches. These aggregate measurements do not identify GC,
+disk or CPU as the sole cause.
+The tool still reads the same four production-ledger states under the same
+twenty-group/100-message-per-second synthetic load, using the cashier's reader
+path with writes prohibited. It excludes HTTP authentication, network and page
+rendering, and does not measure online responses inside the cashier CPU quota.</p>
+<h2>Deployment</h2>
+<p>AstrBot and the cashier run as the non-login <code>astrbot</code> user on unchanged
+CPython3.12.14 under <code>/opt/astrbot-runtime</code>. Source/runtime are read-only;
+financial files and socket retain600 permissions, directories700.
+Actual service-namespace checks deny root-private files, backups and source
+writes while allowing required caches. External Telethon sessions and locks
+use named-user ACLs, not world access.
+Shared AstrBot is limited to two CPU cores,1GiB soft/2GiB hard memory and256
+tasks. Cashier retains its50% CPU and256/384MiB limits.
+All ten enabled platforms run normally. Disk/network and the shared process are
+not hard-isolated per group. Rollback must never overwrite new financial data.</p>
+<h2>Not Yet Passed</h2>
+<ul>
+<li>Stable mixed-load ledger-query P95 growth of at most10%. Rule P95 is far below
+one second with bounded queues/memory; both passing and failing query samples
+are retained, so the best single result is not full acceptance.
+Earlier supplemental rule P95:12.828ms. Ledger P95:12.904 to30.120ms,
+133.42% growth, failed.
+Evidence: <code>/opt/backups/wsl-native-load-20261014T083431.json</code>.
+Previous failure <code>/opt/backups/wsl-native-load-20261014T073728.json</code> is retained.
+Subsequent reader reuse reduces normal cost, but two of three repeated runs
+still failed, as recorded above.</li>
+<li>A fresh controlled group's genuine first-invitation activation, without
+deleting prior authorization history.</li>
+<li>Supplier-enforced credential budget evidence; local fake-model tests do not
+establish the supplier hard limit or paid-model acceptance.</li>
+<li>Official phone-client confirmation of robot-initiated automatic recall.
+SDK receipts and user-initiated recall notifications are insufficient.</li>
+<li>A genuinely new accepted friend receiving both text menu and branded Dahai
+artwork; baseline/dedup tests are not live first-friend acceptance. Daha's
+auto-approval hold has not been silently lifted.</li>
+</ul>
+<h2>Activation And Friend Follow-Up</h2>
+<p>The user confirmed automatic departure after an ordinary member invited Daha;
+native control records also show confirmed departure and working-data cleanup.
+Silent group <code>开通</code> replies were repaired in known-disabled-group admission,
+restricted reply delivery and unknown-source explanations. A controlled
+ordinary sender received an explicit activation denial, verified by native
+history readback:
+<code>/opt/backups/wsl-activation-reply-20261014T124509/evidence.json</code>.
+This is negative admission evidence, not fresh administrator-led activation.</p>
+<p>Verified first friend acceptance, including observed manual mobile acceptance,
+shares durable onboarding claims with first unmatched private messages.
+Artwork follows accepted text; uncertain delivery is not retried and existing
+friends receive no bulk greetings. That code revision passed2981 tests without
+skips; the final send-spacing adjustment passed248 focused tests. These are
+historical runs for their revisions, not a new full run during documentation updates.</p>
+<p>Stale SDK inviter results remain guarded by latest trusted business events.
+Fresh qualifying activation, mobile visual recall, real first-friend welcome,
+supplier budget and performance gates remain unpassed. See
+<a href="wangshangliao-architecture-permissions-en.html">current architecture and permissions</a>.</p>
+<h2>Shared Group And Private Commands (2026-10-15)</h2>
+<p>Integrated-mode fixed management commands now work in either channel; the
+<code>管理 </code> prefix is optional. Friendship is unnecessary: the verified real inviter
+sends <code>开通</code> in the group, then authorized managers use current-group commands.
+Private chat still selects an authorized group first. Group chat cannot list or
+switch to other groups. AI and personal cash-ledger queries remain private-only.</p>
+<p>Member snapshots bind the group and conversation. Removal and schedule previews
+also bind the authorization revision, rejecting stale confirmations after changes.
+Manager limits, last-manager protection, native identity checks, bot-loop
+prevention and controlled-test restrictions remain in place.</p>
+<p>All <strong>3124 Wangshangliao tests passed, with no skips</strong>, including 78 command-parity
+and authorization regressions. Conditional browser and rollback environments
+were enabled. Page type checking/build and scoped Ruff checks passed.
+Only the plugin was hot-reloaded; the shared process did not restart.
+Eleven platforms remain running without reported errors. Both accounts are
+online; 1468 financial records, formal-group settings, main configuration and
+friend exception state are unchanged.</p>
+<p>Deployment evidence:
+<code>/opt/backups/wsl-welcome-repair-20261015T045351/evidence.json</code>.
+390px/1440px dashboard verification:
+<code>/opt/backups/wsl-account-names-20261015T045432/verified.json</code>.
+The test group was not activated on the inviter's behalf; offline results do not
+replace real-client acceptance.</p>
+<h2>Numbered Text Tree (2026-10-15)</h2>
+<p><code>菜单</code> / <code>帮助</code> now opens a layered text tree: numbers advance, <code>0</code> goes back,
+and <code>取消</code> exits. Arguments are prompted separately and mutations require
+confirmation. Member prompts use <code>99</code> for paging; <code>不限</code> means a zero
+lottery limit/invitation threshold. Direct commands and backend grants remain
+unchanged. Navigation binds account, real NIM sender, group and conversation,
+expires after ten minutes and is capped at 4096 sessions. Menu numbers do not
+also query invitations; revoked versions and abandoned previews cannot commit.
+Read results cannot inject confirmation commands; group menus never solicit
+activation codes.</p>
+<p>Final full regression: <strong>3228 passed, zero skipped</strong>, including 104 added menu
+cases. Ruff, page type checking and build passed. Only the WSL plugin was
+reloaded; the main process did not restart. All 1468 financial rows/fields,
+formal-group switches, main configuration and paused friend exception remained
+unchanged. Enabled cohosted platforms stayed running.
+Deployment evidence:
+<code>/opt/backups/wsl-welcome-repair-20261015T053607/evidence.json</code>;
+390/1440px browser checks:
+<code>/opt/backups/wsl-account-names-20261015T053710/verified.json</code>.
+No human activation was fabricated; the test group still awaits its inviter.
+This run did not exercise the new menu step by step in the official mobile
+client and does not replace the outstanding live acceptance below.</p>
+<h2>Native Private Menu Check (2026-10-15)</h2>
+<p>Linxi sent native private messages to Dahao: <strong>42 final steps passed</strong>, verifying
+ingress, accepted send receipts and replies received by the peer. Coverage includes
+all eight branches, invalid numbers, back navigation, abandoned parameters,
+cancelled-session digits, personal invitation queries and AI session entry/exit.
+Unauthorized reads were denied or required group selection. No mutation,
+sanction, removal or activation was confirmed.</p>
+<p>The live check caught Markdown rendering changing <code>0. 放弃并返回</code> to option <code>2</code>.
+Both confirmation screens now use tree prefixes; native replies preserve zero.
+<strong>282 focused regressions passed without skips</strong>, including two new rendering
+cases. The historical 3228-test suite was not rerun in this check. Only the plugin
+was hot-reloaded; the shared process did not restart. All 1468 financial records,
+tenant settings and sanction records remained unchanged. The temporary private
+send grant was restored and the developer window closed. Model-call records,
+the closed provider-budget gate and friend exception pause were unchanged.
+All ten enabled platforms were running; formal groups stayed disabled.</p>
+<p>Evidence: <code>/opt/backups/wsl-tree-menu-live-20261015T060534/verification.json</code>
+and adjacent <code>messages.json</code>; deployment verification:
+<code>/opt/backups/wsl-welcome-repair-20261015T060442/evidence.json</code>.
+This is native messaging between controlled accounts, not phone visualization.
+The test group still awaits activation, so in-group navigation and management
+execution were not tested in this run.</p>
+<h2>User Activation And Self-Reply Fix (2026-10-15)</h2>
+<p>The user's actual <code>开通</code> message from Linxi activated Dahao in test group1459282.
+Linxi31846829 is the saved manager, backed by invitation211344713. This supersedes
+the earlier pending-activation status; another activation message is unnecessary.
+This group has prior history and does not prove first activation in a fresh group.</p>
+<p>The misleading denial came from the Linxi instance processing its own activation
+message before ordinary self-message filtering. Both candidate admission and
+execution now ignore the receiver's own account. Four new regressions cover
+known/unknown groups and both entry points; <strong>400 relevant tests passed with no
+skips</strong>, covering native ingestion, lifecycle, activation and menus.</p>
+<p>Activation does not disable bot-loop protection. Linxi remains a locally managed
+robot account, so ordinary management commands from it are still blocked outside
+controlled test windows. Current messages do not reliably distinguish phone-typed
+and automated sends from the same account. Use dashboard management or a manager
+account not configured as a robot. Existing authority was not transferred.
+Dahao was a native ordinary member when checked; recall/mute testing still needs
+native administrator privileges. Only the plugin was reloaded. The process,
+financial fields, formal-group switches and friend exception pause were preserved.
+Evidence: <code>/opt/backups/wsl-welcome-repair-20261015T063618/evidence.json</code>.</p>
+<h3>Native Bot Administrator Gate And Private Isolation (2026-10-15)</h3>
+<p>Activation replies now distinguish a bound group from a usable bot. Until the bot
+is a verified native group administrator, group commands, numeric menus, rule
+changes, activities and sanctions return the administrator prerequisite notice.
+Ordinary chatter generates no repeated notice. Moderation, activity workers and
+schedules stop; configuration and history remain intact. Private menus, own
+cashback queries and authorized group selection remain accessible.</p>
+<p>Group listing and execution check the receiving bot account, verified private
+identity and current tenant grant. Framework admin roles, quota exemptions,
+another bot's grants, forged indices and revoked selections cannot widen scope.
+The 122 new regressions and full Wangshangliao suite passed:
+<strong>3356 passed, no skips</strong>, with three existing dependency deprecation warnings.</p>
+<p>Plugin-only reload left the main process running. The final native Linxi-to-Daha
+private check passed <strong>18 steps</strong>: only the test group appeared, the second index
+was rejected, and direct/menu operations showed the same prerequisite.
+The test bot remains an ordinary group member; no native privilege or sanction
+was issued. An initial test's second command correctly hit the three-second
+cooldown; waiting 3.2 seconds after each received reply produced the complete pass.
+Temporary send grants were restored and the test window closed. All 1468 financial
+records, formal-group switches and sanction records remained unchanged.</p>
+<p>Deployment evidence:
+<code>/opt/backups/wsl-welcome-repair-20261015T071002/evidence.json</code>.
+Native private evidence:
+<code>/opt/backups/wsl-tree-menu-live-20261015T071249/verification.json</code>
+and <code>messages.json</code>. Group blocking and role restoration are offline regressions,
+not mobile group visual acceptance. Previously unpassed acceptance items remain open.</p>
+<h2>Required Cooperation</h2>
+<ol>
+<li>Create a new controlled group, invite the current Linxi robot, and provide
+its name and group ID. Preserve the genuine invitation and let the inviter
+send <code>开通</code>. Never delete an existing grant to simulate first activation.
+No new controlled group is currently available;1459282 has activation history.</li>
+<li>Configure the intended public-model credential through the secure dashboard,
+not chat. Supply provider evidence binding that credential to an enforced
+spending limit, its period and a stop-calling effect. Balance, alerts and local
+daily request limits are not proof. Keep model admission off until verified.</li>
+<li>Open1459282 in the official phone client and coordinate an observed automatic
+recall test. Confirm the original messages appearing and disappearing without
+manually recalling them. SDK evidence already covers all five duplicate and
+eight ordinary flood messages, but phone visualization remains unconfirmed.</li>
+</ol>
+<p><strong>Overall acceptance is not approved. Formal groups are not auto-enabled.</strong></p>
+</body></html>

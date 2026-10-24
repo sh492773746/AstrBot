@@ -1483,6 +1483,10 @@ async def test_managed_shell_accepts_stdin_and_polls_incremental_output(yield_ti
         )
         output = completed["stdout"]
         if completed["status"] == "running":
+            # Streaming output can arrive before process exit; a second output
+            # notification alone does not establish a terminal process status.
+            session = shell._sessions[result["session_id"]]
+            await asyncio.wait_for(asyncio.shield(session.wait_task), timeout=10)
             completed = await shell.poll_session(
                 owner_id="owner-a",
                 requester_id="user-a",

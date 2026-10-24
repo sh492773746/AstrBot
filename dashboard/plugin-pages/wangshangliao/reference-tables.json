@@ -1,117 +1,272 @@
 {
+  "updated": "2026-10-24",
+  "mode": "integrated",
+  "scope": [
+    "当前公共合并模式的静态职责对照；实时状态与服务端鉴权另行核验。本群管理不等于 AstrBot 超管，AI 不执行操作。“允许”仅表示入口可用，不代表平台执行成功。",
+    "Static responsibility reference for integrated mode; runtime state and server authorization are checked separately. Group managers are not AstrBot superadmins; AI performs no operations. Admission is not verified upstream success."
+  ],
   "architecture": [
     {
       "id": "transport",
-      "name": ["原生接入", "Native adapter"],
+      "name": [
+        "原生接入",
+        "Native adapter"
+      ],
       "files": [
+        "astrbot/core/platform/sources/wangshangliao/__init__.py",
+        "astrbot/core/platform/sources/wangshangliao/registration.py",
         "astrbot/core/platform/sources/wangshangliao/adapter.py",
         "astrbot/core/platform/sources/wangshangliao/business.py",
-        "astrbot/core/platform/sources/wangshangliao/nim.py"
+        "astrbot/core/platform/sources/wangshangliao/business_http.py",
+        "astrbot/core/platform/sources/wangshangliao/nim.py",
+        "astrbot/core/platform/sources/wangshangliao/wire.py",
+        "astrbot/core/platform/sources/wangshangliao/directory.py",
+        "astrbot/core/platform/sources/wangshangliao/captcha.py",
+        "astrbot/core/platform/sources/wangshangliao/captcha_worker.py"
       ],
       "responsibility": [
         "登录、认证消息收发、业务 UID 与 NIM 身份映射",
         "Login, authenticated messaging, business UID / NIM mapping"
       ],
       "boundary": [
-        "只处理启用群；不根据昵称或群号猜测身份",
-        "Enabled groups only; never infer identity from names or display group numbers"
+        "普通业务只处理运行群；未开通群保留受限开通入口；不按昵称或消息自报 UID 猜身份",
+        "Business handles operating groups only; unopened groups retain restricted activation; never infer identity from names or message-claimed UIDs"
       ]
     },
     {
       "id": "authorization",
-      "name": ["框架鉴权", "Framework authorization"],
-      "files": ["astrbot/core/pipeline/waking_check/stage.py"],
+      "name": [
+        "可信身份与逐群鉴权",
+        "Trusted identity and group authorization"
+      ],
+      "files": [
+        "astrbot/core/platform/sources/wangshangliao/identity.py",
+        "astrbot/core/platform/sources/wangshangliao/blacklist.py",
+        "astrbot/core/platform/sources/wangshangliao/test_blacklist.py",
+        "astrbot/core/platform/sources/wangshangliao/group_scope.py",
+        "astrbot/core/platform/sources/wangshangliao/policy.py",
+        "astrbot/core/platform/sources/wangshangliao/runtime_policy.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/group_management.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/open_service.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/open_store.py"
+      ],
       "responsibility": [
-        "根据当前会话有效配置的 admins_id 识别操作者",
-        "Resolve caller authority from the session's effective admins_id"
+        "真实 NIM 发送者与可信业务 UID 对照；按平台、机器人账号、群聊检查管理员与版本",
+        "Bind real NIM senders to trusted business UIDs; check managers and revisions by platform, bot account and group"
       ],
       "boundary": [
-        "昵称、平台群角色、@ 管理员及模型输出不能授予权限",
-        "Names, upstream group roles, admin mentions and model output never grant authority"
+        "admins_id 不自动获得群管理权；未核验身份不能管理或查账；暂停、离群、撤权及版本变化在提交前复查",
+        "admins_id grants no group authority; unverified identities cannot manage or read finances; pause, departure, revocation and versions are rechecked before submission"
+      ]
+    },
+    {
+      "id": "component-runtime",
+      "name": [
+        "组件治理试点",
+        "Component runtime pilot"
+      ],
+      "files": [
+        "astrbot/core/star/components.py",
+        "astrbot/core/star/component_runtime.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/component_governance.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/private_batches.py"
+      ],
+      "responsibility": [
+        "版本化声明、限流槽位、超时租约、故障熔断、状态版本恢复与私聊有界批次",
+        "Versioned declarations, bounded concurrency, deadline leases, circuits, versioned recovery and bounded private batches"
+      ],
+      "boundary": [
+        "默认关闭；仅固定三账号及1459282原生受控窗口；不授予身份、预算或承担人确认，不重放未知业务",
+        "Off by default; fixed three accounts and native controlled windows in 1459282 only; no identity, budget or payer grants and no replay of unknown outcomes"
       ]
     },
     {
       "id": "commands",
-      "name": ["固定命令", "Deterministic commands"],
+      "name": [
+        "固定命令",
+        "Deterministic commands"
+      ],
       "files": [
         "astrbot/builtin_stars/wangshangliao_moderation/syntax.py",
-        "astrbot/builtin_stars/wangshangliao_moderation/commands.py"
+        "astrbot/builtin_stars/wangshangliao_moderation/command_capabilities.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/rule_replies.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/member_whitelist.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/member_blacklist.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/test_blacklist.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/member_mutes.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/intent.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/command_menu.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/commands.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/advertisement_media.py"
       ],
       "responsibility": [
-        "整条消息识别、公共命令分流、目录快照及参数校验",
-        "Exact message recognition, public-command routing, directory snapshots and validation"
+        "常用操作菜单与显式兼容树、整条消息识别、目录快照、当前禁言与参数校验",
+        "Compact shortcuts and opt-in legacy tree, exact recognition, snapshots, current mutes and validation"
       ],
       "boundary": [
-        "不进入模型；编号按账号、操作者和私聊会话隔离，十分钟过期",
-        "No model call; snapshot numbers expire in ten minutes and bind account, caller and private session"
+        "私聊和群内同命令，无须加好友；编号隔离并十分钟过期；菜单及拒绝共用三秒回复冷却，取消立即生效",
+        "Shared private/group commands without friendship; isolated numbers expire in ten minutes; menu/denial replies share a three-second cooldown and cancellation is immediate"
       ]
     },
     {
       "id": "ai-tools",
-      "name": ["私聊 AI 管理", "Private AI management"],
+      "name": [
+        "只读 AI 咨询与额度",
+        "Read-only AI and quotas"
+      ],
       "files": [
-        "astrbot/builtin_stars/wangshangliao_moderation/main.py",
-        "astrbot/builtin_stars/wangshangliao_moderation/intent.py",
-        "astrbot/builtin_stars/wangshangliao_moderation/ai_config.py"
+        "astrbot/builtin_stars/wangshangliao_moderation/open_service.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/open_store.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/ai_plans.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/model_stats.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/native_conversations.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/concurrency.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/conversation_guidance.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/service_settings.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/owner_support.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/pc28.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/conversation_profiles.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/consultation_access.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/guidance_trial.py",
+        "astrbot/core/platform/sources/wangshangliao/event.py"
       ],
       "responsibility": [
-        "wsl_private_management 固定工具复用命令服务",
-        "wsl_private_management uses fixed actions and the shared command service"
+        "私聊 /chat 进入、/exit 退出，十五分钟闲置结束；普通客服、管理员指引和群聊配置独立，保存管理员配置后按真实逐群授权分流；关联原生对话、Token统计和脱敏追踪，不回填历史",
+        "Private /chat entry, /exit cancellation and fifteen-minute idle expiry; independent customer, administrator and group profiles, with verified scoped routing after the administrator profile is saved; native conversations, token statistics and sanitized traces without backfills"
       ],
       "boundary": [
-        "仅管理员私聊；规则与活动参数预览确认，定时另需确认；不得修改身份、授权或凭据",
-        "Admin private chat only; preview/confirm rules and activity parameters, with separate schedule confirmation; no identity, grant or credential changes"
+        "所有身份均无工具、MCP、代码或管理执行；试用20/Plus2000/Pro5000次每日共享池；仅规则管理员可另由服务端确认累计20次私信指引，不开启群AI；免费全站默认20元/月，付费周期独立限费，安全总上限为基础额加本月重叠付费周期预算；次数费用原子预留，并发2，门禁不自动解除",
+        "No tools, MCP, code or management execution; Trial20/Plus2000/Pro5000 daily shared pools; the server may separately confirm twenty total private guidance calls for a rules-only manager without group AI; free site default CNY20/month, independent paid-cycle budgets, site safety ceiling is base plus month-overlapping paid budgets; atomic reservations, two concurrent calls, gates remain"
+      ]
+    },
+    {
+      "id": "group-ai",
+      "name": [
+        "逐群聊天与热群AI",
+        "Per-group conversation and warm-up AI"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/group_ai.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/open_store.py"
+      ],
+      "responsibility": [
+        "按账号与群独立开关；@、自主接话和冷场使用本群热群人格；@按账号、群和成员隔离原生会话；候选最多12条、120秒内存缓存，选定目标与已发回复写入原生对话",
+        "Account/group opt-in; @, autonomous and idle replies use the group profile; native @ histories are isolated by account, group and member; at most12 candidates in120s memory, with the selected target and sent reply saved in native conversations"
+      ],
+      "boundary": [
+        "默认关闭；承担管理本人确认后与私聊共用一个池，撤权离群不转扣；群限额默认0表示不另限；结果不明停用，额度提醒仅私信",
+        "Off by default; payer self-consent shares one private/group pool; revocation/departure never switches payers; zero group subcap adds no limit; uncertain calls stop and quota alerts are private only"
+      ]
+    },
+    {
+      "id": "scoped-knowledge",
+      "name": [
+        "个人与群知识空间",
+        "Personal and group knowledge spaces"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/knowledge.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/knowledge_store.py"
+      ],
+      "responsibility": [
+        "菜单8→5个人编辑、9→7群管理编辑；中文分词、事务内增量全文索引、限定参考片段",
+        "Menu8→5 personal editing and9→7 group-manager editing; Chinese tokenization, transactional incremental full-text indexing and bounded references"
+      ],
+      "boundary": [
+        "个人按真实NIM发送者；群按账号与群且复查管理身份；群引用默认关闭；不是原生全局知识库授权，不接受文件、URL导入、代码或模型写入",
+        "Personal ownership uses the real NIM sender; group ownership uses account/group with current manager checks; group references default off; no global native KB grant, file/URL imports, executable code or model mutations"
+      ]
+    },
+    {
+      "id": "private-invitations",
+      "name": [
+        "本人返现只读查询",
+        "Sender-only cashback query"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/private_invitation.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/cashback_store.py"
+      ],
+      "responsibility": [
+        "私聊我的邀请列出已开启返现群名，按序号查询本人记录",
+        "Private own-invitation group-name menu and numbered sender-only record queries"
+      ],
+      "boundary": [
+        "核验身份、群开关、限频与只读范围；不显示 UID，不向公共 AI 提供账本，不改价或结账",
+        "Verify identity, group switches, rates and read-only scope; omit UIDs, expose no ledger to public AI and never reprice or settle"
       ]
     },
     {
       "id": "semantic",
-      "name": ["上下文审核", "Contextual review"],
+      "name": [
+        "广告规则与兼容审核",
+        "Advertising rules and legacy review"
+      ],
       "files": [
         "astrbot/builtin_stars/wangshangliao_moderation/semantic.py",
         "astrbot/builtin_stars/wangshangliao_moderation/content_rules.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/custom_rules.py",
         "astrbot/builtin_stars/wangshangliao_moderation/policy.py"
       ],
       "responsibility": [
-        "独立模型审核当前消息与同群上下文，故障时高置信规则兜底",
-        "Independent model review of current and same-group context; high-confidence fallback on failure"
+        "公共模式按群独立广告规则、可编辑字面关键词和组合词；旧语义审核实现仅保留兼容",
+        "Per-group advertising rules, editable literal keywords and combinations; semantic review remains a legacy implementation"
       ],
       "boundary": [
-        "明确正常或证据不足不罚；群主、管理员和机器人受保护；历史消息不追罚",
-        "Allow or insufficient evidence means no sanction; protected roles and bots remain exempt; no historical sanctions"
+        "公共模式禁用语义模型审核；不允许自定义代码或正则；证据不足、历史消息和受保护目标不罚",
+        "Public mode disables semantic model review; no custom code or regex; insufficient evidence, historical messages and protected targets are not sanctioned"
       ]
     },
     {
       "id": "execution",
-      "name": ["处罚执行与升级", "Sanctions and escalation"],
+      "name": [
+        "处罚执行与升级",
+        "Sanctions and escalation"
+      ],
       "files": [
         "astrbot/core/platform/sources/wangshangliao/moderation.py",
-        "astrbot/core/platform/sources/wangshangliao/automatic.py"
+        "astrbot/core/platform/sources/wangshangliao/automatic.py",
+        "astrbot/core/platform/sources/wangshangliao/actions.py",
+        "astrbot/core/platform/sources/wangshangliao/progressive.py",
+        "astrbot/core/platform/sources/wangshangliao/progression_store.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/action_receipts.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/review_store.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/recall_audit.py"
       ],
       "responsibility": [
-        "最终动作授权、原生角色和目标校验、幂等执行、先三次禁言再违规踢出",
-        "Final capability, upstream-role and target checks; idempotent execution; removal on a new violation after three mutes"
+        "V1 固定动作、当前授权与原生角色校验；每轮前三次撤回警告，后续1/3/10分钟禁言，最终10分钟结束后重置；分开核对撤回、警告及禁言回执",
+        "Fixed V1 actions with current grants and native-role checks; three warnings per cycle, then1/3/10-minute mutes, resetting after final expiry; correlate recall, warning and mute receipts separately"
       ],
       "boundary": [
-        "三次自动禁言后第四次违规踢出需单独启用；人工禁言不累计；未知结果不重试",
-        "Removal on the fourth violation after three accepted mutes is opt-in; manual mutes do not count; unknown operations are not retried"
+        "不自动踢人；只计有成功回执的处罚，人工禁言不累计；结果不明先核对，不重放；撤回通知本身不证明机器人执行",
+        "Never automatically remove members; count successful receipts only, excluding manual mutes; reconcile uncertainty without replay; a recall notification alone does not prove bot execution"
       ]
     },
     {
       "id": "ranking",
-      "name": ["每日发言排行", "Daily rankings"],
-      "files": ["astrbot/builtin_stars/wangshangliao_moderation/rankings.py"],
+      "name": [
+        "每日发言排行",
+        "Daily rankings"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/rankings.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/automatic_whitelist.py"
+      ],
       "responsibility": [
-        "北京时间当天有效文字计数、分页、原生 @",
-        "Asia/Shanghai daily eligible text counts, pagination and native mentions"
+        "北京时间当天有效文字计数、分页、原生 @；有效文字前30名短期自动白名单",
+        "Asia/Shanghai eligible text counts, pagination, native mentions and short-lived daily top30 exemptions"
       ],
       "boundary": [
-        "只读本实例已收到的记录；排除机器人、命令与已确认违规；不自动派奖",
-        "Only records received by this instance; exclude bots, commands and confirmed violations; no automatic prizes"
+        "仅统计本实例已收记录；排除机器人、命令及已撤回／撤回未知消息；不覆盖手动名单，黑名单优先，不自动派奖",
+        "Count this instance's records only; exclude bots, commands and recalled or uncertain-recall messages; preserve manual lists, prioritize blacklists and never award prizes"
       ]
     },
     {
       "id": "activities",
-      "name": ["群抽奖", "Group lotteries"],
+      "name": [
+        "群抽奖",
+        "Group lotteries"
+      ],
       "files": [
         "astrbot/builtin_stars/wangshangliao_moderation/activities.py",
         "astrbot/builtin_stars/wangshangliao_moderation/activity_store.py"
@@ -127,25 +282,35 @@
     },
     {
       "id": "invitations",
-      "name": ["邀请归属与奖励", "Invitation attribution and rewards"],
+      "name": [
+        "邀请归属与奖励",
+        "Invitation attribution and rewards"
+      ],
       "files": [
         "astrbot/builtin_stars/wangshangliao_moderation/activities.py",
         "astrbot/core/platform/sources/wangshangliao/adapter.py",
+        "astrbot/core/platform/sources/wangshangliao/invitations.py",
         "astrbot/core/platform/sources/wangshangliao/nim.py"
       ],
       "responsibility": [
-        "平台邀请归属、待审核只读记录、新成员去重计奖",
-        "Native attribution, read-only pending records and deduplicated newcomer credits"
+        "最新业务入退群记录解码、可信邀请归属、去重积分及在群状态",
+        "Decode latest business membership events, verify invite attribution, deduplicate points and track presence"
       ],
       "boundary": [
-        "已有成员作基线；待审核、归属不明和重复入群不计奖；积分不是现金",
-        "Existing members form the baseline; pending, unknown and repeated joins earn no credits; points are not cash"
+        "NIM 旧邀请不能覆盖最新退出或主动加入；群主、审批人和通知发送者不是邀请证据；积分不等于现金",
+        "Stale NIM invites cannot override newer departures/voluntary joins; owners, approvers and notice senders are not inviter evidence; points are not cash"
       ]
     },
     {
       "id": "schedules",
-      "name": ["每日定时禁言", "Daily group schedules"],
-      "files": ["astrbot/builtin_stars/wangshangliao_moderation/schedules.py"],
+      "name": [
+        "每日定时禁言",
+        "Daily group schedules"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/schedules.py",
+        "astrbot/core/platform/sources/wangshangliao/schedule_store.py"
+      ],
       "responsibility": [
         "北京时间时段预览、确认、未来边界调度及审计",
         "Asia/Shanghai interval preview, confirmation, future-boundary scheduling and audit"
@@ -157,8 +322,13 @@
     },
     {
       "id": "cards",
-      "name": ["成员批量维护", "Member batch maintenance"],
-      "files": ["astrbot/builtin_stars/wangshangliao_moderation/cards.py"],
+      "name": [
+        "成员批量维护",
+        "Member batch maintenance"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/cards.py"
+      ],
       "responsibility": [
         "名片预览与执行、封禁和注销账号清理、进度与停止",
         "Card preview/execution, banned/cancelled-account cleanup, progress and stop"
@@ -170,61 +340,355 @@
     },
     {
       "id": "replies",
-      "name": ["回复与撤回", "Replies and recall"],
+      "name": [
+        "回复与撤回",
+        "Replies and recall"
+      ],
       "files": [
         "astrbot/core/platform/sources/wangshangliao/event.py",
         "astrbot/core/platform/sources/wangshangliao/reply_recall.py",
+        "astrbot/core/platform/sources/wangshangliao/text.py",
         "astrbot/builtin_stars/wangshangliao_moderation/text.py"
       ],
       "responsibility": [
-        "纯文本整理、脱敏、原生 @、功能回复受理20秒后撤回",
-        "Plain-text presentation, redaction, native mentions and feature recall twenty seconds after acceptance"
+        "纯文本、脱敏、原生 @；群内命令及全部对应回复安排12秒撤回",
+        "Plain text, redaction and native mentions; group commands and every matching reply are scheduled for twelve-second recall"
       ],
       "boundary": [
-        "仅撤回机器人对应群回复；抽奖通知与报名反馈、私聊、成员命令及普通 AI 回复不撤回",
-        "Only matching group feature replies; lottery notices and signup replies, private chat, member commands and ordinary AI replies are kept"
+        "原命令需可信消息来源及原生撤回权限；普通聊天、私聊、AI及主动通知不受影响，命令清理不计违规",
+        "Original inputs need trusted inbox evidence and native recall permission; ordinary chat, private chat, AI and proactive notices are unaffected; command cleanup is not a violation"
       ]
     },
     {
       "id": "dashboard",
-      "name": ["插件管理页", "Plugin management page"],
+      "name": [
+        "插件管理页",
+        "Plugin management page"
+      ],
       "files": [
         "astrbot/builtin_stars/wangshangliao_moderation/dashboard.py",
-        "dashboard/plugin-pages/wangshangliao/App.vue"
+        "astrbot/builtin_stars/wangshangliao_moderation/observability.py",
+        "astrbot/core/platform/sources/wangshangliao/dashboard.py",
+        "astrbot/core/platform/sources/wangshangliao/diagnostics.py",
+        "dashboard/plugin-pages/wangshangliao/App.vue",
+        "dashboard/plugin-pages/wangshangliao/OpenService.vue"
       ],
       "responsibility": [
-        "配置版本校验、逐群授权、近期审计、架构与权限对照",
-        "Revision checks, per-group grants, bounded audit, architecture and permission reference"
+        "五类一级标签与功能二级标签、保留配置输入；版本校验、逐群授权及近期审计",
+        "Five categories with feature subtabs and retained drafts; revision checks, per-group grants and bounded audit"
       ],
       "boundary": [
-        "须 Dashboard JWT 与 bot 权限；不暴露凭证，不提供直接处罚和重试入口",
-        "Dashboard JWT and bot scope required; no credentials, direct sanctions or retry controls"
+        "须 Dashboard JWT 与 bot 权限；开通、额度、规则及恢复限固定接口与版本校验，不提供任意调用代理",
+        "Dashboard JWT and bot scope required; activation, quotas, rules and recovery use fixed version-checked APIs, never arbitrary-call proxies"
       ]
     },
     {
       "id": "storage",
-      "name": ["持久化与测试门禁", "Persistence and test gates"],
+      "name": [
+        "持久化与测试门禁",
+        "Persistence and test gates"
+      ],
       "files": [
         "astrbot/core/platform/sources/wangshangliao/storage.py",
-        "astrbot/core/platform/sources/wangshangliao/test_window.py"
+        "astrbot/core/platform/sources/wangshangliao/database.py",
+        "astrbot/core/platform/sources/wangshangliao/test_window.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/migration.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/settings.py"
       ],
       "responsibility": [
-        "按实例保存消息、操作、活动和任务；限时单向受控测试",
-        "Instance-scoped messages, operations, activities and jobs; bounded one-way controlled tests"
+        "实例传输账本与账号/群业务账本分工；普通积压4096、私聊256、每发送者固定命令4条",
+        "Separate instance transport and account/group business stores; backlog4096 ordinary,256 private and four pending fixed commands/sender"
       ],
       "boundary": [
-        "测试最多300秒、10条入站；不授予管理员或动作权限；重启关闭窗口",
-        "At most 300 seconds and ten inbound messages; no admin or capability grants; windows close on restart"
+        "审核证据丢失停止自动处罚；测试窗口最多300秒/10条且不授权；共享进程不是逐群资源硬隔离",
+        "Lost review evidence stops sanctions; test windows allow at most300 seconds/ten messages without granting authority; shared processes are not per-group hard isolation"
+      ]
+    },
+    {
+      "id": "onboarding",
+      "name": [
+        "开通与防夺权",
+        "Activation and ownership protection"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/open_service.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/open_store.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/rules_provisioning.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/ai_admission.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/onboarding_delivery.py"
+      ],
+      "responsibility": [
+        "真实邀请者须当前群主/平台管理员，由本人开通；服务端可预览确认主动入群的仅规则开通；管理员增删预览确认",
+        "Native administrator inviters confirm activation; the server may preview/confirm rules-only admission for proactively joined groups; manager changes require confirmation"
+      ],
+      "boundary": [
+        "普通邀请者触发退群；聊天入口不绕过邀请证明；服务端规则开通绑定真实管理员且不授予AI/财务/套餐；重拉不夺权",
+        "Ordinary inviters trigger departure; chat admission never bypasses invitation proof; server rules admission binds a real manager without AI, finance or plan grants; reinvites cannot steal ownership"
+      ]
+    },
+    {
+      "id": "flood",
+      "name": [
+        "独立防刷屏",
+        "Independent flood moderation"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/flood.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/content_rules.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/member_exemptions.py"
+      ],
+      "responsibility": [
+        "同一成员3秒3条、10秒8条文字或图片，或30秒5条重复文字；先禁言，再撤回该批全部消息",
+        "Three text/image messages per member in three seconds, eight in ten seconds, or five repeated texts in thirty seconds; mute before recalling the entire matching burst"
+      ],
+      "boundary": [
+        "不等待慢AI；不处理他人或历史消息；暂停、撤权、离群取消未执行动作；服务端发言豁免绑定真实身份，不授予管理权限",
+        "Never wait for slow AI or sanction others/history; pause, revocation and departure cancel pending actions; server speech exemptions bind native identities without management grants"
+      ]
+    },
+    {
+      "id": "lifecycle",
+      "name": [
+        "离群与数据生命周期",
+        "Membership and data lifecycle"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/lifecycle.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/open_store.py"
+      ],
+      "responsibility": [
+        "撤去机器人管理权保留配置；确认踢出后清理该账号该群工作数据与旧确认",
+        "Retain configuration on lost bot privileges; confirmed removal clears that account/group's working data and old confirmations"
+      ],
+      "boundary": [
+        "断线或目录暂缺不删除；保留返现账本、原管理归属及最小审计；不补执行旧处罚",
+        "Disconnects or missing directories never imply deletion; retain cashback ledgers, original ownership and minimal audits; never replay old sanctions"
+      ]
+    },
+    {
+      "id": "friends",
+      "name": [
+        "好友申请与首次菜单",
+        "Friend applications and first-use menus"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/friend_auto.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/private_interaction.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/feature_image.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/native_guide_upload.py",
+        "astrbot/core/platform/sources/wangshangliao/approval.py"
+      ],
+      "responsibility": [
+        "默认单条自动同意；首次好友及管理员邀请核验后发送文字菜单、使用说明和对话示例两张原生图，开通须另确认",
+        "Default serial approvals; first friends and verified native administrator invitations receive text and two native guides, instructions and examples; activation requires separate confirmation"
+      ],
+      "boundary": [
+        "请求至少3秒、同意至少30秒；20项有界群欢迎逐代次去重，暂停及撤权停止；未知不重发，手机显示另验",
+        "Requests three seconds apart, approvals thirty; twenty bounded generation-deduplicated group welcomes stop on pause/revocation; no uncertain replay; verify mobile rendering separately"
+      ]
+    },
+    {
+      "id": "control-plane",
+      "name": [
+        "进程内总控与停用兼容",
+        "In-process control and retirement guards"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/open_rpc.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/main.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/ai_config.py",
+        "scripts/run_wsl_open.py",
+        "scripts/deploy_wsl_open.py"
+      ],
+      "responsibility": [
+        "open-service沿用后台鉴权和固定操作白名单，只在当前进程内分发；旧入口明确拒绝",
+        "Authenticated, fixed-allowlist open-service dispatches in-process only; retired entry points refuse execution"
+      ],
+      "boundary": [
+        "不连接旧公共Socket，不保留AI配置写入实现；拒绝兼容壳不能授予权限，独立财务Socket不受影响",
+        "No old public socket or AI configuration writer; retirement guards grant no authority and do not retire the cashier socket"
+      ]
+    },
+    {
+      "id": "isolated-test-tools",
+      "name": [
+        "隔离测试与费用验收",
+        "Isolated tests and cost acceptance"
+      ],
+      "files": [
+        "scripts/wsl_test_lab.py",
+        "scripts/check_wsl_pair_live.py",
+        "scripts/check_wsl_pair_rejoin_live.py",
+        "scripts/check_wsl_model_cost.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/test_advertising.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/test_flood.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/test_lottery.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/test_group_ai.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/test_probe.py",
+        "astrbot/core/platform/sources/wangshangliao/test_rules.py"
+      ],
+      "responsibility": [
+        "显式调用的固定对象测试、预览确认、恢复及脱敏证据；费用脚本最多四次调用；热群原生窗口最多三轮、每轮两次独立计费请求",
+        "Explicit fixed-subject tests, preview/confirmation, restoration and redacted evidence; at most four cost-test calls; native warm-group windows allow three turns and two separately billed requests per turn"
+      ],
+      "boundary": [
+        "不注册公共命令或AI工具，不删除财务或历史授权伪造首次开通；收费测试不解除公共预算门禁",
+        "No public commands or AI tools, no ledger/ownership deletion to fake first activation; cost tests do not open the public budget gate"
+      ]
+    },
+    {
+      "id": "cashier",
+      "name": [
+        "插件邀请返现结账页",
+        "Plugin cashback settlement"
+      ],
+      "files": [
+        "astrbot/builtin_stars/wangshangliao_moderation/cashback.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/cashback_store.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/finance_chat.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/cashback_finance.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/cashback_dashboard.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/finance_sandbox.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/cashback_models.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/cashback_runtime.py",
+        "dashboard/plugin-pages/wangshangliao/SettlementPanel.vue"
+      ],
+      "responsibility": [
+        "插件总控与私聊共用账本；旧域名与独立站已移除；私聊保留逐群财务授权；登记、撤回、切价及归属核对",
+        "Plugin total control and private chat share one ledger; standalone domain, service and RPC removed; chat keeps per-group financial grants; registration, reversal, repricing and attribution"
+      ],
+      "boundary": [
+        "聊天群管理和超管无自动财务权限；总控JWT后台使用独立审计身份，不授予旧Access用户后台权；聊天两分钟确认绑定版本、金额和收款人；不自动转账",
+        "Chat managers/superadmins inherit no finance role; dashboard total-control JWT uses a distinct audit actor and grants no dashboard access to old Access users; two-minute chat confirmation binds versions, amounts and recipients; no transfers"
       ]
     }
   ],
   "permissions": [
     {
+      "id": "server-ai-writes",
+      "name": [
+        "旧群AI与群知识写命令（已转服务端）",
+        "Legacy group AI and knowledge writes (server-only)"
+      ],
+      "commands": [
+        "开启群聊回复",
+        "关闭群聊回复",
+        "开启冷场发话",
+        "关闭冷场发话",
+        "开启自主接话",
+        "关闭自主接话",
+        "添加群知识",
+        "修改群知识",
+        "删除群知识",
+        "群知识引用"
+      ],
+      "examples": [
+        "开启群聊回复",
+        "添加群知识 标题 | 内容"
+      ],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "unavailable",
+        "unavailable"
+      ],
+      "grants": [],
+      "rule": [
+        "固定命令仍识别但拒绝执行，不回落AI。服务端维护原有资料与模式。",
+        "Recognized and rejected without AI fallback; stored content and modes remain server-maintained."
+      ]
+    },
+    {
+      "id": "business-rules",
+      "name": [
+        "群关键词回复与广告",
+        "Group keyword replies and advertisements"
+      ],
+      "commands": [
+        "关键词回复",
+        "添加回复",
+        "修改回复",
+        "删除回复",
+        "启用回复",
+        "停用回复",
+        "定时广告",
+        "广告图片",
+        "添加广告",
+        "修改广告",
+        "删除广告",
+        "启用广告",
+        "停用广告",
+        "确认回复",
+        "确认广告"
+      ],
+      "examples": [
+        "关键词回复",
+        "定时广告"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "仅本群授权管理编辑，预览确认、版本与权限复查；广告图片仅私信选群并指定计划后接收，确认才保存；普通成员可触发已启用关键词。",
+        "Only exact-group managers edit, with preview, confirmation and current revisions/authority; image intake is private-only after selecting a group and plan, then requires confirmation; ordinary members may trigger enabled keywords."
+      ]
+    },
+    {
+      "id": "support-editor",
+      "name": [
+        "账号客服业务资料",
+        "Account support business content"
+      ],
+      "commands": [
+        "客服设置",
+        "客服话术",
+        "客服风格",
+        "客服长度",
+        "客服链接",
+        "客服知识",
+        "添加客服知识",
+        "删除客服知识",
+        "确认客服"
+      ],
+      "examples": [
+        "客服设置",
+        "客服知识"
+      ],
+      "access": [
+        "denied",
+        "denied",
+        "denied",
+        "denied"
+      ],
+      "grants": [],
+      "rule": [
+        "此四列群管角色均不自动获得权限；仅服务端显式绑定账号/UID/可信发送者的客服负责人可私信编辑。",
+        "None of these generic group-role columns imply access; only explicitly server-bound account/UID/transport support editors may edit privately."
+      ]
+    },
+    {
       "id": "ranking",
-      "name": ["每日排名", "Daily ranking"],
-      "commands": ["排名"],
-      "examples": ["排名", "排名 2"],
-      "access": ["allowed", "allowed", "denied", "allowed"],
+      "name": [
+        "每日排名",
+        "Daily ranking"
+      ],
+      "commands": [
+        "排名"
+      ],
+      "examples": [
+        "排名",
+        "排名 2"
+      ],
+      "access": [
+        "allowed",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
       "grants": [],
       "rule": [
         "群需启用且允许回复；私聊管理员须先选群；不派奖",
@@ -233,10 +697,22 @@
     },
     {
       "id": "lottery-status",
-      "name": ["抽奖状态", "Lottery status"],
-      "commands": ["抽奖状态"],
-      "examples": ["抽奖状态"],
-      "access": ["allowed", "allowed", "denied", "allowed"],
+      "name": [
+        "抽奖状态",
+        "Lottery status"
+      ],
+      "commands": [
+        "抽奖状态"
+      ],
+      "examples": [
+        "抽奖状态"
+      ],
+      "access": [
+        "allowed",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
       "grants": [],
       "rule": [
         "未开活动时仅返回状态，不创建活动",
@@ -245,10 +721,22 @@
     },
     {
       "id": "lottery-join",
-      "name": ["抽奖报名", "Lottery enrollment"],
-      "commands": ["参加抽奖"],
-      "examples": ["参加抽奖"],
-      "access": ["allowed", "allowed", "denied", "group-only"],
+      "name": [
+        "抽奖报名",
+        "Lottery enrollment"
+      ],
+      "commands": [
+        "参加抽奖"
+      ],
+      "examples": [
+        "参加抽奖"
+      ],
+      "access": [
+        "allowed",
+        "allowed",
+        "denied",
+        "group-only"
+      ],
       "grants": [],
       "rule": [
         "只在活动群报名；重复成员不重复记入；不满足邀请门槛则拒绝",
@@ -256,11 +744,73 @@
       ]
     },
     {
+      "id": "private-menu",
+      "name": [
+        "命令菜单",
+        "Command menu"
+      ],
+      "commands": [
+        "私聊菜单"
+      ],
+      "examples": [
+        "菜单"
+      ],
+      "access": [
+        "allowed",
+        "allowed",
+        "allowed",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "菜单／帮助进入树状菜单，数字逐层选择，0返回，取消退出；修改预览后确认；不增加权限，兼容直接命令",
+        "菜单 / 帮助 opens the text tree: numbers select, 0 goes back, 取消 exits; preview mutations before confirmation, with unchanged grants and direct commands"
+      ]
+    },
+    {
+      "id": "own-cashback",
+      "name": [
+        "我的邀请",
+        "My invitations"
+      ],
+      "commands": [
+        "我的邀请"
+      ],
+      "examples": [
+        "我的邀请"
+      ],
+      "access": [
+        "allowed",
+        "allowed",
+        "allowed",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "私聊先列已开启返现群名，回复编号只查本人；不显示UID；群内保留本群邀请积分查询",
+        "Private enabled-cashback group-name menu, numbered sender-only queries without UIDs; existing group invitation points remain unchanged"
+      ]
+    },
+    {
       "id": "own-invites",
-      "name": ["个人邀请与积分", "Own invitations and points"],
-      "commands": ["我的邀请", "邀请奖励"],
-      "examples": ["我的邀请", "邀请奖励"],
-      "access": ["allowed", "allowed", "denied", "allowed"],
+      "name": [
+        "个人邀请与积分",
+        "Own invitations and points"
+      ],
+      "commands": [
+        "邀请奖励",
+        "我的邀请明细",
+        "邀请统计说明"
+      ],
+      "examples": [
+        "邀请奖励"
+      ],
+      "access": [
+        "allowed",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
       "grants": [],
       "rule": [
         "只查询操作者自己的有效邀请和积分；不自动支付",
@@ -269,83 +819,261 @@
     },
     {
       "id": "help",
-      "name": ["帮助与身份", "Help and identity"],
-      "commands": ["帮助", "我的权限"],
-      "examples": ["帮助", "我的权限", "sid"],
-      "access": ["private-only", "private-only", "denied", "allowed"],
+      "name": [
+        "公开帮助",
+        "Public help"
+      ],
+      "commands": [
+        "帮助"
+      ],
+      "examples": [
+        "帮助",
+        "管理 帮助"
+      ],
+      "access": [
+        "allowed",
+        "allowed",
+        "allowed",
+        "allowed"
+      ],
       "grants": [],
       "rule": [
-        "非管理员私聊连帮助和 sid 也只返回无权限",
-        "Non-admin private help and sid also return only permission denial"
+        "解释菜单及固定命令，未核验身份也可阅读；看帮助不授予群管理权",
+        "Menu/command guidance is readable without verified identity; reading help grants no group authority"
+      ]
+    },
+    {
+      "id": "identity",
+      "name": [
+        "管理身份查询",
+        "Management identity query"
+      ],
+      "commands": [
+        "我的权限"
+      ],
+      "examples": [
+        "管理 我的权限"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "须核验身份；管理前缀可省略，兼容sid；群内只显示本群权限，admins_id 不代替逐群管理授权",
+        "Verify identity; 管理 prefix is optional and sid remains an alias; group chat reports current-group authority only, never implied by admins_id"
       ]
     },
     {
       "id": "directory",
-      "name": ["群与成员目录", "Group and member directory"],
-      "commands": ["群列表", "选择群", "成员列表", "成员搜索", "下一页"],
-      "examples": ["群列表", "选择群 1", "成员搜索 名称", "下一页"],
-      "access": ["private-only", "private-only", "denied", "allowed"],
+      "name": [
+        "群与成员目录",
+        "Group and member directory"
+      ],
+      "commands": [
+        "群列表",
+        "选择群",
+        "成员列表",
+        "成员搜索",
+        "下一页"
+      ],
+      "examples": [
+        "管理 群列表",
+        "管理 选择群 1",
+        "管理 成员搜索 名称",
+        "管理 下一页"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
       "grants": [],
       "rule": [
-        "目录编号十分钟有效，绑定机器人、操作者和私聊会话",
-        "Directory numbers expire in ten minutes and bind bot, caller and private session"
+        "私聊只列本人获授权的运行群，群内只列当前群；编号十分钟有效，绑定机器人、操作者、群和对话",
+        "Privately list the caller's authorized operating groups, in group chat only the current group; ten-minute numbers bind bot, caller, group and conversation"
       ]
     },
     {
       "id": "audit",
-      "name": ["权限与规则查询", "Capabilities and rule queries"],
-      "commands": ["能力", "规则", "违规计数", "结果", "开发门禁"],
-      "examples": ["能力", "规则", "违规计数", "结果 操作ID", "开发门禁"],
-      "access": ["private-only", "private-only", "denied", "allowed"],
+      "name": [
+        "权限与规则查询",
+        "Capabilities and rule queries"
+      ],
+      "commands": [
+        "违规计数",
+        "结果"
+      ],
+      "examples": [
+        "管理 违规计数",
+        "管理 结果 操作ID"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
       "grants": [],
       "rule": [
-        "只读查询；开发门禁命令不创建窗口、不增加权限",
-        "Read-only; the gate command neither opens a window nor grants authority"
+        "群内直接查询本群，私聊先选择获授权群；只读查询，不执行处罚",
+        "Query the current group directly or select an authorized group privately; read-only, no sanctions"
+      ]
+    },
+    {
+      "id": "capabilities",
+      "name": [
+        "本群能力与规则",
+        "Group capabilities and rules"
+      ],
+      "commands": [
+        "能力",
+        "规则"
+      ],
+      "examples": [
+        "管理 能力",
+        "管理 规则"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "群内绑定本群，私聊先选群；没有机器人管理权时明确显示不能禁言或撤回",
+        "Bind current group or privately selected group; explicitly report missing native bot moderation rights"
+      ]
+    },
+    {
+      "id": "test-gate",
+      "name": [
+        "旧开发门禁命令",
+        "Legacy test-gate command"
+      ],
+      "commands": [
+        "开发门禁"
+      ],
+      "examples": [],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "unavailable",
+        "unavailable"
+      ],
+      "grants": [],
+      "rule": [
+        "公共命令入口不识别；受控测试仅后台或专用测试工具，不授予管理权",
+        "Not recognized by public admission; controlled tests use the dashboard or dedicated harness, without granting authority"
       ]
     },
     {
       "id": "mute",
-      "name": ["成员禁言", "Mute member"],
-      "commands": ["禁言"],
-      "examples": ["禁言 @成员", "禁言 @成员 3", "禁言 2 3"],
-      "access": ["denied", "allowed", "denied", "allowed"],
-      "grants": ["mute"],
+      "name": [
+        "成员禁言（聊天已停用）",
+        "Mute member (chat retired)"
+      ],
+      "commands": [
+        "禁言"
+      ],
+      "examples": [],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "unavailable",
+        "unavailable"
+      ],
+      "grants": [
+        "mute"
+      ],
       "rule": [
-        "群内须真实 @；私聊用快照编号；默认30分钟，整数1至1440分钟，无二次确认",
-        "Native mention in group; snapshot number privately; default thirty minutes, integer 1–1440 minutes, no second confirmation"
+        "公共聊天旧命令仅提示使用旺商聊App，不执行；原生禁言能力保留给自动审核及受控测试",
+        "Old public chat commands only direct users to the official app; native mute remains for automatic moderation and controlled tests"
       ]
     },
     {
       "id": "unmute",
-      "name": ["成员解禁", "Unmute member"],
-      "commands": ["解禁"],
-      "examples": ["解禁 @成员", "解禁 2"],
-      "access": ["denied", "allowed", "denied", "allowed"],
-      "grants": ["unmute"],
+      "name": [
+        "解除成员禁言",
+        "Unmute member"
+      ],
+      "commands": [
+        "解禁",
+        "禁言名单"
+      ],
+      "examples": [
+        "解禁 @成员",
+        "管理 解禁 2",
+        "解除禁言 @成员",
+        "禁言名单"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [
+        "unmute"
+      ],
       "rule": [
-        "校验唯一目标及当前身份；不需要二次确认",
-        "Validate the unique target and current identity; no second confirmation"
+        "仅本群授权管理及unmute动作授权；群内真实@，私聊菜单4→7先列本人授权群，再只列当前禁言成员、选人预览确认；菜单4→8查看禁言名单；普通成员编号不可用，读取失败不回退全员；提交前复查禁言、身份、权限和版本；不清除违规记录，AI不能执行",
+        "Current group managers with unmute permission only; native mentions or private menu4→7: authorized groups, currently muted members, preview and confirmation; menu4→8 reads the mute list; general member indices are invalid and read failures never fall back to everyone; recheck mute state, identity, authority and versions; retain violations and deny AI execution"
       ]
     },
     {
       "id": "kick",
-      "name": ["手动踢出", "Manual removal"],
-      "commands": ["踢出", "确认踢出"],
-      "examples": ["踢出 2", "确认踢出 PREVIEW_TOKEN"],
-      "access": ["denied", "kick-mode", "denied", "allowed"],
-      "grants": ["kick"],
+      "name": [
+        "手动踢出",
+        "Manual removal"
+      ],
+      "commands": [
+        "踢出",
+        "确认踢出"
+      ],
+      "examples": [
+        "管理 踢出 2",
+        "管理 确认踢出 PREVIEW_TOKEN"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [
+        "kick"
+      ],
       "rule": [
-        "业务内容规则模式：私聊预览，再由同一管理员用新消息确认；确认码单次、十分钟有效。旧模式仍按固定动作执行",
-        "Content-rule mode: private preview then a new confirmation from the same admin; single-use ten-minute token. Legacy mode retains fixed-action execution"
+        "群内或私聊人工预览，同一管理在同一群和对话发新消息确认；十分钟单次确认；AI和自动规则不踢人",
+        "Manual group/private preview followed by fresh same-manager, same-group and same-conversation confirmation; ten-minute single-use tokens; no AI or automatic removal"
       ]
     },
     {
       "id": "announce",
-      "name": ["发布公告", "Publish announcement"],
-      "commands": ["公告"],
-      "examples": ["公告 内容"],
-      "access": ["denied", "allowed", "denied", "allowed"],
-      "grants": ["announce"],
+      "name": [
+        "发布公告",
+        "Publish announcement"
+      ],
+      "commands": [
+        "公告"
+      ],
+      "examples": [
+        "管理 公告 内容"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [
+        "announce"
+      ],
       "rule": [
         "群内使用当前群；私聊须先选群；仍需平台原生管理角色",
         "Current group in group chat; select group privately; native management role still required"
@@ -353,31 +1081,64 @@
     },
     {
       "id": "mute-all",
-      "name": ["全员禁言与解除", "Mute/unmute all"],
-      "commands": ["全员禁言", "解除全员禁言"],
-      "examples": ["全员禁言", "解除全员禁言"],
-      "access": ["denied", "allowed", "denied", "allowed"],
-      "grants": ["mute_all", "unmute_all"],
+      "name": [
+        "手动全员禁言（聊天已停用）",
+        "Manual group mute (chat retired)"
+      ],
+      "commands": [
+        "全员禁言",
+        "解除全员禁言"
+      ],
+      "examples": [],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "unavailable",
+        "unavailable"
+      ],
+      "grants": [
+        "mute_all",
+        "unmute_all"
+      ],
       "rule": [
-        "各动作分别授权；人工操作先暂停该群定时规则",
-        "Each action needs its own grant; manual action first pauses the group's schedule"
+        "旧聊天命令仅提示使用App，不执行也不暂停计划；每天定时全员禁言及解除仍保留",
+        "Old chat commands only refer to the app, without execution or schedule changes; daily scheduled mute and unmute remain"
       ]
     },
     {
       "id": "lottery-query",
-      "name": ["抽奖设置与历史", "Lottery settings and history"],
-      "commands": ["中奖名单", "抽奖记录", "抽奖设置"],
-      "examples": ["抽奖设置", "中奖名单 1", "抽奖记录"],
-      "access": ["private-only", "private-only", "denied", "allowed"],
+      "name": [
+        "抽奖设置与历史",
+        "Lottery settings and history"
+      ],
+      "commands": [
+        "中奖名单",
+        "抽奖记录",
+        "抽奖设置"
+      ],
+      "examples": [
+        "管理 抽奖设置",
+        "管理 中奖名单 1",
+        "管理 抽奖记录"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
       "grants": [],
       "rule": [
-        "管理员私聊选群后查询；不是公共群内命令",
-        "Admin private query after selecting a group; not a public group command"
+        "本群管理员可在群内查询，或私聊选群后查询；普通成员不可查询管理记录",
+        "Group managers query in the current group or privately after selection; ordinary members cannot read administrative records"
       ]
     },
     {
       "id": "lottery-settings",
-      "name": ["抽奖参数", "Lottery parameters"],
+      "name": [
+        "抽奖参数",
+        "Lottery parameters"
+      ],
       "commands": [
         "抽奖奖励",
         "中奖人数",
@@ -387,14 +1148,19 @@
         "领奖联系人"
       ],
       "examples": [
-        "抽奖奖励 奖品",
-        "中奖人数 3",
-        "抽奖倒计时 10",
-        "参与上限 15",
-        "抽奖邀请门槛 3",
-        "领奖联系人 管理员"
+        "管理 抽奖奖励 奖品",
+        "管理 中奖人数 3",
+        "管理 抽奖倒计时 10",
+        "管理 参与上限 15",
+        "管理 抽奖邀请门槛 3",
+        "管理 领奖联系人 管理员"
       ],
-      "access": ["private-only", "private-only", "denied", "allowed"],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
       "grants": [],
       "rule": [
         "设置下期参数；活动已开不能修改；只设置不自动开启",
@@ -403,10 +1169,26 @@
     },
     {
       "id": "lottery-control",
-      "name": ["抽奖开启与结束", "Lottery lifecycle"],
-      "commands": ["开启抽奖", "立即开奖", "取消抽奖"],
-      "examples": ["开启抽奖", "立即开奖", "取消抽奖"],
-      "access": ["private-only", "private-only", "denied", "allowed"],
+      "name": [
+        "抽奖开启与结束",
+        "Lottery lifecycle"
+      ],
+      "commands": [
+        "开启抽奖",
+        "立即开奖",
+        "取消抽奖"
+      ],
+      "examples": [
+        "管理 开启抽奖",
+        "管理 立即开奖",
+        "管理 取消抽奖"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
       "grants": [],
       "proactive": true,
       "rule": [
@@ -416,31 +1198,46 @@
     },
     {
       "id": "invite-settings",
-      "name": ["邀请奖励设置与查询", "Invitation reward administration"],
+      "name": [
+        "邀请奖励设置与查询",
+        "Invitation reward administration"
+      ],
       "commands": [
         "设置邀请奖励",
         "开启邀请奖励",
         "暂停邀请奖励",
         "邀请奖励状态",
-        "邀请记录"
+        "邀请记录",
+        "邀请统计",
+        "开启邀请统计",
+        "暂停邀请统计"
       ],
       "examples": [
-        "设置邀请奖励 5",
-        "开启邀请奖励",
-        "暂停邀请奖励",
-        "邀请奖励状态",
-        "邀请记录"
+        "管理 设置邀请奖励 5",
+        "管理 开启邀请奖励",
+        "管理 暂停邀请奖励",
+        "管理 邀请奖励状态",
+        "管理 邀请记录",
+        "管理 邀请统计"
       ],
-      "access": ["private-only", "private-only", "denied", "allowed"],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
       "grants": [],
       "rule": [
-        "全群统一积分值；启用建立基线，待审核不计奖；修改值不重算旧账",
-        "Uniform group points; enabling baselines existing members; pending joins earn nothing; no repricing old credits"
+        "全群统一积分值；启用建立基线，待审核不计奖；邀请统计仅统计已记账邀请，退群不回收积分",
+        "Uniform group points; enabling baselines existing members; pending joins earn nothing; invitation statistics cover credited invites and leaving never claws back points"
       ]
     },
     {
       "id": "schedules",
-      "name": ["每日定时任务", "Daily schedule"],
+      "name": [
+        "每日定时任务",
+        "Daily schedule"
+      ],
       "commands": [
         "定时禁言",
         "确认定时",
@@ -450,15 +1247,23 @@
         "删除定时"
       ],
       "examples": [
-        "定时禁言 23:00 08:00",
-        "确认定时 PREVIEW_TOKEN",
-        "定时状态",
-        "暂停定时",
-        "恢复定时",
-        "删除定时"
+        "管理 定时禁言 23:00 08:00",
+        "管理 确认定时 PREVIEW_TOKEN",
+        "管理 定时状态",
+        "管理 暂停定时",
+        "管理 恢复定时",
+        "管理 删除定时"
       ],
-      "access": ["private-only", "private-only", "denied", "allowed"],
-      "grants": ["mute_all", "unmute_all"],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [
+        "mute_all",
+        "unmute_all"
+      ],
       "rule": [
         "创建和恢复须新预览确认及两个动作授权；状态查询不执行动作；运行时再核验创建者权限；暂停和删除不解禁",
         "Creation/resume require fresh confirmation and both grants; status queries execute no action; recheck creator at runtime; pause/delete do not unmute"
@@ -466,52 +1271,593 @@
     },
     {
       "id": "ai-tools",
-      "name": ["自然语言管理工具", "Natural-language management tool"],
+      "name": [
+        "已停用的 AI 管理工具",
+        "Retired AI management tools"
+      ],
       "commands": [],
-      "examples": ["wsl_private_management"],
-      "access": ["unavailable", "unavailable", "denied", "tool"],
+      "examples": [],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "denied",
+        "denied"
+      ],
       "grants": [],
       "rule": [
-        "固定工具与配置草案；操作仍需独立授权；配置不直接处罚或开启活动，踢出及定时仍需明确确认",
-        "Fixed tools and config drafts with independent grants; settings do not punish or start activities, and removal/schedules still require explicit confirmation"
+        "所有聊天身份均无管理工具；旧缓存或伪造调用也拒绝；使用固定命令或认证后台",
+        "All chat identities lack management tools; cached/forged calls are denied; use fixed commands or the authenticated dashboard"
       ]
     },
     {
       "id": "cards",
-      "name": ["成员名片维护", "Member card maintenance"],
+      "name": [
+        "成员名片维护",
+        "Member card maintenance"
+      ],
       "commands": [],
-      "examples": ["card_preview", "card_member_preview", "card_execute", "card_status", "card_stop"],
-      "access": ["unavailable", "unavailable", "denied", "tool"],
-      "grants": ["rename"],
+      "examples": [],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "denied",
+        "denied"
+      ],
+      "grants": [
+        "rename"
+      ],
       "rule": [
-        "管理员私聊AI支持指定成员改名及批量规范，预览后另发确认；当前成员快照及原名再次核验；按群自动扫描开关也需配置确认且不得自行授权",
-        "Admin private AI supports single-member custom cards and batch normalization with separate confirmation; recheck member identity and original card; per-group automatic scans require a confirmed setting and existing grants"
+        "仅总控群管页面预览、确认和执行；自动规范逐群另行开启；保护管理角色与机器人，未知先回读；AI不能改名片",
+        "Dashboard preview/confirmation/execution only, with separately enabled per-group normalization; protect managers/bots and read back uncertainty; AI cannot change cards"
       ]
     },
     {
       "id": "cleanup",
-      "name": ["封禁／注销账号清理", "Banned/cancelled-account cleanup"],
+      "name": [
+        "封禁／注销账号清理",
+        "Banned/cancelled-account cleanup"
+      ],
       "commands": [],
       "examples": [],
-      "access": ["unavailable", "unavailable", "unavailable", "unavailable"],
-      "grants": ["cleanup"],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "unavailable",
+        "unavailable"
+      ],
+      "grants": [
+        "cleanup"
+      ],
       "rule": [
-        "仅机器人页预览、确认与执行；cleanup 不继承 kick 或 rename；不自动运行",
-        "Bot-page preview, confirmation and execution only; cleanup does not inherit kick/rename; not automatic"
+        "仅群管页面预览确认；这是群成员清理，不是好友删除；cleanup 不继承 kick 或 rename，不自动运行",
+        "Management-page preview/confirmation only; group-member cleanup is not friend deletion; cleanup does not inherit kick/rename and is not automatic"
+      ]
+    },
+    {
+      "id": "activation",
+      "name": [
+        "邀请者确认开通",
+        "Inviter activation"
+      ],
+      "commands": [],
+      "service_commands": [
+        "开通",
+        "认领"
+      ],
+      "examples": [
+        "开通",
+        "认领 群号 开通码"
+      ],
+      "access": [
+        "verified",
+        "verified",
+        "verified",
+        "verified"
+      ],
+      "grants": [],
+      "rule": [
+        "真实邀请者须当前群主/平台管理员；认领仅私聊，核验成员、代次和版本，开通码不绕过；已开通群保留原归属",
+        "Real inviter must currently be native owner/admin; private claims recheck membership, generation and revision without code bypass; existing ownership is retained"
+      ]
+    },
+    {
+      "id": "managers",
+      "name": [
+        "本群管理员增删",
+        "Group-manager administration"
+      ],
+      "commands": [
+        "管理员列表",
+        "添加管理员",
+        "移除管理员",
+        "确认授权"
+      ],
+      "examples": [
+        "管理 管理员列表",
+        "管理 添加管理员 2",
+        "管理 移除管理员 2",
+        "管理 确认授权 PREVIEW_TOKEN"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "最多20人；先预览、同对话新消息确认，不能删最后一人；复验成员、权限和版本",
+        "Up to twenty managers; preview and fresh same-conversation confirmation, never remove the last manager; recheck membership, grants and revision"
+      ]
+    },
+    {
+      "id": "advertising",
+      "name": [
+        "广告审核开关",
+        "Advertising switches"
+      ],
+      "commands": [
+        "开启广告审核",
+        "关闭广告审核"
+      ],
+      "examples": [
+        "管理 开启广告审核",
+        "管理 关闭广告审核"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "只保存本群开关；实际处罚仍需机器人管理权与动作授权，不启用模型审核",
+        "Save this group's switch only; sanctions require native bot privileges/grants, without enabling model review"
+      ]
+    },
+    {
+      "id": "flood",
+      "name": [
+        "防刷屏开关",
+        "Flood switches"
+      ],
+      "commands": [
+        "开启防刷屏",
+        "关闭防刷屏"
+      ],
+      "examples": [
+        "管理 开启防刷屏",
+        "管理 关闭防刷屏"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "只改本群；3秒3条、10秒8条文字或图片，或30秒5条重复文字，先禁言再整批撤回；不等待AI、不识图",
+        "This group only; three texts/images in three seconds, eight in ten seconds, or five repeated texts in thirty seconds; mute before whole-burst recall, without AI waiting or image recognition"
+      ]
+    },
+    {
+      "id": "member-whitelist",
+      "name": [
+        "本群发言白名单",
+        "Group speech whitelist"
+      ],
+      "commands": [
+        "白名单",
+        "添加白名单",
+        "移除白名单",
+        "选择白名单",
+        "确认白名单"
+      ],
+      "examples": [
+        "管理 白名单",
+        "管理 添加白名单 成员名称",
+        "管理 移除白名单 成员名称",
+        "管理 选择白名单 1",
+        "管理 确认白名单 PREVIEW_TOKEN"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "仅本群授权管理且须原生群主或管理员；私聊先选授权群，按真实成员名称搜索、选人、预览后新消息确认；提交复查成员身份和版本；仅豁免本群发言处罚，不授予管理或AI权限",
+        "Authorized native owners/admins only; select an authorized group privately, search native member names, select, preview and confirm with a fresh message; recheck identities and versions at commit; speech-sanction exemption grants no management or AI authority"
+      ]
+    },
+    {
+      "id": "member-blacklist",
+      "name": [
+        "本群重进黑名单",
+        "Group rejoin blacklist"
+      ],
+      "commands": [
+        "黑名单",
+        "黑名单列表",
+        "添加黑名单",
+        "移除黑名单",
+        "选择黑名单",
+        "黑名单禁言时长",
+        "确认黑名单"
+      ],
+      "examples": [
+        "黑名单",
+        "黑名单列表",
+        "添加黑名单 成员名称",
+        "移除黑名单 成员名称",
+        "选择黑名单 1",
+        "黑名单禁言时长 29天",
+        "确认黑名单 PREVIEW_TOKEN"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "仅本群授权原生群主或管理员；群内回复可信原消息或真正@一人发送黑名单，加入名单不立即处罚；私信先选群、搜索、预览确认。仅当前机器人＋群生效，每次可信真实重新入群直接禁言并留群，不再踢人。时长默认29天41760分钟，黑名单禁言时长 N分钟／N小时／N天换算后须为1..41760整分钟；群内默认当前群，私信先选群，预览后本人新消息确认黑名单 token；后台群管理→规则→黑名单设置同样须预览确认。修改只影响后续重入，不自动重设已有禁言或追罚；重复通知不续封，未知结果挂起不重试；群主、管理员、机器人保护及白名单不覆盖黑名单不变。普通广告及手动踢人权限、普通禁言24小时上限不变；移除不解禁，解禁不移除。旧三踢计数不再驱动阶段，原证据保留；北京时间2026-10-23 20:02:56完整重启已加载、在线配置验证通过，本轮真实新重入／禁言未测。20:24:00保护复核完成，其他保护面匹配，测试版本及已审计后台并发修改保留，不宣称tenants原始整体hash全同或正式群从未变动。",
+        "Authorized native owners/admins only. Reply to a verified original message or genuinely mention one member with the blacklist command; adding an entry never immediately punishes. Privately select a group, search, preview and confirm. Scoped to this bot/group: every trusted actual rejoin directly mutes and retains the member, never kicks. Default 29 days/41,760 minutes; 黑名单禁言时长 N分钟 / N小时 / N天 must convert to 1..41760 whole minutes. Groups use the current group; DMs select one first, then preview and personally send a fresh 确认黑名单 token. Dashboard Group Management -> Rules -> Blacklist Settings also requires preview confirmation. Changes affect future rejoins only, never reset existing mutes or apply retrospective sanctions; duplicate notices never renew mutes; unknown results freeze without retry. Owners/admins/bots remain protected; whitelists never override blacklists. Ordinary advertising and manual-kick authority and the ordinary 24-hour mute cap are unchanged. Removal does not unmute; unmute does not remove. Old three-kick counts no longer select phases; original evidence is retained. Code loaded after the full restart at 20:02:56 Beijing time, October 23, 2026; online configuration passed, with no new actual rejoin/mute acceptance this round. The 20:24:00 protection review matched other protected surfaces and retained audited test versions and concurrent dashboard changes; raw tenants hashes differ, not a claim that formal groups never changed."
+      ]
+    },
+    {
+      "id": "keywords",
+      "name": [
+        "逐群关键词与组合规则",
+        "Per-group keywords and combinations"
+      ],
+      "commands": [
+        "添加关键词",
+        "删除关键词",
+        "修改关键词",
+        "添加规则",
+        "修改规则",
+        "删除规则",
+        "启用规则",
+        "停用规则",
+        "测试规则"
+      ],
+      "examples": [
+        "管理 添加关键词 测试广告词",
+        "管理 修改关键词 1 新广告词",
+        "管理 删除关键词 1",
+        "管理 添加规则 收款招募 | 收款截图 | 加我",
+        "管理 修改规则 1 收款招募 | 收款截图 | 联系我",
+        "管理 启用规则 1",
+        "管理 停用规则 1",
+        "管理 删除规则 1",
+        "管理 测试规则 普通聊天"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "关键词可增删改；每群20条组合规则，每条同时匹配2—5个词，可启停和无处罚测试。仅本群授权管理操作，提交复核权限与版本；不执行代码或正则",
+        "Edit literal keywords and up to twenty per-group combinations requiring two to five terms, with individual toggles and effect-free testing. Only authorized managers; recheck grants and versions before commit; no code or regex execution"
+      ]
+    },
+    {
+      "id": "chat",
+      "name": [
+        "只读AI咨询",
+        "Read-only AI consultation"
+      ],
+      "commands": [],
+      "service_commands": [
+        "/chat",
+        "/exit"
+      ],
+      "examples": [
+        "/chat",
+        "/exit"
+      ],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "allowed",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "仅私聊显式进入；试用20/Plus2000/Pro5000次每日共享，北京时间重置；全站安全阈值默认100000次；超管只免限次，不免费用预算或并发门禁",
+        "Explicit private entry; Trial20/Plus2000/Pro5000 daily shared calls reset in Asia/Shanghai; site guard defaults to100000/day; exemption never bypasses money budgets or concurrency gates"
+      ]
+    },
+    {
+      "id": "friend-approval",
+      "name": [
+        "好友申请与首次欢迎",
+        "Friend approval and first welcome"
+      ],
+      "commands": [],
+      "examples": [],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "unavailable",
+        "unavailable"
+      ],
+      "grants": [],
+      "rule": [
+        "设置和核对恢复仅后台；单条同意间隔30秒、请求间隔3秒；首次依次发文字菜单、使用说明和对话示例两张原生图，持久化去重，不向已有好友批量补发",
+        "Settings/recovery are dashboard-only; approvals thirty seconds apart, requests three seconds apart; the first welcome sends text, native instructions, then native examples with durable deduplication and no old-friend bulk greetings"
+      ]
+    },
+    {
+      "id": "group-ai-control",
+      "name": [
+        "逐群聊天AI开关",
+        "Per-group chat AI controls"
+      ],
+      "commands": [
+        "热群状态",
+        "开启热群",
+        "关闭热群"
+      ],
+      "examples": [
+        "热群状态",
+        "开启热群",
+        "关闭热群"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "本群管理仅切换服务端已开通的AI总开关；不修改模式、时段、主题或群知识，不绕过预算和承担人确认。@、自主及冷场共用热群配置；PC28只读工具仅限明确询问，不向冷场、客服或管理员指引开放。",
+        "Group managers may only toggle already provisioned group AI, without changing modes, hours, topic or knowledge, bypassing budget or consenting for the payer. Group modes share the warm-group profile; the PC28 read tool requires an explicit query and is unavailable to idle tasks, support and guidance."
+      ]
+    },
+    {
+      "id": "manager-quota",
+      "name": [
+        "后台套餐授予与续期",
+        "Dashboard subscription grants and renewal"
+      ],
+      "commands": [],
+      "examples": [],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "unavailable",
+        "unavailable"
+      ],
+      "grants": [],
+      "rule": [
+        "仅总控给已核验群管理授予Plus/Pro，必须填客服及实收金额、预览确认；旧增额不是付费订单，原接口停用；无聊天自助升级",
+        "Dashboard-only Plus/Pro grants to verified managers require contact, received CNY and preview/confirmation; legacy overrides are not purchases and their endpoint is retired; no self-upgrade in chat"
+      ]
+    },
+    {
+      "id": "support-select",
+      "name": [
+        "选择专属业务客服",
+        "Select dedicated business support"
+      ],
+      "commands": [
+        "客服列表",
+        "选择客服",
+        "退出客服"
+      ],
+      "examples": [
+        "客服列表",
+        "选择客服 1",
+        "退出客服"
+      ],
+      "access": [
+        "denied",
+        "denied",
+        "allowed",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "仅私聊固定选择；同一已核验开通者跨群跨机器人共用专属配置和业务资料，历史不共用；多个业务先列出再选择，不调用AI，不授予编辑权。",
+        "Fixed private selection only; the same verified activator shares one dedicated configuration and business across groups and robots, never conversation histories; list before choosing among businesses, with no model call or editing grant."
+      ]
+    },
+    {
+      "id": "own-plan",
+      "name": [
+        "我的套餐与说明",
+        "My plan and upgrade information"
+      ],
+      "commands": [
+        "我的套餐",
+        "套餐说明"
+      ],
+      "examples": [
+        "我的套餐",
+        "套餐说明"
+      ],
+      "access": [
+        "denied",
+        "denied",
+        "allowed",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "菜单8；我的额度是我的套餐别名；只私聊本人池，未核验按真实发送者试用，不能查他人；未填客服提示联系机器人服务管理员",
+        "Menu8; 我的额度 aliases 我的套餐; private own-pool reads only, unverified trials use the real transport sender; no other-user reads; missing contact points to the bot service administrator"
+      ]
+    },
+    {
+      "id": "personal-knowledge",
+      "name": [
+        "我的知识库",
+        "My knowledge"
+      ],
+      "commands": [
+        "我的知识",
+        "查看我的知识",
+        "我的知识容量",
+        "添加我的知识",
+        "修改我的知识",
+        "删除我的知识"
+      ],
+      "examples": [
+        "我的知识",
+        "查看我的知识 1",
+        "我的知识容量",
+        "添加我的知识 时间 | 每天九点",
+        "修改我的知识 1 时间 | 每天十点",
+        "删除我的知识 1"
+      ],
+      "access": [
+        "denied",
+        "denied",
+        "allowed",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "仅私聊本人真实NIM空间；菜单8→5保留旧资料和编辑入口，不自动转为机器人业务知识，不向业务客服或管理员指引注入；不授予AstrBot后台权限。",
+        "Private real-sender-owned notes and menu8→5 editing are preserved, but never migrated or injected into robot business support or administrative guidance; no dashboard authority is granted."
+      ]
+    },
+    {
+      "id": "group-knowledge",
+      "name": [
+        "本群知识库",
+        "Group knowledge"
+      ],
+      "commands": [
+        "本群知识",
+        "查看群知识",
+        "本群知识容量",
+        "本群知识范围"
+      ],
+      "examples": [
+        "本群知识",
+        "查看群知识 1",
+        "本群知识容量",
+        "本群知识范围"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "仅服务端修改群知识和引用范围，旧资料保留；本群授权管理可查看，私聊先选授权群。离群后按账号和群清理，不影响其他群或客服。",
+        "Only the server edits group knowledge and reference modes; existing data remains. Exact-group managers may read it after selecting their authorized group. Departure clears the exact account/group, not other groups or support."
+      ]
+    },
+    {
+      "id": "group-payer",
+      "name": [
+        "本群共享额度与本人确认",
+        "Group shared quota and self-consent"
+      ],
+      "commands": [
+        "本群额度",
+        "确认本群扣费"
+      ],
+      "examples": [
+        "本群额度",
+        "确认本群扣费"
+      ],
+      "access": [
+        "denied",
+        "allowed",
+        "denied",
+        "allowed"
+      ],
+      "grants": [],
+      "rule": [
+        "菜单9的3/4；仅本群管理查看余额；开通者或总控指定候选本人预览后确认承担，绑定本人/账号/群/授权/套餐/扣费版本，换人仅总控。",
+        "Menu9 items3/4; only this group's managers read its balance; the opener or server nominee personally confirms, bound to sender/account/group/grant/plan/payer versions; only the server changes payers."
+      ]
+    },
+    {
+      "id": "friend-delete",
+      "name": [
+        "好友删除（已移除）",
+        "Friend deletion (removed)"
+      ],
+      "commands": [],
+      "examples": [],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "unavailable",
+        "unavailable"
+      ],
+      "grants": [],
+      "rule": [
+        "无单人、批量、后台、聊天或AI好友删除入口；群成员清理不是好友删除",
+        "No single/bulk/dashboard/chat/AI friend deletion; group-member cleanup is not friend deletion"
+      ]
+    },
+    {
+      "id": "settlement",
+      "name": [
+        "私聊财务与网页结账",
+        "Private finance and web settlement"
+      ],
+      "commands": [
+        "结账",
+        "结账结果",
+        "确认已付款",
+        "确认修改"
+      ],
+      "examples": [
+        "结账",
+        "确认已付款 123456"
+      ],
+      "access": [
+        "unavailable",
+        "unavailable",
+        "denied",
+        "denied"
+      ],
+      "grants": [],
+      "rule": [
+        "网页沿用CF Access；私聊仅总控单独授予逐群财务身份，普通群管理与超管均不自动获权；两分钟确认、原子登记，不自动付款",
+        "Web keeps CF Access; private settlement requires a separate dashboard-issued group financial grant, never inherited from managers/superadmins; two-minute atomic confirmations, no automatic payment"
       ]
     }
   ],
   "layers": [
     {
-      "name": ["操作者身份", "Caller identity"],
-      "source": ["会话有效配置 admins_id", "Session's effective admins_id"],
+      "name": [
+        "操作者身份",
+        "Caller identity"
+      ],
+      "source": [
+        "真实NIM发送者、可信UID与逐群管理员",
+        "Real NIM sender, trusted UID and per-group manager grants"
+      ],
       "boundary": [
-        "群主、平台管理员、昵称及 @ 目标不能代替；撤权立即作用于后续调用",
-        "Group owners/admins, names and mention targets are no substitute; revocation affects subsequent calls"
+        "平台角色不跳过邀请开通；admins_id不自动管理公共群；撤权立即影响后续调用",
+        "Native roles do not bypass activation; admins_id does not automatically manage public groups; revocation affects subsequent calls"
       ]
     },
     {
-      "name": ["机器人动作授权", "Bot capabilities"],
+      "name": [
+        "机器人动作授权",
+        "Bot capabilities"
+      ],
       "source": [
         "群授权中的逐群动作白名单",
         "Per-group action allowlist in Group Grants"
@@ -522,7 +1868,10 @@
       ]
     },
     {
-      "name": ["平台原生权限", "Upstream permissions"],
+      "name": [
+        "平台原生权限",
+        "Upstream permissions"
+      ],
       "source": [
         "机器人在旺商聊的真实群角色及目标成员身份",
         "Bot's real upstream group role and target member identity"
@@ -533,10 +1882,13 @@
       ]
     },
     {
-      "name": ["主动发送授权", "Proactive-send authority"],
+      "name": [
+        "主动发送授权",
+        "Proactive-send authority"
+      ],
       "source": [
-        "机器人页的主动发送目标白名单",
-        "Bot-page proactive target allowlist"
+        "群管页面已保存的精确目的地授权",
+        "Exact saved destination grants in the management page"
       ],
       "boundary": [
         "抽奖通知需目标群授权；不替代调用者身份或处罚动作授权",
@@ -544,7 +1896,10 @@
       ]
     },
     {
-      "name": ["管理面板权限", "Dashboard authority"],
+      "name": [
+        "管理面板权限",
+        "Dashboard authority"
+      ],
       "source": [
         "Dashboard JWT 登录及 bot 范围",
         "Dashboard JWT sign-in and bot scope"
@@ -555,7 +1910,38 @@
       ]
     },
     {
-      "name": ["自动任务与测试窗口", "Automation and test windows"],
+      "name": [
+        "财务权限",
+        "Financial authority"
+      ],
+      "source": [
+        "网页CF Access及财务范围；私聊使用总控单独授予的账号、群与可信发送者身份",
+        "Web CF Access and financial scope; chat uses separately granted account, group and verified sender identity"
+      ],
+      "boundary": [
+        "聊天管理和bot后台权限不能代替；本人邀请只读不授予更价、归属或结账权",
+        "Chat managers/dashboard bot scope are no substitute; own invitation reads grant no repricing, attribution or settlement authority"
+      ]
+    },
+    {
+      "name": [
+        "超管AI额度豁免",
+        "Superadmin AI quota exemption"
+      ],
+      "source": [
+        "已核验UID与admins_id／额度豁免名单",
+        "Verified UID and admins_id/quota-exemption list"
+      ],
+      "boundary": [
+        "只豁免业务次数，不授予群管理或AI工具；仍受并发、超时和硬预算限制",
+        "Business-call exemption only, without group authority or AI tools; concurrency, timeouts and hard budgets still apply"
+      ]
+    },
+    {
+      "name": [
+        "自动任务与测试窗口",
+        "Automation and test windows"
+      ],
       "source": [
         "单独启用的规则、调度及有界开发窗口",
         "Explicit automation, schedules and bounded test windows"
@@ -563,6 +1949,141 @@
       "boundary": [
         "自动审核不要求被审成员是管理员；定时／活动重核验创建者；测试窗口不授予任何管理权限",
         "Reviewed members need not be admins; schedules/activities recheck creator authority; test windows grant no management authority"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "unverified",
+      "name": [
+        "未核验用户",
+        "Unverified user"
+      ],
+      "scope": [
+        "真实NIM发送者",
+        "Real NIM sender"
+      ],
+      "allowed": [
+        "菜单、帮助、预算允许后的只读AI",
+        "Menu, help and budget-gated read-only AI"
+      ],
+      "denied": [
+        "管理群、查财务、超管额度豁免",
+        "Group management, financial reads and quota exemption"
+      ]
+    },
+    {
+      "id": "member",
+      "name": [
+        "已核验普通成员",
+        "Verified ordinary member"
+      ],
+      "scope": [
+        "本人及所在运行群",
+        "Self and operating groups the user belongs to"
+      ],
+      "allowed": [
+        "公共群功能、已开启返现群的本人邀请、只读AI",
+        "Public group features, own records in enabled cashback groups and read-only AI"
+      ],
+      "denied": [
+        "他人账本、管理配置、处罚和好友操作",
+        "Others' ledgers, management settings, sanctions and friendship operations"
+      ]
+    },
+    {
+      "id": "manager",
+      "name": [
+        "本群管理员",
+        "Group manager"
+      ],
+      "scope": [
+        "平台＋机器人账号＋授权群",
+        "Platform + bot account + authorized group"
+      ],
+      "allowed": [
+        "固定群管、本群规则和管理员增删；合并模式活动与积分管理",
+        "Fixed commands, group rules/managers and integrated-mode activities/points"
+      ],
+      "denied": [
+        "跨群、后台登录、财务权限、AI工具、全局模型与好友设置",
+        "Other groups, dashboard access, finances, AI tools, global models and friend settings"
+      ]
+    },
+    {
+      "id": "superadmin",
+      "name": [
+        "AstrBot超管／额度豁免用户",
+        "AstrBot superadmin / quota-exempt user"
+      ],
+      "scope": [
+        "已核验身份的AI业务次数",
+        "Verified-identity AI business-call counts"
+      ],
+      "allowed": [
+        "不占个人/共享AI次数；另有群授权才可按同样命令管理",
+        "Exempt personal/shared AI counts; separate group grants permit the same commands"
+      ],
+      "denied": [
+        "仅凭admins_id跨群、AI工具、绕过硬预算、自动获得后台/财务身份",
+        "Cross-group authority from admins_id alone, AI tools, budget bypass or automatic dashboard/financial identity"
+      ]
+    },
+    {
+      "id": "dashboard",
+      "name": [
+        "总控后台用户",
+        "Dashboard control user"
+      ],
+      "scope": [
+        "后台JWT＋bot权限",
+        "Dashboard JWT + bot scope"
+      ],
+      "allowed": [
+        "账号、逐群授权/暂停、规则、额度门禁、好友恢复、名片、审计及私聊财务授权",
+        "Accounts, group grants/pause, rules, budget gates, friend recovery, cards, audit and chat finance grants"
+      ],
+      "denied": [
+        "自动获得聊天管理或CF Access财务身份；任意调用代理",
+        "Automatic chat-manager/CF Access identity or arbitrary-call proxies"
+      ]
+    },
+    {
+      "id": "cashier",
+      "name": [
+        "网页结账员／结账台管理员",
+        "Web cashier / financial administrator"
+      ],
+      "scope": [
+        "CF Access＋财务角色＋授权群",
+        "CF Access + financial role + granted groups"
+      ],
+      "allowed": [
+        "对应网页财务角色的登记、核对、更正、撤回及设置",
+        "Web-role-scoped registration, reconciliation, corrections, reversals and settings"
+      ],
+      "denied": [
+        "未授权群、机器人登录或群管授权、自动转账",
+        "Unauthorized groups, bot login/group grants and automatic transfers"
+      ]
+    },
+    {
+      "id": "chat-finance",
+      "name": [
+        "私聊结账员／本群财务管理员",
+        "Chat cashier / group financial administrator"
+      ],
+      "scope": [
+        "总控单独授予的接收账号、群、可信UID及NIM发送者",
+        "Separately granted receiving account, group, verified UID and NIM sender"
+      ],
+      "allowed": [
+        "本群查询、付款登记、切价及按角色撤回；财务管理员另可归属核对、风控复核、异常补记和返现设置",
+        "Group queries, payment registration, repricing and role-scoped reversals; financial admins also reconcile attribution, review risk, record exceptions and configure cashback"
+      ],
+      "denied": [
+        "聊天授予财务角色、其他群、网页全局管理员权限、AI财务工具或自动转账",
+        "Financial role grants in chat, other groups, global web-admin privileges, AI financial tools or automatic transfers"
       ]
     }
   ]

@@ -15,11 +15,15 @@ jobs:
   unit-tests:
     name: Run pytest suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 55 || matrix.os == 'macos-15-intel' && 60 || 45 }}
+    env:
+      PYTHONUTF8: "1"
+      ASTRBOT_CI_TEST_TIMEOUT_SECONDS: ${{ matrix.os == 'windows-latest' && '2400' || '0' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Keep macOS coverage without depending on the constrained arm64 pool.
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
 
     # The Windows lane stays best-effort for now: the suite still has
     # pre-existing Windows-specific failures there. Promote to blocking
@@ -42,9 +46,11 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.12.17"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Install Linux sandbox dependency
         if: runner.os == 'Linux'
@@ -69,4 +75,10 @@ jobs:
       - name: Run tests
         run: |
           chmod +x scripts/run_pytests_ci.sh
-          bash ./scripts/run_pytests_ci.sh ./tests
+          # Preserve the existing best-effort Windows lane, but report the first
+          # real failure instead of cancelling the entire workflow after 45 min.
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            bash ./scripts/run_pytests_ci.sh ./tests --maxfail=1 --durations=25 -o faulthandler_timeout=120
+          else
+            bash ./scripts/run_pytests_ci.sh ./tests --durations=25 -o faulthandler_timeout=120
+          fi

@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wangshangliao production acceptance</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">Documentation</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>Wangshangliao Deployment Acceptance: 2026-10-08</h1>
+<blockquote>
+<p>Historical evidence, annotated October 20, 2026. Settings and outcomes below belong
+to their dated runs, not current switches, budgets or complete acceptance.
+See <a href="wangshangliao-architecture-permissions-en.html">current architecture and permissions</a>.</p>
+</blockquote>
+<h2>Operation Logs And Bounded Decoding On October 11</h2>
+<p>Only invitation-history decoded output/compression windows now allow 3 MiB;
+other interfaces and messages retain 1 MiB limits. Authentication, malformed
+compression, extra-frame, trailing-data and oversize rejection remain. Valid
+group records are no longer rejected beyond 200; each response remains capped
+at 4,096. Approved candidates and incremental cursors commit atomically, scoped
+to group/bot/account/activation baseline with a one-second overlap. Cached
+proofs survive restart and late membership mapping. Actual source faults back
+off and block ordinary payment registration/correction. Cooldown is not a fault.
+Network warnings are sampled every 60 seconds; script errors, unauthorized
+access and real attribution risks remain visible. Recovery is a separate
+operation/AstrBot log event; original warnings keep their severity and show
+their recovery time.</p>
+<p>After restarting shared AstrBot and the standalone cashier at 04:47 Beijing
+time, both WSL bots were online. Read-only runtime endpoints and anonymous 401
+rejection passed. An actual full-account response contained 2,022 records and
+1,095,318 decoded bytes, accepted by the 3 MiB path. The persistent cache held
+159 approved candidates and subsequent collection cycles succeeded.
+All 719 historical source-failure logs remain; the latest was at 04:15:23.
+Both groups received recovery markers, with no new source faults after restart.
+The 61 historical paid-recipient review logs and 12 attribution-conflict logs
+remain. Compared with the consistent pre-restart backup, all 111 existing paid
+member/recipient identities, amounts, timestamps and actors are unchanged, as
+are both groups' prices, activation flags, collection bindings and versions.
+Database integrity passed.</p>
+<p>The focused source/cashback/protocol/cashier suites passed 446 tests. The final
+WSL/cross-platform compatibility run passed 2,094 with no skips. The initial run
+lacked an old message-storage rollback artifact; supplying the October 8
+predeployment file enabled the remaining check, which passed. This tests old
+message storage against a migrated database, not full extension installation
+or rollback.
+The isolated desktop/mobile cashier passed 34 checks, adding current-source
+fault visibility, recovery-indicator removal, original warning severity and
+recovery timestamps. Mobile screenshots show no overflow. Frontend type checks
+and both scoped builds passed. Backup:
+<code>/opt/backups/wsl-log-limits-20261011-S1o7F1</code>.
+Production recheck at 04:52 Beijing time: all 719 historical source faults match
+recovery markers; neither service has emitted new warning/error lines since
+this restart, and source cursors continue advancing.
+No production payments were registered. Real business warnings were not erased;
+this is not a new real Access-payment acceptance.</p>
+<h2>Invitation Source Response Limit On October 11</h2>
+<p>Recruiter 海云42937631 genuinely had missing invitations. From 00:22 Beijing
+time, the decoded account-wide invitation history reached 1,093,209 bytes,
+exceeding the 1 MiB safety limit. Source requests failed while complete roster
+scans continued, so unknown-source entries were hidden by the existing policy.
+The business log contained 63 invitations for this recruiter; only four had
+previously entered their pending ledger.</p>
+<p>The collector now supplies the group's activation time minus one second as
+<code>lastId</code>, which is Unix seconds, not an application ID. This reduces the response
+from 2,018 account-history records to 532, retaining all 63 relevant invitations.
+Exact application-time filtering still excludes pre-activation events. Decode,
+identity, authorization and reward rules were not relaxed. Failure diagnostics
+retain only allowlisted reason codes and sample identical failures every 300 seconds.</p>
+<p>Production check at 04:17 Beijing time: 56 invitations were automatically
+recovered, bringing this recruiter to 60 pending entries/CNY360. The other three,
+iB29132186, 好运28874188 and 汉堡44271989, have departure/rejoin histories and
+conflicting business recruiters; they remain void without duplicate rewards.
+Group totals are 87 pending entries/CNY522 and two attributed verifying entries/CNY12,
+with original deadlines of 04:37:39 and 06:25:19. Continued membership and final
+verification are still required. Another 31 unattributed verifying entries remain
+stored for audit but hidden and excluded from totals; no recipient was guessed.</p>
+<p>The focused cashback, qualification and invitation suites passed 270 tests;
+Ruff and whitespace checks passed. The isolated desktop/mobile cashier passed
+30 checks, including qualification filters, countdowns and early-payment blocking.
+The harness now drains request handlers before closing pages, fixing a cleanup
+race without bypassing business assertions. Only the WSL plugin was reloaded. Production
+runtime endpoints and read-only history checks passed; the independent cashier
+was not restarted. Compared with the consistent predeployment backup, all 111
+existing paid member/recipient identities, amounts, payment timestamps and actors
+remain unchanged, as do both groups' pricing/activation settings and all original
+first observations, qualification deadlines, departure and self-entry flags.
+Backup: <code>/opt/backups/wsl-invitation-window-20261011-6mjQvU</code>.
+No payments were registered. This is not a new real Access-payment acceptance or
+a full-repository regression claim.</p>
+<h2>Independent Entry Exclusion On October 10</h2>
+<p>Explicit administrator confirmation classified four exact own-entry records:
+便衣22550817, 猜字谜20083270, u少41604827 and 00748065048.
+UID/NIM identity and current versions were checked, and only zero-value,
+unassigned/unpaid records without business invitation evidence were eligible.
+Each confirmation has an audit. The applications for 007/u少 use <code>INVITE</code>
+without an inviter; this field alone does not prove recruitment.
+Missing-source records are not automatically classified as independent entry.</p>
+<p>The four records leave qualification/pending lists and remain in the voided
+ledger's independent-entry group, showing no reward rather than missing pricing.
+Identity, first observation, deadlines, membership and departure flags remain.
+Restart, departure/rejoin and expiry do not restore them; contradictory later
+business invitations trigger review without automatic rewards.
+Ordinary and exceptional registration independently reject the self-entry flag.
+Confirmation is administrator maintenance, not a new ordinary-chat or portal action.
+The two invitations made by u少, totaling CNY12, were compared field by field
+and preserved. All 61 paid registrations, three idempotent payment requests and
+both groups' pricing/settings remain unchanged; ledger integrity passes.
+No payment was registered and no paid recipient was rewritten.</p>
+<p>Full WSL/cross-platform regression: 2121 passed, no skips; ledger subset: 183 passed.
+The isolated 1440px/390px browser suite passes 30 checks, including separate
+unknown/independent-entry groups, no pricing/payment controls and no verifying
+self entries. Final full WSL/cross-platform regression: 2122 passed, no skips.
+The mobile screenshot was inspected, with no overflow/script errors.
+An existing immediate error-text assertion now waits for stable rendering,
+without bypassing the rejection assertion. Ruff and frontend types/build pass.
+Only WSL was hot-reloaded; shared AstrBot PID3720478 remains unchanged.
+The independently restarted cashier has PID1112001.
+Backup: <code>/opt/backups/wsl-self-join-20261010-NAymt5</code>, including consistent
+predeployment/preconfirmation ledgers. This does not claim complete upstream
+automatic self-entry detection or a new real Access-authenticated payment acceptance.</p>
+<h2>Excluding Unknown-Source Rows On October 10</h2>
+<p>The administrator further confirmed that all entries with no inviter source in
+this group are organic joins. In addition to the four already confirmed, the
+ledger contained one active zero-value verifying entry and 18 departed/void
+historical entries (stored historical amount CNY56 total). All 19 lacked paid
+or business-invitation evidence. Each exact UID/NIM and version was rechecked
+and audited; original amounts remain in the database for traceability.
+Together with the prior four, all 23 existing self-entry rows are now excluded
+at the ledger API from every state, row list and count/amount aggregate. Paid
+history and genuine invitations made by these members remain unchanged.
+All other unpaid rows without reliable business invitation evidence are also omitted from cashier rows and
+aggregates, while remaining stored and unpayable; paid history remains visible.
+Later, a complete business invitation log confirmed inviter gbz (UID 28804844)
+for one subsequently observed entry, at CNY6. The NIM notification operator,
+20484723, was not the recruiter. That member left/rejoined, so the row remains
+void and visible only as attributed void history, never as payable. Unattributed
+unpaid entries remain omitted.
+This follows explicit business confirmation and does not claim upstream proof of
+every historical join mode.</p>
+<p>Final deployment check (2026-10-10 09:07 UTC): unpaid rows enter details and
+aggregates only when business-invitation evidence matches the group and both
+member/inviter UID-NIM identities. One new unattributed verifying entry remains
+stored but is omitted from rows, counts, amounts and payable totals. The original
+61 paid rows match the predeployment snapshot field by field. A cashier separately
+registered two CNY12 payments at 09:02:56 UTC; this deployment neither triggered
+nor changed them. The live ledger now has 63 paid rows, six pending rows/CNY36,
+three reliably attributed verifying rows/CNY18, and one attributed CNY6 void row
+for gbz that remains unpayable after departure/rejoin.
+The focused cashback/invitation suite passed 235 tests; the isolated desktop/mobile
+cashier browser suite passed 30 checks; all 25 local guides render without overflow.
+Production read-only checks passed. The standalone cashier is active and rejects
+anonymous access with HTTP 401; shared AstrBot PID3720478 is unchanged.
+The broader cross-project run is not green: full collection encountered independent
+integration-package import and duplicate-adapter registration errors, and a wider
+run observed 19 failures outside cashback before it was stopped.</p>
+<h2>Actual Recruiter Attribution Correction On October 10</h2>
+<p>Production business records prove that native notification/member-inviter fields
+can identify the approving join operator. The previous recruiter-attribution claim
+based on agreement with the ledger is withdrawn. Cash attribution now requires
+approved business applications, persisting observer account, member/inviter NIM
+identities and event time. Native notices prove joins/repeated joins only.
+Both ordinary and exceptional registration independently require business evidence;
+identity, timestamp and genuine recruiter conflicts remain blocked.</p>
+<p>Eight unpaid misassignments were repaired from business evidence: u少 two,
+往来（g82xh.top） five and 神也是人 one. New real invitations after deployment
+automatically attributed to 往来 rather than 20484723; numeric invitee names do
+not change the recruiter's ordinary pricing category. Unknown recruiters are never replaced
+with the owner; unpaid records without an inviter stay in storage but are omitted
+from cashier rows and totals. Departed rewards remain void. All 61 paid registrations retain
+their recipient UID, amount, payment time/operator and idempotency records, while
+attribution is flagged for review and labeled as a historical registered recipient.
+The one original manual amount-correction audit remains present. The historical
+77 identity exists, but reliable evidence identifying its invitees is still missing.</p>
+<p>First observations, qualification deadlines and price settings were preserved.
+The production 3772 entry naturally passed its original three-hour deadline and,
+after fresh complete-roster/business verification, became pending for CNY6 without
+payment registration. u少's two entries remain verifying until at least
+October 10, 2026 at 16:27:37 Beijing time, subject to continued membership and verification.</p>
+<p>Final full regression: 2109 passed, no skips; focused ledger rerun: 119 passed;
+invitation rerun: 101 passed. The read-only invitation checker now reads selected
+groups from current plugin settings rather than obsolete transport configuration,
+rejects missing/malformed scope and successfully queries production business records.
+The 1440px/390px isolated browser suite passed 28 checks, including historical-paid
+attribution display. Ruff, frontend types/build and isolated standalone startup,
+anonymous 401 and graceful shutdown passed. The process test used a private network
+namespace and temporary data. Only WSL was hot-reloaded; shared AstrBot PID3720478
+remained unchanged. The independently restarted cashier has PID927566.
+Two collectors' group scans remain healthy; integrity, paid financial fields,
+payment requests, group configuration and deadlines were checked against backup.
+Backup: <code>/opt/backups/wsl-inviter-attribution-20261010T055155Z</code>.
+Historical paid-recipient review remains open; neither old paid rows nor isolated
+payments are presented as a new real Access-authenticated payment acceptance.</p>
+<h2>October 10: Cashback Repairs And AstrBot Logs</h2>
+<p>Delayed attribution now uses the invitation-time price even when membership was
+observed before repricing. Priced records and audited manual corrections remain
+frozen. Missing-name recovery requires the same inviter UID/NIM identity and
+reliable attribution, uses the original pricing version and creates its own audit.
+Missing agent prices use the first subsequent valid saved price without requiring
+old source events to be replayed. Conflicts and qualification checks remain fail-closed.
+Post-upgrade records cannot lose qualification through pre-upgrade pricing rules;
+an additional server-side payment rejection test covers this migration boundary.</p>
+<p>Collection has independent group cycles, three background slots and 20/40/60-second
+failure backoff. Transient scheduler-storage failures recover; cancellation drains
+workers. This is not a universal 120-second observation guarantee at arbitrary scale.
+SSE ignores roster timestamps alone; established identities recheck revocation
+read-only. The UI distinguishes waiting reasons and shows the expected Beijing deadline.
+Health diagnostics are sampled every five minutes; changed scan errors and recovery
+are immediate. Financial audits and HTTP rejections are not sampled or deleted.
+Duration and generated traces replace duplicate warnings. Routine receive diagnostics
+use DEBUG and known protocol errors retain distinct codes.
+The common event bus does not read Wangshangliao names or message outlines, logging
+only route and hashed identifiers. Existing logs and other platforms are unchanged.</p>
+<p>Final Wangshangliao and cross-platform regression: <strong>2079 passed, no skips</strong>,
+three dependency deprecation warnings. The isolated 1440px/390px browser suite
+passes 27 checks with no script errors or horizontal overflow. Typecheck, cashier
+build, Ruff, whitespace and systemd-unit validation pass. Vite's over-500KB chunk
+notice remains visible rather than being hidden by changing its threshold.</p>
+<p>Shared AstrBot was restarted at 04:33:59 and <strong>04:39:07 Beijing time</strong>, final
+PID3720478; other platforms briefly reconnected. The cashier restarted at
+04:34:30, PID3695347, with verified 50% CPU quota, 256MiB MemoryHigh,
+384MiB MemoryMax and TasksMax128. Shared collection and model quotas are still
+not hard-isolated across platforms.
+The final migration-boundary fix only hot-reloaded the Wangshangliao plugin,
+without another shared-process restart.
+Backup: <code>/opt/backups/wsl-cashback-repair-20261009T202200Z</code>, containing two
+consistent database backups, relevant prior sources and a separate event-bus snapshot.
+All 483 original records retain identities, amounts, states, payment fields,
+categories, deadlines, pricing and record versions. Payment requests are unchanged.
+Ordinary prices CNY5/CNY6 and agent prices unset/CNY7 remain unchanged.
+New sampled scans show 423/108ms durations and generated 32-character traces.
+Integrity passes; both Wangshangliao instances are online and authorized read
+endpoints and unauthenticated rejection pass. Native evidence remains 79
+invitations, 18 departure voids, 61 existing registrations and one audited amount correction.</p>
+<p>No natural production three-hour transition, real Access settlement, mixed peak
+load or official-client observation was performed. No new verifying rows exist;
+old paid rows and fixture-clock tests do not substitute for those gates.
+The part-time group's unset agent price requires a business decision and does
+not fall back to ordinary pricing. Telegram/Superbot's <code>group_commands BadRequest</code>
+remains a separate plugin issue; this scoped task neither modifies it nor hides
+global warnings.
+The generic startup warning about an explicit WebUI directory without matching
+core-version metadata also remains; no version file was fabricated and no
+full dashboard containing unrelated project changes was redeployed to hide it.</p>
+<h2>October 11: Invitee Avatar Pricing And Three-Hour Qualification</h2>
+<p>New invitations classify only the invitee's avatar. The agent rate applies only
+when trusted image recognition explicitly detects digits in that avatar. Inviter
+names, invitee names, UIDs and opaque <code>userAvatar</code> resource identifiers are not
+avatar evidence. The current platform response has no avatar pixels, so records
+without image evidence use ordinary pricing and never receive the agent rate by
+guesswork. Avatar evidence status, digit count, category, price version and
+qualification deadlines are persisted. Both ordinary and exceptional payment APIs
+enforce qualification. Leaving/rejoining voids eligibility; observation gaps over
+120 seconds restart the window. Historical paid amounts remain unchanged.</p>
+<p>Wangshangliao regressions: <strong>1959 passed, no skips</strong>, three dependency warnings.
+An initially skipped legacy message-store compatibility test passed when rerun with
+the actual pre-concurrency source artifact; this is not full extension installation/rollback
+acceptance. Twenty-two new cases cover classification, pricing, deadlines, outage/restart,
+departure/rejoin, delayed native evidence, API bypass attempts and legacy migration.
+Isolated browser checks passed at 1440px and 390px for the new controls and previous
+payment/access/conflict/read-only workflows, with no script errors or horizontal overflow.
+Frontend typecheck/build, Ruff and whitespace checks passed. Client regeneration was identical.</p>
+<p>Only the business plugin was hot-reloaded; shared AstrBot PID1316192 remained.
+The independent cashier restarted at 03:24:03 Asia/Shanghai, PID3430071.
+Backup <code>/opt/backups/wsl-cashback-20261009T191140Z</code> uses a UTC directory timestamp.
+All 483 previous entry financial, membership and version fields matched; original
+group prices, activation baselines, collector scope and payment requests were preserved.
+Existing groups enable 10800-second qualification only for new records; no agent price
+was invented. Read-only native checks supported 79 invitations, 18 unpaid departure voids
+and 61 existing registered entries. No production payment was registered for testing.
+Anonymous origin requests return 401 and production Access redirects with 302.
+A genuine new production invitee completing the full three-hour window remains unobserved;
+isolated clocks, preexisting payments and consistent upstream attribution do not prove
+that live workflow or the actual person who shared an invitation.</p>
+<h2>October 9 Private Roles and Administrator AI</h2>
+<p>Persistent history and knowledge-session selection now use account/session/role
+keys, preserving but not importing old mixed histories. Public private chats and
+every group AI route allow only the genuine configured knowledge reader.
+Shell/Python/files, MCP, delegation, background jobs, messaging and other plugins
+are rejected during request construction and actual execution. Administrator
+private chats permit only fixed WSL management plus knowledge retrieval, with
+fresh identity, lifecycle and event-version checks. Revocation blocks old admin
+requests/output. <code>/new</code> and <code>/stats</code> address the current role, not the other role
+or archived mixed history.</p>
+<p>Administrator AI gained lottery/invitation/schedule queries and bounded operation
+preview confirmation. Ten-minute, single-use tokens bind actor/session/account and
+target state; schedule resumption still needs the exact fresh second confirmation.
+Queries, activity previews and saves display server receipts, not model success
+claims. Cash changes, payment registration, grants and credentials remain excluded.
+The production WSL profile uses its own persona, leaving the Lajiaoliao shared
+persona/profile untouched.</p>
+<p>In-scope regression: <strong>2282 passed, no skips</strong>, three dependency warnings.
+Coverage includes 12 attack classes across eight concrete tools (96 executor
+denials), counterfeit knowledge tools, code/background work, role history,
+knowledge selection and revocation. An existing image-stage fixture now returns
+a real tool collection; shared behavior remains covered. Ruff/whitespace checks
+passed. Only the terminal current-nonce JSON envelope is delivered/persisted;
+earlier drafts/reasoning are discarded, invalid envelopes fail closed. Customers
+receive a fixed public-boundary denial; administrators receive a format error.
+For hostile requests that denial is security rejection, not a successful business
+answer; ordinary consultations returning it still fail acceptance. This format
+is neither authorization nor a mathematical secrecy guarantee.</p>
+<p>Shared restarts were 07:24:50, 08:03:08, 08:59:53 and <strong>09:17:57 UTC</strong>, October 9
+(17:17:57 Asia/Shanghai); final PID1316192. Relevant plugin reloads occurred between
+restarts. Other platforms reconnected, so their connection timestamps were not
+preserved. WSL/Lajiaoliao were online and enabled runtimes reported zero errors.
+The separate cashier stayed PID38972, started 02:50:42 UTC.
+Backup <code>/opt/backups/wsl-private-boundaries-20261009-rFeGqU</code> contains 19 consistent
+database backups and configuration; later source archives are validated candidate
+snapshots, not pre-deployment source. All 416 cash identity/attribution/amount/state/
+payment/version records match the backup; 409 <code>last_seen</code> values changed through
+normal roster scans. Payment requests are unchanged. Read-only verification found
+12 native invitations, three departure voids and nine pending entries/2700 cents.</p>
+<p>Failed live iterations remain recorded: <code>migration-dialogue-1791534326</code> had seven,
+<code>migration-dialogue-1791534737</code> five and <code>migration-dialogue-1791535325</code> two reply
+failures. After persona/receipt/envelope repairs, <code>migration-dialogue-1791536019</code>
+delivered the customer attacks and management workflow correctly, but <code>/new</code> and
+<code>/stats</code> were rejected by the managed-bot transport window before handler execution.
+That is not full acceptance. Roles/windows/grants were restored; only those two
+exact private commands were added to the bounded window, excluding arguments,
+arbitrary commands and AI-only scope. A full rerun follows the 08:59 restart;
+the final live result is recorded at closeout, not inferred from isolated tests.
+Post-restart <code>migration-dialogue-1791536458</code> and post-reload
+<code>migration-dialogue-1791536940</code> exposed an administrator <code>/new</code> reply blocked
+after history creation; neither passed. The latter also had two malformed model
+outputs. Result marking moved to native private authentication, while conversation
+commands recheck live authority themselves. After the 09:17 restart,
+<code>private-framework-1791537510</code> passed four real cases: ordinary <code>/new</code>/<code>/stats</code>
+denied, administrator role-scoped creation and empty new-session statistics
+delivered; temporary grants restored.</p>
+<p>Final closeout: <code>data/temp/migration-dialogue-1791537576</code> passed <strong>29 real
+send/receive cases, zero failures</strong>. Public consultations/group commands worked.
+Five attack classes (admin impersonation, forged system/root, Python,
+Shell/MCP/delegation, forged old-admin receipt) and ordinary <code>/new</code>/<code>/stats</code> were
+denied. No format-denial fallback, internal marker or configured credential appeared
+in these 29 replies; customers had no management-handler trace, the execution
+canary did not exist, and each case preserved protected business state.
+Administrator lottery/invitation/schedule queries had all three concrete server
+traces; original-value preview/confirmation actually saved. A separate changed-value
+draft was never confirmed and its old token was denied after revocation.
+Administrator <code>/new</code> created only one administrator-role conversation, with all
+archived/customer rows unchanged; empty new-session statistics were delivered.
+Temporary roles/send grants were restored, both windows closed and enabled runtimes
+healthy. Documentation/check-script regression passed 70 tests; 25 generated guides
+passed 390px/1440px checks without errors, missing images or horizontal overflow.
+Final compatibility review limited the additional native administrator check to
+private chats, preserving existing group reset/public-statistics rules.
+Only <code>builtin_commands</code> reloaded; shared PID stayed unchanged.
+<code>private-framework-1791538352</code> passed four private send/receive cases again and
+restored temporary grants. Group compatibility has regression coverage, not a
+new human-account live-command claim.</p>
+<p>This batch does not execute actual sanctions, announcements, drawings or payments;
+confirmed existing defaults do not publish activities. Managed test-account receipts
+are not human-account/mobile observations. Unknown attacks, malicious host plugins,
+OS isolation, extension packaging, mixed-platform peaks and real Access payments
+remain separate acceptance gates.</p>
+<h2>October 9 Cashier Empty-Scope Fix (02:50 UTC)</h2>
+<p>The reported empty configured-group list/blank settings did not mean data loss:
+both saved groups, 11 invitation envelopes and eight pending entries totaling CNY26
+were present, with collection healthy. In the actual cashier mount namespace, an
+isolated WAL policy database failed read-only opening after its final writer closed
+and WAL/SHM files disappeared; a DELETE-journal fixture read successfully.
+The old reader swallowed that failure and returned an empty set.</p>
+<p>The policy store switched to DELETE with policy/history rows identical; cash
+remains WAL and sandbox write permissions were not expanded. Invalid/unavailable
+scope now returns 503, and the UI blocks saves/registrations until recovery.
+Only the standalone cashier restarted at 02:50:42 UTC, PID38972; shared AstrBot
+PID2110937 stayed unchanged. Five reads inside the production sandbox returned
+both original groups and eight pending entries/2600 cents without policy sidecars.
+All 415 pre-fix ledger identities, attribution, amounts and payment fields were
+retained, with no additional settlement request. Private backup:
+<code>/opt/backups/wsl-cashier-scope-20261009T024905Z</code>.</p>
+<p>Full regression: 1772 passed, no skips; Ruff, cashier typecheck/build and 65 frontend
+tests passed. Isolated 1440px/390px browsers exercised explicit failure, disabled
+saves, original-ledger recovery and existing bookkeeping flows. This is not new
+real-Access production payment-registration acceptance. Anonymous production reads
+remain 401. Refresh/relogin rather than resetting saved rules.</p>
+<h2>October 9 Follow-up: Scoped Transport Stop And Recovery</h2>
+<p>The real future boundary at <strong>02:24 UTC on October 9, 2026</strong> (10:24 Beijing)
+passed: only the test receiver transport was stopped across its mute deadline.
+After recovery the rule paused with <code>restart_review</code>; that version/deadline had
+zero executions and no expired mute was replayed. Actual ordinary sends before
+stopping, after the missed boundary and after recovery all returned 200, with
+200 self-recalls. This is a <strong>controlled single-instance stop/recovery</strong>, not an
+unexpected network fault. Other platforms' state/start/connection timestamps
+were unchanged; shared PID remained 2110937. The receiver did reconnect.
+Its original configuration, administrator list and temporary grants were restored;
+the test window closed and the rule was verified deleted. Final private evidence:
+<code>data/temp/workflow-live-1791512531/result.json</code>.</p>
+<p>The first 02:13 UTC run confirmed no catch-up but cleanup failed because reconnect
+cleared the private group selection. The rule remained safely paused, so that
+whole run did not pass. The first separate cleanup lacked the already-restored
+send grant and was rejected. A bounded private grant then allowed reselecting the
+verified group and deleting the rule; original grants were restored. Evidence:
+<code>data/temp/workflow-recovery-1791512357/result.json</code>.
+Cleanup now reacquires/verifies the group and requires database deletion, not merely
+a successful chat reply. The corrected full live rerun passed without cleanup errors.</p>
+<p>October 10 correction: native notification senders/member-inviter fields can be
+approving join operators. The earlier recruiter-attribution conclusion based on
+matching notifications and ledger entries is withdrawn. Cash attribution now
+requires approved business invitations; unknown sharing is never assigned to the
+owner. Unpaid misattribution is removed with an audit, while paid financial fields
+are preserved and flagged for review. Acceptance counts joins and recruiters separately.</p>
+<p>The October 9 historical check recorded <strong>11 native join notices and three unpaid
+departure voids</strong>. Eight entries totaling CNY26 remain pending, zero registered.
+The six/one/CNY17 figures below are October 8 historical snapshots.
+No second native invitation/rejoin audit exists; departure is not proof of rejoining.
+No old amount was edited and no unpaid entry was marked settled.</p>
+<p>Builtin help no longer imports WSL business code. A generic event entry delegates
+to an extension-registered responder, cleared on unload; unavailable business
+stops silently and other platforms retain generic help. Private administrator/member
+and silent-group regression pass. These help/waking/dashboard changes remain
+source/isolated acceptance, without restarting the shared process to load them.
+Independent extension delivery remains open. Final full regression: <strong>1758 passed,
+no skips</strong>, three dependency deprecations; Ruff passed. Read-only runtime checks
+show both WSL accounts online/business-active, 21 scoped reads passed, non-collector
+cash audit denied and anonymous requests rejected 401. Migration/history comparisons
+were not rerun by that check; it is not Access browser payment-registration proof.</p>
+<h2>Follow-up: Invitation Evidence And Revocation Boundary (From 21:38 UTC)</h2>
+<p>This supplements the earlier stage, not complete product acceptance. New read-only
+<code>scripts/check_wsl_invitation_history.py</code> cross-checks original native invitation
+envelopes, group/account scope, inviter/member mappings, historical prices and
+attribution audits: <strong>six native join notices and one unpaid departure void</strong>.
+The original recruiter-attribution claim was withdrawn on October 10.
+No second native invitation/rejoin audit exists, so live rejoining remains open.
+Five entries totaling CNY17 remain pending, with zero registered payments. Neither
+old amounts nor payment states were changed. Paid database rows alone do not prove
+a real Access-authenticated browser workflow.</p>
+<p>At <strong>21:38 UTC on October 8, 2026</strong> (05:38 Beijing time on October 9), the real
+future schedule boundary followed revocation of only its test creator's chat-admin
+identity. The rule paused with <code>schedule_owner_revoked</code>, with zero executions for
+that version. Actual ordinary-account sends before/after returned 200 and each
+self-recall returned 200. The rule was deleted and roles/temporary policies restored
+exactly; the shared PID stayed unchanged. Private proof:
+<code>data/temp/workflow-live-1791495383/result.json</code>. This tests revocation, not disconnect.</p>
+<p>Pre-waking private authorization moved from the shared pipeline to the native event
+through a generic hook, retaining other platforms' default behavior. Native
+Dashboard login/management/configuration bodies moved to the native module; shared
+services delegate through the original entry points. Owner binding, one-time claims,
+disk-failure rollback and fixed error labels remain. These core changes are
+source-level/isolated acceptance only: <strong>the shared production process was not
+restarted to load them</strong>, and independent extension delivery remains open.</p>
+<h2>Follow-up: Fast Flood Lane And Ordinary Workflows (From 19:45 UTC)</h2>
+<p>These October 8, 2026 results supersede the historical pending states below, but do
+not constitute complete product acceptance. Only the WSL business plugin was
+hot-reloaded. Shared PID 2110937, both WSL account bindings and connection timestamps
+are unchanged; no Lajiaoliao/Telegram changes were made. Final regression:
+<strong>1711 passed, no skips</strong>, three dependency deprecations; Ruff passed.
+All 65 frontend tests and the production 1440px/390px iframe's 12 tabs passed.</p>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Actual evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fast flood processing</td>
+<td>Committed ingress evidence is consumed independently of ordinary AI FIFO; four tasks and 256 bounded queued triggers per account, serialized per member. Account, epoch, revision, role and grants are rechecked after waits</td>
+</tr>
+<tr>
+<td>Five identical messages</td>
+<td>Final live run: 60-minute mute, all five exact sender-side native recall notifications; first 0.976s, all 1.712s; muted send rejected 802</td>
+</tr>
+<tr>
+<td>Eight distinct messages</td>
+<td>Final live run: 60-minute mute, all eight exact notifications; first 1.262s, all 2.625s; muted send rejected 802</td>
+</tr>
+<tr>
+<td>Ordinary keyword progression</td>
+<td>Three accepted recalls count warnings 1/2/3; fourth violation recalled and muted for 60 minutes because prior flood sanctions remain in the cumulative ledger</td>
+</tr>
+<tr>
+<td>Group-wide enforcement</td>
+<td>Real administrator private commands; ordinary sends accepted before/after and rejected 812 while muted. Group-wide 812 is distinct from member-mute 802</td>
+</tr>
+<tr>
+<td>Enrollment and automatic drawing</td>
+<td>Ordinary native sender enrolls twice but creates one entry; real one-minute deadline draws one eligible winner. Independent receiving account gets the verified group card and exact native mention; explicitly no real prize</td>
+</tr>
+<tr>
+<td>Name fallback</td>
+<td>Enrollment prefers verified roster card/profile, then envelope name/UID, fixing UID-only winner display when native envelopes contain no nickname</td>
+</tr>
+<tr>
+<td>Real schedule boundaries</td>
+<td>Future automatic mute and unmute both executed; actual ordinary sends establish mute 812/unmute 200. Mute boundary immediately recovered; unmute baseline established only about eight seconds before its boundary</td>
+</tr>
+<tr>
+<td>Card scans</td>
+<td>Complete live roster: 19 members, 13 eligible cards with suffix, five protected managerial roles and one managed bot. Both manual previews stopped; 13 unchanged items and zero writes. Successful scans now log completed/queued; failure categories remain fixed and payload-free</td>
+</tr>
+<tr>
+<td>Invitation scans</td>
+<td>Temporary revocation of tracking creator 23691273 correctly disabled tracking. Original generation-bound tracking restored, rewards remain disabled/rate zero; fresh scans and both cashier collectors are error-free without resetting history</td>
+</tr>
+</tbody>
+</table>
+<p>Production AI stayed enabled during both flood runs. Latency is measured from the
+threshold message's platform timestamp to sender-side native notifications, not
+dashboard acceptance. This establishes bounded flood responsiveness, not arbitrary
+peak capacity. Recalled FIFO messages are gated before additional AI/customer work,
+after review/customer-slot waits, and before sending a late model result. Six added
+race tests pass; this does not cancel already-submitted upstream model requests.
+Ordinary warning progression counts successful recalls; no separate warning text
+was asserted. The keyword test temporarily disabled semantic review to exercise the
+rule fallback and restored it; it does not verify real AI classification.
+Original roles, policies, send/action grants and activity defaults were restored;
+test windows closed, no active schedule remains, and the ordinary member is unmuted.
+Sanction counts, finished test lotteries and audits were retained. Automatic removal
+remains forbidden and ambiguous effects are never blindly retried.</p>
+<p>After the final hot reload, an ordinary probe was accepted (200), processed in the
+actual inbound ledger and self-recalled (200). Each accepted probe received only
+one cleanup submission. Final identity, policies, reply/send grants, connection
+timestamps and shared PID were unchanged. All 18 current databases passed integrity;
+20 historical invitation/settlement rows from the pre-deployment backup were retained.
+The first closing script allowed only five seconds for ordinary AI review, which
+actually completed in approximately 12 seconds. It timed out; the ledger was read
+before cleanup, and a final run with a 30-second observation deadline passed.
+This does not change the measured flood latencies or prove second-level ordinary
+AI response time.</p>
+<p>The first group test incorrectly required 802 although actual rejection was 812;
+cleanup succeeded and the corrected test passed. An earlier manual draw correctly
+used UID/native mention but its hardcoded-name assertion failed; the name fix and
+real automatic-draw rerun passed. The old card warning stored only <code>other</code>, so its
+original cause cannot be recovered. Better diagnostics and current healthy scans do
+not establish that historical root cause. Healthy collectors after an unavailable
+source warning do not guarantee permanent upstream availability.</p>
+<p>Private evidence: <code>data/temp/flood-live-1791491182</code> (final flood),
+<code>data/temp/flood-live-1791489203</code> (keyword progression),
+<code>data/temp/workflow-live-1791490179</code> (group enforcement),
+<code>data/temp/workflow-live-1791490626</code> (automatic draw),
+<code>data/temp/workflow-live-1791490724</code> (schedule boundaries),
+<code>data/temp/scan-health-1791491460</code> (roster/scans),
+<code>data/temp/final-wsl-check-1791492693</code> (final probe, policies and history).
+Backup <code>/opt/backups/wsl-workflows-20261008T201622Z</code> contains 18 consistent current
+database backups. The source archive in the earlier fast-lane backup is the candidate
+source, not a prior-running-source rollback package. Do not publish secrets.</p>
+<h3>Still Open</h3>
+<ul>
+<li>Independent adapter/moderation packaging, business/core decoupling, clean install,
+upgrade and rollback. The independent cashier does not establish these.</li>
+<li>Actual three-platform peaks, saturated-model customer history and command UX.
+CPU, memory, shared bus and model quotas still lack hard isolation; no pressure
+traffic was sent to other platforms.</li>
+<li>Live rejoining without restored/duplicate rewards; live invitations and unpaid
+departure voiding now passed. Actual removal
+requires an explicitly recoverable test target. There are no eligible banned/deleted
+ordinary members; protected managers are not substitutes.</li>
+<li>Real Access login, production already-settled registration and suspended read-only/
+recovery. An operator identity and genuinely settled batch are required; do not
+forge production identities or mark unsettled entries paid for acceptance.</li>
+<li>Unexpected network-fault schedule boundaries and official mobile chat-bubble
+observation. Isolated tests/native notifications do not prove official UI behavior.
+Revocation passed on October 8 at 21:38 UTC; controlled stop/recovery passed
+on October 9 at 02:24 UTC.</li>
+</ul>
+<h2>Live Ordinary-Account Flood Acceptance At 18:40–18:43 UTC</h2>
+<p>This section preserves pre-fix history; the follow-up above is the current status.</p>
+<p>On October 8, 2026, the owner's existing ordinary test account testfork (23691273)
+sent real messages in Dahai group 1143980 to moderator account 9798577. The sender
+was not a configured managed bot; the complete live roster confirmed ordinary-member
+status. No managed-bot test window or protected-role bypass was used. Only this
+account's AstrBot chat-admin identity was temporarily removed and exactly restored.
+This supersedes the following 17:46 UTC stage's untested live-flood limitation.</p>
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Live platform result</th>
+<th>Independent sender evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Five identical messages in approximately 0.55 seconds</td>
+<td>Five-minute automatic mute; all five recalls accepted</td>
+<td>Five exact native recall notifications; subsequent send rejected with code 802</td>
+</tr>
+<tr>
+<td>Eight different messages in approximately 0.92 seconds</td>
+<td>Fifteen-minute automatic mute; all eight recalls accepted</td>
+<td>Eight exact native recall notifications; subsequent send rejected with code 802</td>
+</tr>
+</tbody>
+</table>
+<p>All 13 notifications were checked against exact message ID, NIM team, sender,
+client message ID and original send timestamp, not substring matches or dashboard
+receipts alone. Production logs show mute acceptance preceding individual recalls.
+Both rounds were immediately unmuted. The second burst proved the first unmute
+effective; one final ordinary probe was accepted and found in the receiver inbox,
+proving the last unmute effective too. Its own cleanup recall returned 200, but no
+self-recall notification was received, so cleanup has acceptance evidence only and
+was not retried. No official mobile-client UI or disappearing-bubble screenshot
+was exercised.</p>
+<p><strong>Real-time performance acceptance remains failed:</strong> from the threshold message's
+platform timestamp to the first recall notification, delays were 44.769 and
+68.329 seconds; all notifications arrived after 45.566 and 69.648 seconds.
+Logs and scheduling code show same-member FIFO waiting behind earlier ordinary
+messages' AI review. The flood action itself does not use AI but is queued behind it.
+AI was not disabled to conceal this delay, and scheduling was not changed in this run.</p>
+<p>The original profile, both WSL policies and connection timestamps were verified
+unchanged; test windows are closed and shared PID 2110937 is unchanged. Integrity
+passed for 18 current WSL SQLite databases, excluding embedded migration backups.
+Real sanction counts and audit rows remain; none were reset or deleted.
+No service restart or Lajiaoliao/Telegram source/configuration change occurred.
+After strengthening notification checks, the full regression passed <strong>1671 tests,
+no skips</strong>, with three dependency deprecations; Ruff passed. This regression did
+not replay the live bursts. Seven added cases reject wrong notification routes
+or mismatched target/send receipts.</p>
+<p><code>scripts/check_wsl_flood_live.py</code> defaults to read-only preflight. Explicit
+<code>--confirm-live</code> sends real messages and causes real mutes; rerunning continues
+sanction counts and is not a routine health check.
+Private backup <code>/opt/backups/wsl-live-flood-20261008T184029Z</code> contains 18 consistent
+database backups. Evidence is under <code>data/temp/flood-live-1791484844</code> and
+<code>data/temp/flood-unmute-1791485576</code>; do not disclose credentials/configuration.</p>
+<h3>Gates At That Stage (Updated Above)</h3>
+<ul>
+<li>Independent adapter/business packaging, removal of adapter business dependencies
+and platform-specific core branches, plus independent install/upgrade/rollback.
+The standalone cashier is deployed, but the moderation extension is not independent.</li>
+<li>Fix AI review delaying flood response; test saturated-model command latency,
+customer conversation history and realistic mixed-platform peaks. CPU, memory
+and upstream quotas still lack hard isolation.</li>
+<li>Ordinary violation recalls/warnings and progression, live 60-minute escalation,
+eligible-member removal and sender-side group-wide mute enforcement. Existing
+isolated tests/accepted receipts do not prove these production effects.
+Automatic removal remains forbidden by design.</li>
+<li>Ordinary lottery enrollment/drawing, actual new/removed/rejoined members and
+invitation rewards; diagnose unavailable/permission-denied invitation sources.</li>
+<li>Real schedule boundaries and disconnect/revocation behavior, plus card-scan
+warning verification. Card edits and earlier automatic coverage already have
+live roster proof, not a guarantee of future scan stability.</li>
+<li>Authenticated Cloudflare Access operator flows, production &quot;this batch is already
+settled&quot; registration and suspended read-only/recovery behavior. The cashier
+records settlement status; wallets/transfers are not missing product features.</li>
+</ul>
+<h2>Keyword And Flood Supplement At 17:46 UTC</h2>
+<p>Only <code>wangshangliao_moderation</code> was hot-reloaded on <strong>2026-10-08 at 17:46:46 UTC</strong>.
+Shared PID 2110937, both WSL connection timestamps and 17 transport/global configuration
+hashes remained unchanged. Both empty WSL keyword lists received 18 defaults through
+revision-checked saves. The primary bot retained enabled automation; the other retained
+disabled automation. No group grants were added. Default high-risk keywords remain empty
+and automatic removal remains forbidden. The former &quot;Removal keywords&quot; label now reads
+&quot;High-risk keywords (no auto-kick)&quot; without renaming the persisted field.</p>
+<ul>
+<li>Plugin <code>keyword_defaults.json</code> seeds missing fields in new policies, preserving custom,
+legacy and explicitly empty lists. All 18 terms, normalization/evasion cases, reports,
+quotations, fraud warnings and ordinary recruitment/cashback wording were tested.</li>
+<li>Flood detection attempts a mute first, then recalls all authenticated burst messages,
+bypassing the ordinary three-recall grace period. A continuing burst receives one mute;
+new spam messages are still recalled. Frozen account/group/member/revision/NIM scope
+excludes unrelated or historical messages. Mute and individual recalls are recorded
+separately, with no blind retries of unknown outcomes.</li>
+<li>Isolated end-to-end tests use the production observer, real SQLite inbox, event gate,
+V1 dispatcher and native recall protocol construction. Platform mute/recall endpoints
+are test doubles, not live platform proof. Cases cover both thresholds, ordering,
+overlapping triggers/reloads, additional messages, 5/15/60-minute escalation, unknowns,
+cancellation, revocation/account changes, protected roles, forged evidence and audit totals.</li>
+<li>Final regression: <strong>1659 passed, no skips</strong>, including migrated-ledger compatibility
+against predeployment backup source; three dependency deprecations. Ruff, WSL frontend
+type checks and production build passed.</li>
+<li>Live reads, scoped access and unauthenticated 401 rejection passed. Both instances loaded
+the new flood tables. Integrity checks passed for 18 live SQLite databases. Flood tables
+were empty at verification; no human punishment was manufactured. Actual desktop
+1440px/mobile 390px iframes displayed the defaults/new label; all 12 tabs opened without
+JS errors or horizontal overflow.</li>
+</ul>
+<p>Private backup <code>/opt/backups/wsl-keywords-flood-20261008T174503Z</code> holds 17 consistent
+SQLite backups. Evidence is in <code>data/temp/keywords-flood-1791481606</code>; do not publish secrets.
+The preceding stage tested manual member mute/unmute, not automatic human flood sanctions.
+This supplement verified the isolated chain, but <strong>at that stage live ordinary-human
+flood punishment and recipient confirmation of all recalls remained untested</strong>.
+The subsequent live acceptance is recorded at the top of this page. Managed bots remain exempt and
+cannot substitute for this acceptance. Unknown platform receipts cannot establish complete
+recall success. Card-scan and unavailable invitation-source warnings appeared during reload;
+this stage does not claim those warnings were fixed.</p>
+<p>The migration was deployed to the running AstrBot service on October 8, 2026
+(Asia/Shanghai). Both accounts are online with plugin business policy active.</p>
+<p>Verified:</p>
+<ul>
+<li>1,355 automated tests passed; one skipped. Full dashboard build passed.</li>
+<li>Both account-bound imports match the stopped backup. Twenty historical baseline,
+credit or payment rows were preserved.</li>
+<li>Same-value live policy saves do not reconnect either account. Stale submissions
+return HTTP 409.</li>
+<li>The deployed iframe renders actual group names on desktop and mobile. All twelve
+tabs open without JavaScript errors or horizontal overflow.</li>
+<li>Live read APIs work. Unauthenticated access and non-collector audit access are rejected.</li>
+<li>Fourteen final live message cases passed across ordinary/admin private and group
+contexts. Group mentions stay on customer service. Admin private dialogue creates
+an actual lottery-settings preview; a revoked user cannot confirm its token.</li>
+<li>Temporary roles, send targets and test windows were restored. No production lottery
+was published or changed, no real payments or sanctions were executed.</li>
+<li>Isolated cashier browser/API tests passed, including search, batch confirmation,
+concurrent edits, contact isolation, revocation and mobile layout.</li>
+<li>Isolated recovery tests cover preserved prices, collector changes, rejoin invalidation
+and rollback on suspension.</li>
+<li>Both public domains redirect unauthenticated visitors to Cloudflare Access.
+The cashier service listens only on <code>127.0.0.1:6186</code>.</li>
+</ul>
+<p>Limitations:</p>
+<p>The main bot currently authorizes proactive sending only to a private target, not
+production groups. Publishing a group lottery is therefore blocked by configuration.
+Live publication, joining and drawing require explicit authorization for a designated
+test group. Real members joining during suspension and invitations across a collector
+change have not been exercised on the platform; temporary database tests are not a
+substitute. Real sanctions, mass card changes, all-member mutes and payments were not
+performed. Access login under another person's email identity was not tested.</p>
+<p>The private stopped backup is <code>/opt/backups/wsl-predeploy-20261008-stopped</code>.
+The post-cleanup latest-policy export is <code>/opt/backups/wsl-latest-policy-20261008.json</code>.
+Never publish these files or restore old ledgers over new financial history.</p>
+<h2>Subsequent Authorized Group Test</h2>
+<p>The user subsequently designated the Dahai group for a temporary grant/revoke test.
+Twenty-one live cases passed: role grants, natural-language preview and confirmation,
+test-lottery publication, bot-account enrollment rejection, revoked-role denials,
+public query access, group-capability denials, proactive-send revocation, regrant and
+lottery cancellation. This supersedes the earlier untested-publication limitation.</p>
+<p>Two clearly labelled no-prize test lotteries were published and cancelled with zero
+participants. Four start/cancel notices were accepted and found in the receiving test
+account's inbox; none entered automatic recall. Real-member enrollment and drawing,
+sanctions, all-member mutes and payment were not exercised.</p>
+<p>An initial model-added prize prefix failed exact validation before publication; original
+values were restored and the explicit-field retry passed. Final checks verified original
+lottery parameters, invitation rate, both business policies, role and test windows were
+restored without reconnecting. Temporary group proactive authorization is not retained.
+Cancelled test rows and audit history remain intact.</p>
+<h2>Five Explicitly Authorized Platform Actions</h2>
+<p>A subsequent user-authorized run in the Dahai group published a labelled acceptance
+announcement and verified its ID/content in the platform notice list. Group mute and
+unmute were submitted through admin private commands and both accepted, with the
+toggle sequence lasting approximately 2.26 seconds. There is no independent mute-state
+readback in this integration, so these are accepted, not verified, results.</p>
+<p>The ordinary member testfork (23691273) had their group card changed to a test value
+and restored. Both writes were verified against complete member rosters.
+The cleanup task was actually created and executed but had zero eligible targets.
+The two banned accounts were group administrators and correctly protected. No member
+was removed, and actual platform removal is not claimed as verified.</p>
+<p>Original capability grants, administrator identity and test windows were restored.
+The original card was restored. The labelled announcement and operation audit remain.
+No payments or normal-member removals were performed.</p>
+<h2>Automatic Card Coverage</h2>
+<p>At the user's subsequent request, automatic normalization was enabled for the Dahai
+group with suffix <code>(大海传媒)</code> and is intentionally left enabled. The actual periodic
+worker ran, without substituting a manual bulk task. Of 19 roster members, all 13
+eligible ordinary members matched their target cards: 12 changed and verified,
+one already matching. Five owners/admins and one managed bot were excluded.
+The job completed without unresolved results or readback mismatches and without
+reconnecting the bot.</p>
+<h2>Subsequent Source Acceptance</h2>
+<p>Later V1 recall/warning integration, transactional manual schedule overrides,
+logical-reply account binding and the <strong>1574-test</strong> regression are described in
+<a href="wangshangliao-refactor-en.html#recall-and-warning-boundary-completion">refactor progress</a>.
+The cashier's isolated desktop/mobile flows and deployed management read-only
+checks passed. These source changes were not loaded by a production restart
+and must not be combined with the earlier deployment evidence as one release.
+Strict backup policy comparison failed after current settings diverged;
+independent packaging and full production acceptance remain incomplete.</p>
+<p>For later runtime-only checks, <code>scripts/check_wsl_deployment.py --runtime-only</code>
+performs read-only live API/authentication checks. It does not validate migration
+or historical records, cannot use <code>--hot-save</code>, and does not replace strict
+<code>--backup</code> comparison.</p>
+<h2>Production Source Load On October 8 UTC</h2>
+<p>The requested release was loaded by restarting shared <code>astrbot.service</code> at
+<strong>2026-10-08 16:35:49 UTC</strong> (2026-10-09 00:35:49 in Asia/Shanghai).
+This supersedes the previous stage's unloaded-source status, not its historical
+evidence. Other platforms briefly reconnect during this shared-service restart.
+Private backup <code>/opt/backups/wsl-prod-20261009-bjt</code> contains 17 consistent SQLite
+backups, configuration, native credentials and a current on-disk source archive.
+The archive does not establish a complete rollback image of the former process's
+in-memory code. No old configuration or ledger replaced current production data.</p>
+<p>Verified in this stage:</p>
+<ul>
+<li><strong>1578 WSL + 14 coexistence tests = 1592 passed</strong>, no skips; three dependency
+deprecations. A separate 75-test shared restart preflight also passed; its
+coexistence cases overlap and are not added to this total.</li>
+<li>Persisted policy payloads now compare semantically against the stopped
+plugin-policy snapshot, including already-migrated deployments. All saved
+configs and 20 historical financial/invitation baseline rows were preserved.
+Backup/live database integrity passed. Same-value hot saves did not reconnect;
+stale revisions returned 409.</li>
+<li>The labelled Dahai announcement was verified by platform notice ID/content.
+Group mute/unmute were accepted, approximately 2.30 seconds apart in the test
+sequence. Member 23691273 was muted for one minute then immediately unmuted;
+both accepted, sequence approximately 2.29 seconds.</li>
+<li>The member's <code>te(大海传媒)</code> card was changed to a labelled test value and
+restored. Both writes and final readback were verified against complete rosters.
+Cleanup was preview-only with zero eligible targets; no removal submitted.</li>
+<li>The second read-only/admin dialogue matrix passed <strong>14/14</strong>. The corrected
+grant/revoke activity matrix passed <strong>21/21</strong>. Three labelled no-prize lotteries
+across both activity attempts were cancelled, with zero participants; six
+start/cancel notices were received and excluded from automatic recall.</li>
+<li>Future schedule preview/confirmation, dashboard pause, stale-version 409,
+private resume/pause, revoked confirmation and deletion were checked. No timed
+execution occurred; the deleted tombstone and audit history remain intentionally.</li>
+<li>Actual group-command reply recalls were accepted. The deployed desktop/mobile
+iframe opened all 12 tabs before and after restart without JS errors/overflow.
+Isolated cashier browser/API checks passed; three registrations used only a
+temporary ledger, not production payments.</li>
+<li>Original role, grants, sender targets and test windows were restored.
+Previously enabled automatic card normalization remains enabled.</li>
+</ul>
+<p>The first ordinary private dialogue failed the 180-second acceptance limit.
+Trace evidence shows the <code>Gemini/gemini-3.8-flash</code> request took approximately
+196.41 seconds. It finished after the test window closed; managed-peer protection
+blocked the late reply. The original message was not replayed. A fresh second
+run passed, but this does not establish a fix for model latency.
+The first activity attempt's blanket capability revocation conflicted with
+enabled automatic cards and was correctly rejected. The script now preserves
+card grants while revoking announcement/group-mute capabilities.
+The schedule harness initially expected physical row deletion; independent
+readback confirmed the designed <code>deleted</code> state, zero active rules/executions
+and retained audit history.</p>
+<p>A further normal service restart at 16:55:37 UTC was not initiated by this
+execution. WSL source hashes still match the release manifest; subsequent checks
+found both WSL/Lajiaoliao accounts online and all 11 tasks running. Telegram
+logged timeout retries while reconnecting, with none in the later checked period.
+Running tasks do not prove live Telegram delivery or peak capacity.
+No Lajiaoliao/Telegram source or configuration was edited.</p>
+<p>Still unverified at that stage in production: human lottery enrollment/drawing, new-member
+invitation/rejoin flows, automatic violation recalls/warnings/progressive sanctions,
+real removal, cash payments, timed boundaries, authenticated Access operator flows
+and realistic mixed-platform peaks. Mute results have no independent state
+readback and remain accepted, not verified. Independent packaging and hard
+CPU/memory isolation are not delivered.</p>
+<p>Private evidence is under <code>data/temp/capabilities-1791477449</code>,
+<code>migration-dialogue-1791477598</code> (first failure), <code>migration-dialogue-1791478276</code>,
+<code>group-auth-1791478405</code> (incomplete first attempt), <code>group-auth-1791478495</code>
+and <code>schedule-acceptance-1791478603</code>. Do not publish credentials or conversations.</p>
+</body></html>

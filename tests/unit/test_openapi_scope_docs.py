@@ -28,11 +28,27 @@ def test_public_openapi_is_filtered_by_supported_scope() -> None:
     assert "/api/v1/commands" not in spec["paths"]
     assert "/api/v1/files/tokens/{file_token}" not in spec["paths"]
     assert "/api/v1/stats/versions" not in spec["paths"]
+    assert "/api/v1/plugins/runtime/catalog" not in spec["paths"]
+    assert "/api/v1/plugins/runtime/status" not in spec["paths"]
+    assert "/api/v1/plugins/runtime/recover" not in spec["paths"]
 
     for methods in spec["paths"].values():
         for operation in methods.values():
             assert operation["x-astrbot-scope"] in PUBLIC_OPEN_API_SCOPES
             assert "**Required scope:**" in operation["description"]
+
+
+def test_component_runtime_contract_requires_dashboard_jwt() -> None:
+    spec = load_yaml(SPEC_PATH)
+    for path, method in [
+        ("/api/v1/plugins/runtime/catalog", "get"),
+        ("/api/v1/plugins/runtime/status", "get"),
+        ("/api/v1/plugins/runtime/recover", "post"),
+    ]:
+        operation = spec["paths"][path][method]
+        assert operation["security"] == [{"BearerAuth": []}]
+        assert "x-astrbot-scope" not in operation
+        assert "developer API keys are not accepted" in operation["description"]
 
 
 def test_public_openapi_documents_sensitive_subscopes() -> None:

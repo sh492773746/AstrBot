@@ -11,6 +11,8 @@ from astrbot.core.platform.sources.wangshangliao.adapter import WangshangliaoAda
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
+pytestmark = pytest.mark.usefixtures("wsl_active_policy")
+
 
 @pytest.mark.asyncio
 async def test_logical_segments_retries_and_conflicts(tmp_path):

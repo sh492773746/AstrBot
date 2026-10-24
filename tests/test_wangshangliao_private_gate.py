@@ -13,8 +13,11 @@ from astrbot.core.platform.astrbot_message import AstrBotMessage, MessageMember
 from astrbot.core.platform.message_type import MessageType
 from astrbot.core.platform.platform_metadata import PlatformMetadata
 from astrbot.core.platform.sources.wangshangliao.event import WangshangliaoEvent
+from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from astrbot.core.platform.sources.wangshangliao.test_window import TestWindow as Window
 from astrbot.core.star.filter.command import CommandFilter
+
+pytestmark = pytest.mark.usefixtures("wsl_command_classifier")
 
 
 @pytest.mark.asyncio
@@ -48,11 +51,14 @@ async def test_gate_before_plugins_with_replies_disabled(
     msg.message_str = text
     msg.message = [Plain(text)]
     platform = SimpleNamespace(
+        account="1",
         config={"reply_private": False, "reply_groups": {"5": False}},
         meta=lambda: PlatformMetadata("wangshangliao", "test", id="test"),
         send_reply_text=AsyncMock(),
     )
     event = WangshangliaoEvent(msg, platform, False)
+    if admin and private:
+        event.actor_identity = ActorIdentity("1", "2", "1002", "2")
     handler = SimpleNamespace(
         event_filters=[CommandFilter("plugin", alias={"alias"})], extras_configs={}
     )
@@ -116,7 +122,7 @@ async def test_managed_sender_denial_is_bounded_to_admitted_command(
     msg = AstrBotMessage()
     msg.type = MessageType.FRIEND_MESSAGE
     msg.self_id = "1"
-    msg.session_id = "1/private/2/peer"
+    msg.session_id = "1/private/2/OTAy"
     msg.group_id = ""
     msg.message_id = "message"
     msg.sender = MessageMember("2", "Member")
@@ -131,12 +137,14 @@ async def test_managed_sender_denial_is_bounded_to_admitted_command(
         meta=lambda: PlatformMetadata("wangshangliao", "test", id="test"),
         send_reply_text=AsyncMock(),
     )
-    sender = SimpleNamespace(account="2", stopping=asyncio.Event())
+    sender = SimpleNamespace(account="2", nim_account="902", stopping=asyncio.Event())
     window = Window(platform, sender, [], ["private_commands"], [], 300, 1)
     if window_state != "unadmitted":
         assert (
             window.admit(
-                "private/2/peer", "message", {"sender": "2", "text": msg.message_str}
+                "private/2/OTAy",
+                "message",
+                {"sender": "2", "transport_peer": "902", "text": msg.message_str},
             )
             == "private_commands"
         )
@@ -155,7 +163,8 @@ async def test_managed_sender_denial_is_bounded_to_admitted_command(
     if expected:
         call = platform.send_reply_text.await_args
         assert call.args[2] == "无权限"
-        assert call.kwargs == {"test_mid": "message"}
+        assert call.kwargs["test_mid"] == "message"
+        await call.kwargs["authorize"]()
         assert window.replies == {
-            ("private/2/peer", "message"): "1/private/2/peer/message/0"
+            ("private/2/OTAy", "message"): "1/private/2/OTAy/message/0"
         }

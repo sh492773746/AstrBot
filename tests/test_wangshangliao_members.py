@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from astrbot.core.platform.sources.wangshangliao.adapter import WangshangliaoAdapter
+from astrbot.core.platform.sources.wangshangliao.business import BusinessError
+from astrbot.core.platform.sources.wangshangliao.directory import group_directory
 
 
 @pytest.mark.asyncio
@@ -115,3 +117,56 @@ async def test_directory_conflicting_owner_evidence():
     result = await group_directory(client, "1")
     assert result["groups"][0]["role"] == "unknown"
     assert result["groups"][0]["role_reason"] == "role_conflict"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "label,number",
+    [
+        ("secondary_security_code_required", 1400),
+        ("reauth_required", 401),
+        ("rate_limited", 429),
+    ],
+)
+@pytest.mark.parametrize("failure_page", [0, 1, 2])
+async def test_directory_stops_on_account_wide_security_failure(
+    label, number, failure_page
+):
+    failure = BusinessError(label, number)
+    responses = [
+        {
+            "owner": [],
+            "member": [{"groupId": 7}, {"groupId": 8}, {"groupId": 9}],
+        },
+        {"groupMemberInfo": [{"userId": 1, "groupRole": "GROUP_ROLE_ADMIN"}]},
+    ]
+    client = SimpleNamespace(
+        request=AsyncMock(side_effect=[*responses[:failure_page], failure])
+    )
+
+    with pytest.raises(BusinessError) as error:
+        await group_directory(client, "1")
+
+    assert error.value is failure
+    assert error.value.number == number
+    assert client.request.await_count == failure_page + 1
+
+
+@pytest.mark.asyncio
+async def test_directory_keeps_group_local_failure_distinct():
+    client = SimpleNamespace(
+        request=AsyncMock(
+            side_effect=[
+                {"owner": [], "member": [{"groupId": 7}, {"groupId": 8}]},
+                BusinessError("business_rejected", 403),
+                {"groupMemberInfo": [{"userId": 1, "groupRole": "GROUP_ROLE_ADMIN"}]},
+            ]
+        )
+    )
+
+    result = await group_directory(client, "1")
+
+    assert result["groups"][0]["role"] == "unknown"
+    assert result["groups"][0]["role_reason"] == "member_request_failed"
+    assert result["groups"][1]["role"] == "admin"
+    assert client.request.await_count == 3

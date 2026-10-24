@@ -241,6 +241,9 @@
     apiPost(endpoint, body) {
       return makeRequest("api:post", { endpoint, body });
     },
+    verifyHuman() {
+      return makeRequest("verification:yidun");
+    },
     async upload(endpoint, file) {
       if (!file || typeof file.arrayBuffer !== "function") {
         throw new Error("Missing uploaded file payload.");

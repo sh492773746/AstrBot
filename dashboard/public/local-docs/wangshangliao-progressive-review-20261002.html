@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>历史递进禁言与撤回验收</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>递进禁言与撤回验收</h1>
+<blockquote>
+<p>历史证据（2026-10-20校注）：不代表今天全部功能通过，也不授权重放旧处罚。
+当前规则和权限见<a href="wangshangliao-index.html">文档目录</a>。</p>
+</blockquote>
+<p>日期：2026-10-02。行为说明见<a href="wangshangliao-content-rules.html">内容审核与处罚</a>。</p>
+<p>2026-10-03用户变更：当前接收机器人关闭全部自动踢出，并启用 <code>manual_kick_only</code>。
+AI及自动规则不再踢群，后续违规只撤回＋最多60分钟禁言。管理员手动私聊确认保留；
+以下第三次/第四次自动踢出的内容为历史版本记录。</p>
+<p>后续调整：用户改为先禁言5、15、60分钟，第四次确认违规才踢出。下方早期
+部署记录中的“第三次立即踢出”描述的是当时版本，现已被新规则替代。
+新执行器要求三次已受理禁言及另一条新违规消息；第三条重放、重启或禁言到期
+不会触发踢出。历史计数不清零，既有未知处罚仍保留隔离。
+此次调整后回归1135项通过、1项跳过，前端65项通过；服务重启后两个旺商聊
+实例均在线，递进模式及原群级自动踢出开关保留，没有提交真人处罚。</p>
+<h2>范围</h2>
+<ul>
+<li>新增实例级 <code>moderation.progressive_mute</code>，默认关闭，开启必须同时启用撤回。</li>
+<li>AI语义审核只判定违规及证据，执行器固定按5、15、60分钟递增。</li>
+<li>每个有效违规事件分别尝试撤回和禁言；撤回失败不跳过仍有授权的禁言。</li>
+<li>踢出继续由逐群 <code>auto_kick</code> 及动作授权控制，第三次禁言受理即提交。</li>
+<li>禁言和踢出关键词接入语义审核及故障兜底；不自动生成词表。</li>
+<li>模型无工具，当前消息证据必须匹配；明显举报引用保守处理。</li>
+<li>管理页及管理员自然语言草案使用同一校验，不能单独开启递进禁言而关闭撤回。</li>
+</ul>
+<h2>已验证</h2>
+<ul>
+<li>关键词、内置业务规则及AI违规走相同递进链路。</li>
+<li>重复并发消息只执行一次，重启不清零累计，关闭踢出后禁言封顶60分钟。</li>
+<li>撤回拒绝、未知或异常仍尝试禁言；禁言拒绝不计数，未知停止后续升级。</li>
+<li>执行中撤权、关自动化、换账号或目标映射改变时停止后续动作。</li>
+<li>群主、平台管理员、目录不完整、过期及时间未知消息不处罚。</li>
+<li>审计分别显示禁言时长、禁言回执与原消息撤回回执。</li>
+<li>旺商聊后端全量回归1134项通过、1项跳过；新增AI草案校验只预览不直接写配置。</li>
+<li>前端65项测试通过；插件页1280、390、320像素宽度无页面横向溢出。</li>
+<li>页面保存测试使用拦截的模拟接口，不向生产保存测试关键词或权限。</li>
+</ul>
+<h2>部署与限制</h2>
+<p>服务已重启并检查在线。只在现有接收机器人 <code>wangshangliao_3cf3b038</code>
+开启递进模式，大海兼职群 <code>1143980</code> 保留原有第三次禁言后自动踢出。
+保存前备份完整机器人配置；回读除新开关外，仅出现平台校验补齐的空
+<code>ai_routes</code> 默认值，不改变模型路由。权限、管理员、人格、知识库和词表未更改。</p>
+<p>本轮没有向真实群员发送违规测试消息，也没有实际禁言或踢出真人。
+离线故障注入与界面验收不能代替平台动作成功回执；管理页不能把未知显示为成功。
+开启新模式不清理历史受理计数，已有本轮计数的成员会沿用对应升级档位。</p>
+<h2>指定账号实发复核</h2>
+<p>同日按用户要求，使用 <code>wangshangliao_0acde7ec</code>（账号31846829）向
+大海兼职群发送三条消息，仅打开180秒、3条入站的群命令/群规则测试窗口，
+不修改机器人配置、管理员或处罚计数。脚本为
+原<code>scripts/check_wsl_progressive_live.py</code>（2026-10-24退役）；
+当前固定三账号验收使用<code>scripts/check_wsl_flood_cycle_live.py</code>。</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>上游消息ID</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>排名</td>
+<td>2178890399857247225</td>
+<td>入站处理完成，回复2178890399857247226受理，定时撤回回执accepted</td>
+</tr>
+<tr>
+<td>带专用测试标记的举报引用</td>
+<td>2178890399857247258</td>
+<td>入站处理完成，无处罚</td>
+</tr>
+<tr>
+<td>带专用测试标记的示例广告</td>
+<td>2178890399857247260</td>
+<td>规则识别external_promotion，记录review_only，未提交处罚</td>
+</tr>
+</tbody>
+</table>
+<p>发现现有群规则测试窗口跳过语义审核，且执行器仍保护已接入机器人账号。
+因此本次没有验证真实5/15/60分钟禁言与第三次踢出，新增处罚操作为0，
+不能把测试消息入站或离线测试通过称作完整平台验收。没有绕开此保护。
+测试窗口已关闭，两份机器人配置与测试前完全一致。</p>
+<p>另外使用当前 <code>Gemini/gemini-3.8-flash</code> 真正调用审核模型：
+正常咨询、广告、举报引用、同一发言者上下文、其他发言者上下文、提示注入，
+六项均符合预期，单项约2.5至6秒。该验证使用合成消息及临时账本，
+不向平台提交撤回、禁言或踢出，不能替代端到端处罚验收。</p>
+</body></html>

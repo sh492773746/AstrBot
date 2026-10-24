@@ -1,9 +1,67 @@
+import asyncio
+import json
+import sqlite3
+from contextlib import closing
 from unittest.mock import AsyncMock
 
 import pytest
 
 from astrbot.core.platform.sources.wangshangliao import moderation
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
+
+
+@pytest.mark.asyncio
+async def test_revocation_while_reserving_transport_operation_stops_send(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(moderation, "instance_dir", lambda _: tmp_path)
+    with closing(moderation.operation_database("bot")):
+        pass
+    blocker = sqlite3.connect(tmp_path / "moderation.sqlite3")
+    entered = asyncio.Event()
+    authorized = True
+    checks = 0
+
+    def guard():
+        nonlocal checks
+        checks += 1
+        if not authorized:
+            raise ProtocolError("revoked")
+        if checks == 1:
+            blocker.execute("BEGIN IMMEDIATE")
+            entered.set()
+
+    client = AsyncMock()
+    client.fields = [0, 0, 0, "1"]
+    client.request.return_value = {
+        "owner": [{"groupId": 5, "me": {"role": "GROUP_ROLE_ADMIN"}}]
+    }
+    work = asyncio.create_task(
+        moderation.execute(
+            client, "bot", "1", "contended", "mute_all", 5, authorize=guard
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.sleep(0.03)
+        assert not work.done()
+        authorized = False
+        blocker.rollback()
+        with pytest.raises(ProtocolError, match="revoked"):
+            await asyncio.wait_for(work, 3)
+        client.request.assert_awaited_once_with("/v1/group/get-group-list", {"v": "0"})
+        result = blocker.execute(
+            "SELECT result FROM operations WHERE id='contended'"
+        ).fetchone()
+        assert result is not None
+        evidence = json.loads(result[0])
+        assert evidence["status"] == "rejected"
+        assert evidence["submitted"] is False
+    finally:
+        blocker.rollback()
+        blocker.close()
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -98,7 +156,9 @@ async def test_mute_minutes_reach_native_request_and_idempotency(
     assert result["status"] == "accepted"
     assert result["minutes"] == minutes
     client.request.assert_awaited_with(
-        "/v1/group/set-member-mute", {"groupId": 1, "userId": 2, "min": minutes}
+        "/v1/group/set-member-mute",
+        {"groupId": 1, "userId": 2, "min": minutes},
+        authorize=None,
     )
     assert (
         await moderation.execute(

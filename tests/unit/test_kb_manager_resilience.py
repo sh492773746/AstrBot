@@ -55,6 +55,7 @@ def mock_kb_db():
     db.get_db = MagicMock()
     db.list_kbs = AsyncMock(return_value=[])
     db.get_kb_by_id = AsyncMock()
+    db.delete_kb_by_id = AsyncMock()
     return db
 
 
@@ -303,3 +304,47 @@ async def test_ensure_vec_db_sets_init_error_on_failure(
         # Verify: init_error should NOT be cleared (still has previous error)
         # Note: _ensure_vec_db doesn't set init_error; that's done by the caller
         assert helper.init_error is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "files", "metadata"])
+async def test_delete_kb_cleans_metadata_and_removes_cache_only_on_success(
+    stub_provider_manager_module, mock_kb_db, mock_knowledge_base, failure
+):
+    from astrbot.core.knowledge_base.kb_mgr import KnowledgeBaseManager
+
+    helper = types.SimpleNamespace(kb=mock_knowledge_base, delete_vec_db=AsyncMock())
+    kb_id = mock_knowledge_base.kb_id
+    manager = KnowledgeBaseManager.__new__(KnowledgeBaseManager)
+    manager.kb_db = mock_kb_db
+    manager.kb_insts = {kb_id: helper, "other-kb": object()}
+    if failure == "files":
+        helper.delete_vec_db.side_effect = RuntimeError("files unavailable")
+    elif failure == "metadata":
+        mock_kb_db.delete_kb_by_id.side_effect = RuntimeError("metadata unavailable")
+    if failure:
+        with pytest.raises(RuntimeError, match="unavailable"):
+            await manager.delete_kb(kb_id)
+        assert manager.kb_insts[kb_id] is helper
+    else:
+        assert await manager.delete_kb(kb_id)
+        assert kb_id not in manager.kb_insts
+    helper.delete_vec_db.assert_awaited_once()
+    if failure == "files":
+        mock_kb_db.delete_kb_by_id.assert_not_awaited()
+    else:
+        mock_kb_db.delete_kb_by_id.assert_awaited_once_with(kb_id)
+    assert "other-kb" in manager.kb_insts
+
+
+@pytest.mark.asyncio
+async def test_delete_unknown_kb_does_not_delete_any_metadata(
+    stub_provider_manager_module, mock_kb_db
+):
+    from astrbot.core.knowledge_base.kb_mgr import KnowledgeBaseManager
+
+    manager = KnowledgeBaseManager.__new__(KnowledgeBaseManager)
+    manager.kb_db = mock_kb_db
+    manager.kb_insts = {}
+    assert not await manager.delete_kb("not-a-kb")
+    mock_kb_db.delete_kb_by_id.assert_not_awaited()

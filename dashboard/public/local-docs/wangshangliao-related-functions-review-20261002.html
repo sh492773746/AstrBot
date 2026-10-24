@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>历史时间与活动链路检查</title><style>
+body{font:16px/1.75 system-ui,"WenQuanYi Zen Hei",sans-serif;max-width:900px;margin:32px auto;padding:0 22px;color:#202633;overflow-wrap:anywhere}
+nav{display:flex;gap:16px;flex-wrap:wrap;border-bottom:1px solid #ddd;padding-bottom:16px}a{color:#245bcc}button{font:inherit;cursor:pointer}
+h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f4f8;padding:16px;border-radius:8px}code{overflow-wrap:anywhere}
+table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
+@page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
+</style></head>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊时间与活动关联链路检查</h1>
+<blockquote>
+<p>历史检查（2026-10-20校注）：下文“当前”指原检查日期；现行实现及未通过项
+见<a href="wangshangliao-index.html">文档目录</a>，不从历史脚本结果推断线上状态。</p>
+</blockquote>
+<p>检查日期：2026-10-02。</p>
+<h2>范围</h2>
+<p>从手机端消息内层 <code>created_at=0</code> 导致报名误报过期的问题出发，
+检查原生消息时间、固定命令与 AI 对话入口、自动审核、抽奖报名与开奖、
+邀请奖励、每日排名、定时规则和机器人回复撤回。</p>
+<h2>本轮修复</h2>
+<table>
+<thead>
+<tr>
+<th>问题</th>
+<th>修复</th>
+<th>主要回归</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>旧关键词处罚分支不验证消息时间，补收历史消息可能增加警告或处罚次数</td>
+<td>与即时对话入口共用时间检查，未知时间、超过五分钟、超前超过五秒均忽略；服务端时间优先，不使用本地接收时间</td>
+<td>无效、过期、未来、零值、非有限数、服务端时间优先；拒绝时不创建处罚记录或调用处罚</td>
+</tr>
+<tr>
+<td>关键词处罚对不完整成员目录以及查询期间撤权的检查不足</td>
+<td>要求完整目录；目录查询后重新检查动作权限和自动化开关</td>
+<td>目录不完整、撤销动作授权、关闭自动化均不警告或处罚</td>
+</tr>
+<tr>
+<td>历史私信、固定命令和群内唤醒可能重新进入对话处理</td>
+<td>过期或时间未知的固定命令、私信和群内唤醒静默终止，不进入命令服务或 AI；正常新消息仍按原权限路由</td>
+<td>开启抽奖、自然语言创建、确认码、普通私信、群禁言、排名和群内 AI 唤醒的旧消息隔离</td>
+</tr>
+<tr>
+<td>倒计时结束但后台尚未完成开奖时，聊天状态仍为“报名中”</td>
+<td>状态查询显示“报名已截止，等待开奖”；不提前修改真实开奖状态</td>
+<td>截止前、截止点、开奖后；成员核验跨过截止时间不得报名</td>
+</tr>
+<tr>
+<td>报名过期、名额满等反馈误用庆祝标记</td>
+<td>只有实际报名成功使用庆祝标记；重复报名为信息提示，失败为警示</td>
+<td>过期、截止、名额满、邀请门槛、身份未核验、机器人参赛和重复报名</td>
+</tr>
+</tbody>
+</table>
+<h2>已检查并保留的保护</h2>
+<ul>
+<li>抽奖：同一成员只登记一次；已开奖/未知结果不重抽；开奖时剔除离群、封禁、身份变化及机器人账号。报名查询使用冻结的本期参数，不把下期设置套到本期。</li>
+<li>邀请奖励：只按平台可验证的入群归属计奖；待审核不计奖；现有成员建立基线；重复进出不重复计奖；新费率不改已记账或待核验记录的费率；暂停后重新启用重建基线。</li>
+<li>每日排名：北京时间日界线；按消息身份去重；命令、机器人、时间未知以及已确认违规消息不计入；频率和重复内容限制保留。</li>
+<li>独立审核：客服人格、知识库和群管工具不进入违规审核调用；模型异常继续走规则兜底；旧内容审核分支已有历史时间保护。</li>
+<li>定时规则：重启遇到已错过边界、撤权或结果未知时暂停，不盲目补执行群禁言。</li>
+<li>撤回：抽奖开始、取消、中奖名单以及报名和抽奖状态反馈保留；排名等其他已配置功能回复仍按原来的二十秒撤回策略。同步修正管理页架构表中的例外说明。</li>
+</ul>
+<h2>验证边界</h2>
+<p>本轮最终验证：旺商聊 Python 回归 1072 项通过、1 项跳过；前端 Node 测试 65 项通过；
+管理页类型检查与生产构建通过；本轮修改的 Python 实现及相关主要测试通过 Ruff 检查。</p>
+<p>使用本地真实实现的自动化回归与模拟平台返回测试故障边界；线上仅只读核对活动账本和运行状态。
+没有在真实群中补报名、重开活动、重发奖项、发放奖励、禁言或踢人，也没有改变管理员授权和活动数值。
+此检查不等于所有第三方插件、上游平台故障或完整生产负载的无缺陷保证。</p>
+</body></html>

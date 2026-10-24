@@ -16,7 +16,12 @@ const isEnglish = computed(() => !props.locale.startsWith("zh"));
 const t = (zh: string, en: string) => (isEnglish.value ? en : zh);
 const section = ref<"private" | "lottery" | "invites">("private");
 const privateFlow = ref<
-  "admin-command" | "admin-ai" | "member-cards" | "customer-service" | "denied-command"
+  | "admin-command"
+  | "admin-ai"
+  | "group-ai"
+  | "customer-service"
+  | "own-invites"
+  | "denied-command"
 >("admin-command");
 const activity = ref<"lottery" | "invites">("lottery");
 
@@ -30,8 +35,8 @@ const privateFlows = computed(() => [
       "Exact command → permission check → direct execution; AI is bypassed",
     ),
     condition: t(
-      "发送者在 AstrBot 管理员名单中；私聊回复已开启。",
-      "Sender is an AstrBot admin; private replies are enabled.",
+      "发送者已获本群管理授权，机器人具备群管理权限。",
+      "Sender has this group's management grant and the bot has native admin rights.",
     ),
     channel: t("管理员私聊 · 固定命令", "Admin DM · Fixed command"),
     messages: [
@@ -48,114 +53,121 @@ const privateFlows = computed(() => [
       {
         from: "bot",
         name: t("机器人", "Bot"),
-        text: t("当前已选群：大海兼职群", "Selected group: Sample Group"),
+        text: t("当前已选群：大海兼职群\n可直接发送「规则」「禁言名单」「关键词回复」「定时发言」；不用先选菜单。", "Selected group: Sample Group. Send the relevant command directly; no menu navigation required."),
       },
-      { from: "admin", name: t("管理员", "Admin"), text: "禁言 2 3" },
+      { from: "admin", name: t("管理员", "Admin"), text: "定时状态" },
       {
         from: "bot",
         name: t("机器人", "Bot"),
-        text: t("禁言已受理：3 分钟。", "Mute accepted for 3 minutes."),
+        text: t("当前没有启用的每日禁言计划。", "No daily mute schedule is active."),
       },
     ],
   },
   {
     id: "admin-ai" as const,
-    label: t("管理员 AI 管理", "Admin AI management"),
+    label: t("管理员只读咨询", "Manager read-only consultation"),
     icon: ShieldCheck,
     route: t(
-      "普通文字 → AI 对话 → 白名单管理工具 → 再校验管理员身份",
-      "Natural language → AI → allowlisted management tool → admin recheck",
+      "/chat → 只读答疑 → 用户自己使用固定命令",
+      "/chat → read-only guidance → caller uses fixed commands",
     ),
     condition: t(
-      "还需当前人格启用 wsl_private_management，模型支持工具调用。",
-      "The active persona must allow wsl_private_management and the model must support tool calling.",
+      "后台独立选择AstrBot配置、人格和模型，保留只读安全限制，不继承工具；预算门禁未通过时暂停调用，保存配置不会自动开放。",
+      "Dashboard selects profiles, personas and models separately; read-only safety remains, with no tools; unverified budget gates block calls and saving a profile never opens them.",
     ),
-    channel: t("管理员私聊 · AI 管理", "Admin DM · AI management"),
+    channel: t("管理员私聊 · 只读咨询", "Manager DM · Read-only consultation"),
     messages: [
       {
         from: "admin",
         name: t("管理员", "Admin"),
-        text: t("我不会设置，你能帮我做什么？", "I am not sure how to configure things. What can you help with?"),
+        text: "/chat",
       },
       {
         from: "bot",
         name: t("机器人", "Bot"),
         text: t(
-          "我可以带你设置抽奖、邀请奖励和群管理规则。你想先做哪一项？",
-          "I can guide you through lotteries, invite rewards and group rules. Which would you like to start with?",
+          "公共AI尚未核实供应商硬预算，暂未开放。固定命令仍可使用。",
+          "AI is unavailable until the supplier hard budget is verified. Fixed commands remain available.",
         ),
       },
       {
         from: "admin",
         name: t("管理员", "Admin"),
-        text: t("先做抽奖吧", "Start with a lottery"),
-      },
-      {
-        from: "bot",
-        name: t("机器人", "Bot"),
-        text: t("可以，想在哪个群开？", "Sure. Which group is it for?"),
-      },
-      {
-        from: "admin",
-        name: t("管理员", "Admin"),
-        text: t(
-          "帮我看看大海兼职群有哪些成员",
-          "Show me the members in Sample Group",
-        ),
-      },
-      {
-        from: "event",
-        name: "",
-        text: t(
-          "普通文字未匹配固定命令，进入 AI 会话。",
-          "No fixed command matched; message enters the AI conversation.",
-        ),
-      },
-      {
-        from: "bot",
-        name: t("机器人", "Bot"),
-        text: t(
-          "我先读取可管理群和成员目录，再按平台返回的信息回答。",
-          "I will read the authorized group and member directory, then answer from platform data.",
-        ),
-      },
-      {
-        from: "bot",
-        name: t("机器人", "Bot"),
-        text: t(
-          "大海兼职群当前成员目录已读取。此示例不代表真实群成员数据。",
-          "The member directory for Sample Group was read. This demo does not contain live member data.",
-        ),
+        text: "/exit",
       },
     ],
   },
   {
-    id: "member-cards" as const,
-    label: t("名片设置", "Member cards"),
+    id: "group-ai" as const,
+    label: t("热群开关", "Group AI switches"),
     icon: UserRound,
     route: t(
-      "管理员私聊 → 验证群与成员 → 预览 → 新消息确认 → 回读结果",
-      "Admin DM → verify group and member → preview → new confirmation → verify result",
+      "本群管理 → 直接查询 → 后台维护独立方式",
+      "Group manager → direct query → dashboard maintains individual modes",
     ),
     condition: t(
-      "目标群已授权修改成员名片，机器人具备平台管理权限；不修改账号昵称。",
-      "The group must grant rename and the bot must have upstream admin rights; account nicknames stay unchanged.",
+      "仅本人获授权群；@、自主接话和冷场使用本群热群人格；@按成员隔离会话；独立方式开关，预算门禁不因菜单解除。",
+      "Authorized groups only; @, autonomous and idle replies use the group profile; @ conversations are isolated by member; separate switches never bypass budgets.",
     ),
-    channel: t("管理员私聊 · 名片管理", "Admin DM · Member cards"),
+    channel: t("本群管理 · 固定命令", "Group manager · Fixed commands"),
     messages: [
-      { from: "admin", name: t("管理员", "Admin"), text: t("帮我开启大海兼职群的自动规范名片", "Enable automatic card normalization for Sample Group") },
-      { from: "bot", name: t("机器人", "Bot"), text: t(
-        "设置预览：大海兼职群，自动规范名片由关闭改为开启，仅影响本群。后台将按现有规则扫描，通常保留原名的前两个字符，短名称采用备用规则。尚未保存，请发送：确认设置 <本次确认码>。",
-        "Preview: Sample Group, automatic normalization off → on, this group only. Background scans use the existing two-character normalization and fallback naming rules. Not saved yet. Send: 确认设置 <preview token>.",
-      ) },
-      { from: "admin", name: t("管理员", "Admin"), text: "确认设置 <本次确认码>" },
-      { from: "bot", name: t("机器人", "Bot"), text: t("已保存，后台将按周期扫描本群；不表示全群已经改完。", "Saved. Background scans will process this group; this does not mean every card has already changed.") },
-      { from: "admin", name: t("管理员", "Admin"), text: t("把大海兼职群里张三的群名片改成值班小张", "Change Zhang San’s card in Sample Group to On-duty Zhang") },
-      { from: "event", name: "", text: t("查询当前成员目录。重名时先让管理员选择，不猜目标。", "Look up the current member directory. Ask the admin to disambiguate duplicate names.") },
-      { from: "bot", name: t("机器人", "Bot"), text: t("修改预览：大海兼职群，张三，原名片“小张” → “值班小张”。尚未执行；核对无误后另发“确认修改名片”。", "Preview: Sample Group, Zhang San, card “Zhang” → “On-duty Zhang”. Not executed. Send a new message “确认修改名片” after checking it.") },
-      { from: "admin", name: t("管理员", "Admin"), text: "确认修改名片" },
-      { from: "bot", name: t("机器人", "Bot"), text: t("修改任务已排队，我再查一下结果。", "The change is queued. I will check its result.") },
-      { from: "bot", name: t("机器人", "Bot"), text: t("已回读确认：本群名片是“值班小张”，账号昵称未修改。", "Verified by readback: this group’s card is “On-duty Zhang”; the account nickname is unchanged.") },
+      {
+        from: "admin",
+        name: t("管理员", "Admin"),
+        text: "热群状态",
+      },
+      {
+        from: "bot",
+        name: t("机器人", "Bot"),
+        text: t(
+          "本群AI总开关：关闭\n@对话、普通聊天自主接话、冷场发话按本群独立配置。",
+          "Group AI master switch: off. Mentions, autonomous chat and idle topics have independent group settings.",
+        ),
+      },
+      {
+        from: "admin",
+        name: t("管理员", "Admin"),
+        text: "本群额度",
+      },
+      {
+        from: "bot",
+        name: t("机器人", "Bot"),
+        text: t(
+          "显示本人可查询的本群额度；没有本人扣费同意时，不会自动使用他人额度。",
+          "Shows the authorized group's quota. Another person's allowance is never used without that person's consent.",
+        ),
+      },
+      {
+        from: "admin",
+        name: t("管理员", "Admin"),
+        text: "/chat",
+      },
+      {
+        from: "bot",
+        name: t("机器人", "Bot"),
+        text: t(
+          "进入只读管理员指引；固定命令和本人确认仍由你发送。",
+          "Read-only administrator guidance. Fixed commands and confirmations remain yours to send.",
+        ),
+      },
+      { from: "admin", name: t("管理员", "Admin"), text: "怎么设置定时图片？" },
+      {
+        from: "bot",
+        name: t("机器人", "Bot"),
+        text: t(
+          "在群管理→规则→定时发言上传，最多3张，按顺序每次发1张。也可私信先选群，发“广告图片 计划序号”，再发一张图片，收到预览后按提示确认保存。",
+          "Upload up to three images under Group Management → Rules → Scheduled Messages. One rotates per occurrence. Or select a group by DM, send 广告图片 followed by its plan number, then one image; confirm the returned preview.",
+        ),
+      },
+      { from: "admin", name: t("管理员", "Admin"), text: "/exit" },
+      {
+        from: "bot",
+        name: t("机器人", "Bot"),
+        text: t(
+          "已结束咨询，未修改任何设置。",
+          "Consultation ended. No settings were changed.",
+        ),
+      },
     ],
   },
   {
@@ -163,48 +175,76 @@ const privateFlows = computed(() => [
     label: t("普通用户客服", "Member customer service"),
     icon: MessageCircle,
     route: t(
-      "普通文字 → 正常 AI 客服会话；不提供管理工具",
-      "Natural language → regular AI support; no management tool",
+      "私聊 /chat → 只读客服；/exit 退出",
+      "Private /chat → read-only support; /exit ends the session",
     ),
     condition: t(
-      "私聊回复开启，且已配置可用的人格、模型或知识库。",
-      "Private replies are enabled and a working persona, model, or knowledge base is configured.",
+      "内置只读客服提示；仅供应商硬预算核验后才调用已选模型。",
+      "Built-in support prompt; the selected model is called only after supplier hard-budget verification.",
     ),
     channel: t("普通用户私聊 · AI 客服", "Member DM · AI support"),
     messages: [
       {
         from: "member",
         name: t("群成员", "Member"),
-        text: t("我能用你做什么？", "What can I use you for?"),
+        text: "/chat",
       },
       {
         from: "bot",
         name: t("机器人", "Bot"),
         text: t(
-          "我可以帮你了解业务和活动用法。在活动群里可以发“排名”看发言榜，有抽奖时发“参加抽奖”，发“我的邀请”查自己的邀请记录。",
-          "I can explain business information and activities. In the activity group, send “排名” for chat rankings, “参加抽奖” for an active lottery, or “我的邀请” for your own invite record.",
+          "公共AI尚未核实供应商硬预算，暂未开放。固定命令仍可使用。",
+          "AI is unavailable until the supplier hard budget is verified. Fixed commands remain available.",
         ),
       },
       {
         from: "member",
         name: t("群成员", "Member"),
-        text: t("抽奖怎么参加？", "How do I join the lottery?"),
+        text: "菜单",
       },
       {
         from: "event",
         name: "",
         text: t(
-          "普通咨询进入 AI 客服；机器人不会因此获得群管权限。",
-          "This is handled as customer support; it does not grant moderation access.",
+          "菜单由固定规则返回，不调用模型，也不授予群管权限。",
+          "Fixed rules return the menu without a model call or management grants.",
         ),
       },
       {
         from: "bot",
         name: t("机器人", "Bot"),
         text: t(
-          "如果群内正在进行抽奖，请回到群聊发送“参加抽奖”。也可以发送“抽奖状态”查看活动状态。",
-          "If a lottery is active, return to the group and send “参加抽奖”. Send “抽奖状态” to check it.",
+          "命令菜单\n1. 开通与身份\n2. 群与成员\n3. 审核规则\n…\n0 返回上一步；取消退出。",
+          "Command menu\n1. Activation and identity\n2. Groups and members\n3. Moderation rules\n...\n0 Back; 取消 Exit.",
         ),
+      },
+    ],
+  },
+  {
+    id: "own-invites" as const,
+    label: t("本人邀请", "My invitations"),
+    icon: Users,
+    route: t(
+      "本人查询 → 已开启返现群名菜单 → 回复编号 → 本群本人汇总",
+      "Own query → enabled cashback group menu → number → own group totals",
+    ),
+    condition: t(
+      "私聊回复开启；返现采集机器人与群已配置。",
+      "Private replies are enabled and the cashback collector and groups are configured.",
+    ),
+    channel: t("普通用户私聊 · 我的邀请", "Member DM · My invitations"),
+    messages: [
+      { from: "member", name: t("群成员", "Member"), text: "我的邀请" },
+      {
+        from: "bot",
+        name: t("机器人", "Bot"),
+        text: "【我的邀请】\n1. 业务交流群\n2. 通知群\n\n回复群序号查询。",
+      },
+      { from: "member", name: t("群成员", "Member"), text: "1" },
+      {
+        from: "bot",
+        name: t("机器人", "Bot"),
+        text: "【我的邀请】\n业务交流群\n邀请记录：2 人\n当前在群：2 人\n核验中：1 人\n待结账：5.00 元\n已结账：0.00 元\n已作废：0 人",
       },
     ],
   },
@@ -222,7 +262,7 @@ const privateFlows = computed(() => [
     ),
     channel: t("普通用户私聊 · 权限拦截", "Member DM · Access denied"),
     messages: [
-      { from: "member", name: t("群成员", "Member"), text: "禁言 @小周 3" },
+      { from: "member", name: t("群成员", "Member"), text: "添加管理员 2" },
       {
         from: "event",
         name: "",
@@ -505,7 +545,7 @@ const messages = computed(() => {
       from: "result",
       name: t("机器人 · 私人账户查询", "Bot · Account query"),
       text: t(
-        "有效邀请：1 人\n累计奖励：5.00 积分\n每人奖励：5.00 积分\n奖励状态：开启",
+        "有效邀请：1 人\n累计奖励：5.00 积分\n每人奖励：5.00 积分",
         "Verified invitations: 1\nTotal rewards: 5.00 points\nReward per invite: 5.00 points\nStatus: enabled",
       ),
     },
@@ -514,8 +554,8 @@ const messages = computed(() => {
       from: "event",
       name: "",
       text: t(
-        "群内查询回复20秒后自动撤回；积分记录仍保留。",
-        "Group query replies are recalled after 20 seconds; the credit ledger is retained.",
+        "群内命令和对应回复安排12秒撤回；积分记录仍保留。",
+        "Group commands and replies are scheduled for recall after 12 seconds; the credit ledger is retained.",
       ),
     },
   ];

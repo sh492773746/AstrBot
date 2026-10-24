@@ -23,23 +23,67 @@ def exported(documents):
 
 def test_reviewed_business_chunks_keep_provenance_and_original_links():
     documents = load_documents()
-    assert len(documents) == 4
+    assert len(documents) == 5
     chunks = [chunk for item in documents for chunk in item["chunks"]]
-    assert len(chunks) == 16
+    assert len(chunks) == 21
     assert all(chunk == chunk.strip() for chunk in chunks)
-    assert all("2026-09-23" in chunk and "2026-10-02" in chunk for chunk in chunks)
+    business_chunks = [
+        chunk
+        for item in documents
+        if item["file_name"] != "05-invitation-support.md"
+        for chunk in item["chunks"]
+    ]
+    assert all(
+        "2026-09-23" in chunk and "2026-10-02" in chunk for chunk in business_chunks
+    )
     text = "\n".join(chunks)
     for value in (
-        "@dahai855", "@w41890", "@Aclee888", "@example_owner", "@yuan",
-        "大海传媒.cc", "大海团队.cc", "tv28.cc", "rb666.vip", "433336",
+        "@dahai855",
+        "@w41890",
+        "@Aclee888",
+        "@dh114514",
+        "@yuan",
+        "大海传媒.cc",
+        "大海团队.cc",
+        "tv28.cc",
+        "rb666.vip",
+        "433336",
         "userId=68475611160680765&guildId=444",
         "pt=CA1DACFE-3620-D314-75B6-D252D4F4E99B",
-        "| 100 | 5万 | 388 | 388 |", "| 1000 | 50万 | 3888 | 388 |",
-        "平台彩金", "不是旺商聊拉群奖励", "没有独立会议", "未提供",
+        "| 100 | 5万 | 388 | 388 |",
+        "| 1000 | 50万 | 3888 | 388 |",
+        "平台彩金",
+        "不是旺商聊拉群奖励",
+        "没有独立会议",
+        "未提供",
     ):
         assert value in text
     for excluded in ("/start", "/link", "/群管", "扫雷", "签到", "下注", "轮盘"):
         assert excluded not in text
+
+
+def test_invitation_knowledge_explains_conditions_without_assuming_live_state():
+    document = next(
+        d for d in load_documents() if d["file_name"] == "05-invitation-support.md"
+    )
+    text = "\n".join(document["chunks"])
+    for phrase in (
+        "管理员未设置奖励",
+        "不重复计入",
+        "不补算",
+        "两套独立规则",
+        "不承诺补记",
+    ):
+        assert phrase in text
+    assert "2026-10-12" in text
+    for phrase in (
+        "1 我拉了谁",
+        "北京时间昨日00:00",
+        "核验中（3小时未到）",
+        "被邀请成员",
+        "结账员在账本登记",
+    ):
+        assert phrase in text
 
 
 def test_only_kb_binding_changes_and_input_is_not_mutated():

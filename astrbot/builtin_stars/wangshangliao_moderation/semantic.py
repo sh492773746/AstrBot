@@ -1,18 +1,21 @@
 """Tool-free, context-aware moderation through AstrBot's real model providers."""
 
 import asyncio
+import copy
 import json
-import sqlite3
 import time
-from contextlib import closing
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from astrbot.core.platform.sources.wangshangliao.database import account_guard
 from astrbot.core.platform.sources.wangshangliao.policy import authorize_action
 from astrbot.core.platform.sources.wangshangliao.storage import instance_dir
+from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
 from .content_rules import keyword_category
+from .policy import require_group_admin
+from .review_store import review_store
 from .text import redact_reply
 
 SYSTEM_PROMPT = """You are a conservative Wangshangliao group moderation classifier.
@@ -62,6 +65,44 @@ class Assessment(BaseModel):
 
 
 async def assess(context, event) -> dict:
+    """Bound review concurrency and the entire directory/model deadline."""
+    adapter = event.platform
+    if not hasattr(adapter, "_review_slots"):
+        adapter._review_slots = asyncio.Semaphore(4)
+    timeout = (
+        adapter.config.get("moderation", {})
+        .get("semantic", {})
+        .get("timeout_seconds", 12)
+    )
+    if adapter._review_slots.locked():
+        adapter.diagnostics.emit(
+            "semantic",
+            "rule_fallback",
+            str(event.message_obj.message_id),
+            failed=True,
+            error="model_busy",
+            route="moderation",
+            group=event.get_group_id(),
+        )
+        return {"decision": "fallback", "source": "rules", "reason": "review_busy"}
+    async with adapter._review_slots:
+        try:
+            async with asyncio.timeout(timeout):
+                return await _assess(context, event)
+        except TimeoutError:
+            adapter.diagnostics.emit(
+                "semantic",
+                "rule_fallback",
+                str(event.message_obj.message_id),
+                failed=True,
+                error="model_timeout",
+                route="moderation",
+                group=event.get_group_id(),
+            )
+            return {"decision": "fallback", "source": "rules", "reason": "TimeoutError"}
+
+
+async def _assess(context, event) -> dict:
     """Classify one fresh, verified message and persist its bounded decision.
 
     Args:
@@ -76,7 +117,8 @@ async def assess(context, event) -> dict:
     mid = str(event.message_obj.message_id)
     payload = event.get_extra("wangshangliao_payload") or {}
     sender = str(payload.get("sender", ""))
-    policy = adapter.config.get("moderation", {})
+    account = adapter.account
+    policy = copy.deepcopy(adapter.config.get("moderation", {}))
     settings = policy.get("semantic", {})
     now = time.time()
     if (
@@ -86,7 +128,20 @@ async def assess(context, event) -> dict:
         or group not in adapter.config.get("enabled_groups", [])
     ):
         return {"decision": "skip"}
+
+    def authorize():
+        require_group_admin(adapter.config, group)
+        authorize_action(adapter.config, group, "recall")
+        authorize_action(adapter.config, group, "mute")
+        if (
+            adapter.config.get("_business_active") is False
+            or adapter.config.get("moderation", {}) != policy
+        ):
+            raise ProtocolError("semantic_authority_changed")
+
+    guard = account_guard(adapter, authorize)
     try:
+        guard()
         stamp = float(payload.get("recall_route", {}).get("time") or 0)
         if stamp > 100000000000:
             stamp /= 1000
@@ -95,9 +150,10 @@ async def assess(context, event) -> dict:
             or now - stamp > 300
         ):
             return {"decision": "skip"}
-        authorize_action(adapter.config, group, "recall")
-        authorize_action(adapter.config, group, "mute")
-        roster = await adapter.get_moderation_members(group)
+        roster = await getattr(
+            adapter, "get_cached_members", adapter.get_moderation_members
+        )(group)
+        guard()
         matches = [
             m
             for m in roster.get("groupMemberInfo", [])
@@ -116,24 +172,17 @@ async def assess(context, event) -> dict:
     root = instance_dir(adapter.config["id"])
     root.mkdir(parents=True, exist_ok=True)
     path = root / "moderation.sqlite3"
-    with closing(sqlite3.connect(path)) as db, db:
-        db.execute(
-            "CREATE TABLE IF NOT EXISTS semantic_reviews(account TEXT,group_id TEXT,message TEXT,"
-            "result TEXT NOT NULL,provider TEXT NOT NULL,created REAL NOT NULL,PRIMARY KEY(account,group_id,message))"
+    store = review_store(adapter, path)
+    row = await asyncio.to_thread(store.read_review, account, group, mid)
+    try:
+        guard()
+    except ProtocolError:
+        return {"decision": "skip"}
+    if row:
+        adapter.diagnostics.emit(
+            "semantic", "cached", mid, route="moderation", group=group
         )
-        db.execute(
-            "CREATE INDEX IF NOT EXISTS semantic_group_created "
-            "ON semantic_reviews(account,group_id,created DESC)"
-        )
-        row = db.execute(
-            "SELECT result FROM semantic_reviews WHERE account=? AND group_id=? AND message=?",
-            (adapter.account, group, mid),
-        ).fetchone()
-        if row:
-            adapter.diagnostics.emit(
-                "semantic", "cached", mid, route="moderation", group=group
-            )
-            return json.loads(row[0])
+        return json.loads(row[0])
     provider_id = settings.get("provider_id", "")
     started = time.monotonic()
     try:
@@ -146,9 +195,9 @@ async def assess(context, event) -> dict:
                 "AND rowid<(SELECT rowid FROM inbox WHERE account=? AND team=? AND message=?) "
                 "ORDER BY rowid DESC LIMIT ?",
                 (
-                    adapter.account,
+                    account,
                     group,
-                    adapter.account,
+                    account,
                     group,
                     mid,
                     settings.get("context_limit", 20),
@@ -179,6 +228,7 @@ async def assess(context, event) -> dict:
                         "time": previous_time,
                     }
                 )
+            guard()
             if not provider_id:
                 provider = await context.get_using_provider_async(
                     event.unified_msg_origin
@@ -186,6 +236,7 @@ async def assess(context, event) -> dict:
                 if provider is None:
                     raise ValueError("moderation_provider_missing")
                 provider_id = provider.meta().id
+            guard()
             response = await context.llm_generate(
                 chat_provider_id=provider_id,
                 system_prompt=SYSTEM_PROMPT,
@@ -206,6 +257,7 @@ async def assess(context, event) -> dict:
                 temperature=0,
                 request_max_retries=1,
             )
+            guard()
             completion = response.completion_text
             if not isinstance(completion, str) or len(completion) > 8192:
                 raise ValueError("moderation_response_budget")
@@ -230,6 +282,8 @@ async def assess(context, event) -> dict:
             result = assessment.model_dump()
             result["reason"] = redact_reply(result["reason"])
             result["source"] = "ai"
+    except ProtocolError:
+        return {"decision": "skip"}
     except Exception as exc:
         result = {
             "decision": "fallback",
@@ -255,18 +309,14 @@ async def assess(context, event) -> dict:
             group=group,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
-    with closing(sqlite3.connect(path)) as db, db:
-        db.execute(
-            "INSERT OR IGNORE INTO semantic_reviews VALUES(?,?,?,?,?,?)",
-            (
-                adapter.account,
-                group,
-                mid,
-                json.dumps(result, ensure_ascii=False),
-                provider_id,
-                time.time(),
-            ),
+    try:
+        guard()
+        await asyncio.to_thread(
+            store.save_review, account, group, mid, result, provider_id
         )
+        guard()
+    except ProtocolError:
+        return {"decision": "skip"}
     if result["decision"] != "fallback":
         adapter.diagnostics.emit(
             "semantic",

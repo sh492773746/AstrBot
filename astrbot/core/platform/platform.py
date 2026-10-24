@@ -146,6 +146,19 @@ class Platform(abc.ABC):
 
     def commit_event(self, event: AstrMessageEvent) -> None:
         """提交一个事件到事件队列。"""
+        from .message_policy import allows_message
+
+        group = event.get_group_id()
+        if not allows_message(
+            self.config,
+            "group" if group else "private",
+            str(group or event.get_sender_id()),
+        ):
+            event.stop_event()
+            completion = getattr(event, "processing_completion", None)
+            if isinstance(completion, asyncio.Future) and not completion.done():
+                completion.set_result(None)
+            return
         self._event_queue.put_nowait(event)
 
     def create_event(self, message: AstrBotMessage) -> AstrMessageEvent:

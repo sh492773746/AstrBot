@@ -6,6 +6,85 @@ h1{font-size:30px;overflow-wrap:anywhere}h2{font-size:22px;margin-top:36px}pre{w
 table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,th{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#f2f4f8}img{max-width:100%;height:auto}
 @page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
 </style></head>
-<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>Historical acceptance evidence</h1>
-<p>Live deployment reports are retained privately. See <code>docs/local-customizations.md</code> for public integration scope and validation.</p>
+<body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊群聊违规规则分析（2026-09-22）</h1>
+<blockquote>
+<p>历史分析报告，保留当时结论，不用于认定当前实现缺陷或追罚成员。
+当前行为见<a href="wangshangliao-content-rules.html">内容规则</a>与<a href="wangshangliao-index.html">文档目录</a>。</p>
+</blockquote>
+<h2>数据与结论</h2>
+<p>本次合并本地旺商聊账本，按群 ID、消息 ID 去重，仅分析业务群 573321、993164、902764，不分析私聊。可用正文 264 条，全部来自 573321。测试群 1143980 排除。以下为规则初筛，不是最终违规判定，不据此追罚成员。</p>
+<table>
+<thead>
+<tr>
+<th>候选类别</th>
+<th style="text-align:right">消息数</th>
+<th style="text-align:right">不同正文数</th>
+<th>判断限制</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>联系方式、群号或招揽措辞</td>
+<td style="text-align:right">9</td>
+<td style="text-align:right">6</td>
+<td>应结合可识别联系方式与明确引流文案，不能仅凭“微信”定罪</td>
+</tr>
+<tr>
+<td>域名或链接</td>
+<td style="text-align:right">45</td>
+<td style="text-align:right">5</td>
+<td>包含直播入口，单独出现链接不应处罚</td>
+</tr>
+<tr>
+<td>招揽、返利、推广</td>
+<td style="text-align:right">21</td>
+<td style="text-align:right">6</td>
+<td>可能与官方推广重叠，需要发布者与官方入口白名单</td>
+</tr>
+<tr>
+<td>露骨成人推广</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">1</td>
+<td>同一推广重复出现，适合高置信内容规则</td>
+</tr>
+<tr>
+<td>密码或会议信息相关</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">4</td>
+<td>包含索要会议号等正常咨询，不全是泄露凭据</td>
+</tr>
+<tr>
+<td>辱骂措辞</td>
+<td style="text-align:right">5</td>
+<td style="text-align:right">5</td>
+<td>缺少完整上下文，先记录复核，避免惩罚引用与举报</td>
+</tr>
+</tbody>
+</table>
+<p>类别有交叉，不能相加得到违规人数。大量原始时间字段为 0，不能计算历史刷屏频率或证明 24 小时内再犯。不能仅凭重复文案认定发送者是机器人。</p>
+<p>代表来源：联系/拉群 1179739823515591930、1179739823515592173；外部返利推广 1179739823515591877、1179739823515591941；成人引流 1179739823515591976；直播入口 1179739823515592067；正常会议咨询 1179739823515591995。审计保留消息标识，不在报告复制联系方式、会议密码或私人身份。</p>
+<h2>当前规则缺陷</h2>
+<ul>
+<li>自动规则仅配置测试关键词 <code>WSL_TEST_MUTE_20260919</code> 和 <code>WSL_TEST_KICK_20260919</code>，不识别业务广告。</li>
+<li>仅测试群授权 mute/unmute/kick/recall，业务群未授权，不得通过规则更新绕过授权。</li>
+<li>现有规则采用原文子串匹配，无全角、零宽字符或大小写规范化，也没有域名精确白名单。</li>
+<li>首次警告，24 小时内再次命中后处罚；采用共同计数，不能区分新业务规则和旧测试规则。</li>
+<li>当前禁言请求固定传 <code>min=1</code>，不能声称实现任意禁言时长。</li>
+<li>缺少新规则生效边界，历史回放可能触发新规则；发送时间不可信时尤其需要隔离。</li>
+<li>全群 60 秒处罚冷却会抑制其他违规者的处罚；需要审计明确记录，而不能显示已处罚。</li>
+</ul>
+<h2>待确认后实施的规则</h2>
+<ol>
+<li>明确联系方式或入群地址 + 招揽、转发奖励或接单文案：高置信广告候选。</li>
+<li>外链 + 明确充值返利、转线、担保等营销文案：高置信引流候选。</li>
+<li>露骨性内容 + 拉群、联系方式或活动推广：高置信成人引流候选。</li>
+<li>单独数字、普通链接、咨询怎么打开、索要会议入口、对广告的举报和引用：不自动处罚。</li>
+<li>辱骂、人身冲突、疑似冒充管理员、刷屏：先审计，不根据现有不完整历史直接自动踢人。</li>
+<li>不从聊天里自动学习白名单。白名单域名精确匹配，不能让相似域名或包含官方字样的域名绕过；管理员真实身份由上游成员权限确认，不靠昵称。</li>
+</ol>
+<p>建议策略：首次撤回并警告；同一规则版本下 24 小时再犯禁言；踢出由管理员确认。最终处罚策略与适用群以用户明确选择为准。</p>
+<h2>上线验收边界</h2>
+<p>历史记录只做离线回放分析，绝不调用撤回、禁言或踢出。新规则只处理生效后、可证明是新消息的事件；无法区分历史或新消息时只审计。保留已知不确定操作，不自动重试。缺权限、身份不匹配、目录不完整时停止处罚，记录原因。</p>
+<p>离线测试覆盖全角/零宽变体、白名单域名伪装、正常数字与链接、引用举报、跨类别重复命中、重复事件、未知回执、权限撤销、重连历史、生效时间边界。真实群不发送测试内容，不执行试验性管理动作。</p>
+<p>待用户确认：适用群、处罚阶梯、官方域名及发布者白名单。当前生产配置未因本分析改变。</p>
 </body></html>

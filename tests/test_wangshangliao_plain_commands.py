@@ -23,9 +23,13 @@ from astrbot.core.platform.message_type import MessageType
 from astrbot.core.platform.platform_metadata import PlatformMetadata
 from astrbot.core.platform.sources.wangshangliao.adapter import WangshangliaoAdapter
 from astrbot.core.platform.sources.wangshangliao.event import WangshangliaoEvent
+from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 from astrbot.core.platform.sources.wangshangliao.test_window import TestWindow as Window
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError, b64
+from tests.fixtures.wsl_actions import bind_action_port
+
+pytestmark = pytest.mark.usefixtures("wsl_active_policy", "wsl_command_classifier")
 
 
 @pytest.mark.parametrize(
@@ -113,12 +117,16 @@ def test_bare_commands_are_allowed_in_exact_private_command_developer_scope(text
     receiver = SimpleNamespace(
         account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event()
     )
-    sender = SimpleNamespace(account="2", stopping=asyncio.Event())
+    sender = SimpleNamespace(account="2", nim_account="902", stopping=asyncio.Event())
     window = Window(receiver, sender, [], ["private_commands"], [], 300, 10)
     receiver.test_window = window
     assert window.send_command(sender, "private/1/" + b64(b"901"), text, "m")
     assert (
-        window.admit("private/2/peer", "m", {"sender": "2", "text": text})
+        window.admit(
+            "private/2/OTAy",
+            "m",
+            {"sender": "2", "transport_peer": "902", "text": text},
+        )
         == "private_commands"
     )
 
@@ -148,7 +156,9 @@ def native_event(text, *, private=False, reply=True):
         send_reply_text=AsyncMock(),
         execute_moderation=AsyncMock(return_value={"status": "accepted"}),
     )
+    bind_action_port(adapter)
     event = WangshangliaoEvent(message, adapter, private)
+    event.actor_identity = ActorIdentity("1", "2", "902", "2")
     event.set_extra(
         "wangshangliao_payload",
         {
@@ -259,7 +269,7 @@ async def test_nonadmin_private_bare_commands_denied_before_plugins(monkeypatch,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["参加抽奖", "抽奖状态"])
-async def test_lottery_command_replies_are_not_recalled(monkeypatch, text):
+async def test_lottery_command_replies_follow_group_command_recall(monkeypatch, text):
     event = native_event(text)
     plugin = object.__new__(main.Main)
     plugin.commands = Commands()
@@ -272,7 +282,7 @@ async def test_lottery_command_replies_are_not_recalled(monkeypatch, text):
     plugin.commands.activities.command.assert_awaited_once()
     assert event.get_extra("wsl_keep_reply") is True
     assert event.platform.send_reply_text.await_count == 1
-    assert not event.platform.send_reply_text.await_args.kwargs.get("auto_recall", False)
+    assert event.platform.send_reply_text.await_args.kwargs["auto_recall"] is True
 
 
 @pytest.mark.asyncio
@@ -501,9 +511,7 @@ async def test_bare_target_command_requires_exact_verified_mention_only(
     assert event.platform.execute_moderation.await_count == int(accepted)
     if accepted:
         minutes = int(suffix) if suffix else 30
-        assert event.platform.execute_moderation.await_args.kwargs == {
-            "minutes": minutes
-        }
+        assert event.platform.execute_moderation.await_args.kwargs["minutes"] == minutes
         assert response == f"禁言已受理：{minutes} 分钟。"
 
 
@@ -546,7 +554,7 @@ async def test_mute_duration_uses_native_mention_boundary(
     )
     await plugin.moderate(event)
     assert event.is_stopped()
-    assert event.platform.execute_moderation.await_args.kwargs == {"minutes": 3}
+    assert event.platform.execute_moderation.await_args.kwargs["minutes"] == 3
     assert "禁言已受理" in event.platform.send_reply_text.await_args.args[2]
     assert event.platform.send_reply_text.await_args.kwargs["auto_recall"] is True
     assert "尚未确认" not in event.platform.send_reply_text.await_args.args[2]

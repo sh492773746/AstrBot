@@ -7,12 +7,988 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 @page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
 </style></head>
 <body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊维护修复操作说明</h1>
-<p>更新：2026-10-02。<a href="wangshangliao-index.html">文档目录</a>。操作前核对当前实例与有效配置。</p>
+<p>更新：2026-10-24（北京时间）。<a href="wangshangliao-index.html">文档目录</a>；
+<a href="wangshangliao-architecture-permissions.html">当前架构与权限</a>。
+适用于公共合并模式；操作前核对当前账号、群和有效配置，不能沿用旧AI管理工具流程。</p>
+<h2>2026-10-24 三账号真实验收结果</h2>
+<p>仅测试群1459282，既有三个账号及中性文案。3秒4条不处罚；
+3秒5条、10秒15条、30秒5条同文分别触发一批违规，整批撤回、每批只计一次，
+第1／2／3次警告及后续1／3／10分钟禁言均有实际收件和平台回执。
+1、3分钟自然到期读回通过。10分钟到期后3秒首查仍在名单，原失败记录保留；
+稍后只读确认自然移除，期间没有解禁或续封调用，不能声明秒级到期准确。</p>
+<p>沿用原处罚账本续验而不重放处罚或重置历史：下一批恢复为第1次警告，
+撤回文字不计入自动授予，一条有效文字经结算获得自动白名单，
+随后5条刷屏内容未处罚。独立观察账号逐条收件，不启用其群业务。
+测试规则、原生角色、账号启停和窗口恢复；正式群及财务等保护摘要不变。
+无新增手机客户端观察。此处不将10分钟首查失败或跳过的测试算作通过。</p>
+<p>全量旺商聊专项8233通过、55条件跳过、2条既有弃用警告；
+前端203项通过，49篇教程在390／1440px无缺图、溢出或脚本异常；
+名单页面在320／390／1440px检查自动来源及手动名单共存。
+退役旧递进实测脚本，保留原始失败审计和必要受控验收工具。
+GitHub推送、云端CI及合并另以远端回执核对，不以本地通过冒称云端全绿。</p>
+<p>English: fixed-group native trials verified all thresholds, warnings, accepted
+mute durations, cycle reset and ranking exemptions. The ten-minute expiry list
+was initially late and later confirmed clear without any release or renewal;
+the original failed check remains evidence. Neither exact-deadline nor phone
+acceptance is claimed. Temporary state and protected business data were restored.</p>
+<h2>2026-10-24 刷屏循环、每日自动白名单与受控验收</h2>
+<p>刷屏阈值更新为3秒5条、10秒15条、30秒5条相同文字。
+同一连续刷屏批次只累计一次违规，命中消息分别撤回；每轮前三次撤回警告，
+之后依次禁言1、3、10分钟，最终10分钟处罚自然结束后重新累计。
+处罚回执未知不重试、不提前重置；循环状态跨重启保留。</p>
+<p>每日按北京时间统计有效文字发言，提供<code>发言排行榜</code>、<code>发言排行</code>及原<code>排名</code>入口。
+前三十名每30秒刷新为独立自动发言白名单，午夜重新计算；最近30秒发言暂不参与授予，
+已撤回或撤回结果未知的消息不计数。保留排行防刷统计：每人每30秒最多计一条，
+五分钟内相同文字不重复计数；纯图片、表情、视频和命令不计文字排行。
+手动白名单不被覆盖；黑名单优先，主动移除后当天不自动加回。
+短期授权最长90秒，刷新故障时到期失效，不将旧排行永久写入手动名单。</p>
+<p>固定三账号验收入口为<code>scripts/check_wsl_flood_cycle_live.py</code>。
+默认只预览，<code>--apply</code>仅操作测试群1459282；每段窗口不超过300秒。
+窗口绑定完整原生成员目录、原账号连接及当前群规则，不放宽普通机器人保护。
+被动收件观察仅接受预登记的中性消息，不启用观察账号的群业务，不改变正式群规则。
+自然等待1／3／10分钟处罚到期，不用提前解禁冒充循环验证。
+失败收尾逐项尝试关窗、恢复旧格式规则、撤回临时群管及恢复账号启停；
+其中一项失败不能阻断其他恢复。未知发送／处罚不会重试，原始失败证据保留。</p>
+<p>此前离线专项1686通过、2项条件跳过及页面320／390／1440px检查，
+不代替本轮真实处罚、手机客户端显示或极限容量验收。</p>
+<p>English: thresholds are5/3s,15/10s and5 identical texts/30s. Each cycle has
+three recall warnings followed by1/3/10-minute mutes; only expiry of the final
+accepted mute reopens warning grace. Daily settled-text top30 grants expire
+independently of manual whitelists. The fixed-group rehearsal uses predeclared
+neutral native messages and a passive independent receiver, not production
+permission exemptions. Cleanup attempts each restoration independently.</p>
+<h2>2026-10-24 群内黑名单立即禁言与排队修复</h2>
+<p>本轮新要求取代下方旧“群内加入不立即处罚”说明：本群已授权的原生群主／管理员，
+真实@单一目标或回复可核实的同群原消息发送<code>黑名单</code>，登记后<strong>立即提交本群配置时长的禁言，不踢人</strong>。
+未来可信实际重入仍禁言。私信／后台搜索、预览、本人确认添加仍仅登记，不立即处罚。
+时长修改仅影响之后的群内拉黑和真实重入，不重设已有禁言、不补罚旧名单；
+移除不解禁，独立解禁不移除名单。普通24小时上限、目标保护和名单互斥不变。</p>
+<p>查明两个独立原因：</p>
+<ul>
+<li>一位已绑定本群管理授权的原生管理员同时为本机配置机器人，固定黑名单指令被接入器
+<code>ignored_bot</code> 提前过滤。现在仅放行身份、当前群授权及版本吻合的固定黑名单入口；
+仍复查完整最新目录、原生管理员角色、真实单一目标，普通机器人聊天不开放。
+旧失败消息不重放，也不据历史消息处罚真实成员。</li>
+<li>北京时间01:46—01:55，一正式群的普通消息实际受到框架通用聊天限流的串行
+<code>stall</code> 等待，部分收件到完成耗时超过30秒，并非事件循环CPU已满。
+公共合并模式有独立命令冷却、AI并发及额度、刷屏与处罚限制，
+现在通过原生事件能力钩子避开重复的框架聊天等待；旧模式及其他平台的通用限流不变。</li>
+</ul>
+<p>立即禁言使用独立<code>command</code>来源的持久化意图和原消息ID，不伪造真实入群记录。
+意图绑定机器人、群、成员、名单周期及版本、时长版本；移除、暂停、撤权及目标晋升在提交前阻断。
+重复投递不续封；未知或不完整回执保留待核对、不自动重试；受理和已核实分别提示。
+新增字段为加法迁移，旧意图保留<code>join</code>来源。<strong>平台受理不证明未来实际到期或手机显示通过</strong>。
+本轮不修改正式群图文、规则、名单、财务、活动或账号启停；不拿真实成员试罚。
+<strong>本轮加载与验证</strong>：北京时间2026-10-24 <strong>02:20:19</strong>完整重启加载，
+PID4071721→<strong>613188</strong>，<code>active/running</code>、<code>NRestarts=0</code>。
+<strong>02:20:43</strong>在线复核两个既有运行账号均在线、禁用测试账号仍停用，
+待处理队列为0；配置文件及23个业务保护面与重启前一致，
+三正式群均启用、未暂停，原生接收机器人仍为管理员。
+原主账号12条<code>needs_review</code>及旧停用账本记录保留，不重放。
+离线回归<strong>1327 passed、1条audioop弃用警告</strong>，包括完整原生命令处理路由、
+真实目标解析、时长1／10080／41760分钟、撤权与未知回执、并发去重及
+100条公共事件不受已占用通用聊天限流锁影响；普通模式限流仍有效。
+文档生成器5项通过，教程与索引重新生成。<strong>未对真实群员试罚、未做新的手机或未来实际到期验收</strong>。</p>
+<p>English: native scoped admin mentions/replies followed by <code>黑名单</code> now enroll and
+immediately submit the configured mute, never a kick. Managed-admin transport
+admission is narrowly bound, not general bot-chat permission. The integrated
+dispatcher also avoids duplicate framework chat stalls while retaining its own
+AI, command and sanction limits; other modes keep the shared limiter. Command
+capabilities remain separate from real join evidence, persistent and idempotent.
+Unknown outcomes are not retried. Older dated evidence below is historical.</p>
+<h3>GitHub CI compatibility and maintenance confirmation tokens</h3>
+<p>The integrated release preserves the current upstream framework and validates
+Linux, macOS and Windows separately. POSIX-only offline maintenance tools are
+tested on supported hosts; production permission checks are not relaxed.
+<code>wsl_test_lab.py</code> now stores one-use confirmation tokens with a random salt and
+PBKDF2-HMAC-SHA256 (600,000 iterations). Legacy or malformed token digests fail
+closed before platform requests; generate and review a fresh preview instead of
+reusing a preview created before this update. No runtime configuration, member
+lists or financial data is included in the GitHub source or application bundle.</p>
+<h2>2026-10-23 23:39 名单移除与群管规则对齐</h2>
+<p>本轮是负责人明确授权的配置操作，不是新的功能发布或实群处罚验收。
+已通过正式的搜索、唯一目标预览、确认提交及读回，移除一条指定的发言白名单记录，
+保留其原有黑名单记录；另两群原本没有该白名单记录，没有执行无意义的移除。
+最终三个授权群的发言白名单各5人，未再出现黑白名单交集。公开文档不附成员身份或名单导出。</p>
+<p>仅将另两群的<strong>群管拦截词、组合规则及黑名单重入禁言时长</strong>对齐参考群；
+三群本次确认的重入禁言时长为<strong>10080分钟（7天）</strong>，这不是全局默认值。
+产品默认仍为41760分钟（29天），允许按机器人＋群设置1—41760整分钟。
+未复制黑名单成员，不修改图文广告、关键词自动回复、财务、AI、活动或账号启停。
+规则含有单字「进」等宽匹配项，按已授权的参考规则保留；
+这类词可能误伤正常发言，维护者应另行核实后再通过预览确认修改，不能偷偷替换业务规则。</p>
+<p><strong>23:39:48北京时间在线复核</strong>：三个授权群均启用、未暂停，
+运行态规则与持久化配置一致，接收机器人均为原生群管理员；
+白名单移除及黑名单时长分别经已部署接口读回确认。
+主服务仍为PID4071721、active，NRestarts=0，没有重启或重载消息服务。
+原12条needs_review保留，没有自动重试。
+离线名单／存储回归165项及命令路由／最终权限门禁399项通过，
+两组文件不重叠，共564项；均有现有audioop弃用警告。
+<strong>本轮没有实际发送拉黑指令或对平台成员执行禁言，不能写成实罚验收通过。</strong></p>
+<p>群内原生管理员真正@单一普通成员，或回复同群可核实的原消息发送<code>黑名单</code>，
+当前直接登记名单，<strong>不当场禁言、不踢人</strong>；只有以后可信真实重新进群才触发已配置的禁言。
+白名单成员须先从白名单移除，群主、管理员和机器人仍受保护。
+移除黑名单不解禁，独立解禁不移除黑名单。
+下面22:59、23:13等较早轮次的“未移除／交集保留”只描述其当时状态，
+不应覆盖本节较新的已授权操作。</p>
+<p>English: at23:39:48 Beijing time on October23,2026, deployed readback confirmed
+one explicitly authorized whitelist removal, with the existing blacklist entry
+retained. All three authorized groups had five whitelist members and no overlaps.
+Only moderation rules and future-rejoin mute durations were aligned; the confirmed
+duration was10,080 minutes/seven days for those groups, not a global default.
+No blacklist members, image/text campaigns, keyword auto-replies, finance, AI,
+activities or account states were copied or changed. Persisted and runtime rules
+matched; all three groups were operating with a native bot administrator.
+Two disjoint offline suites passed165 and399 tests. No actual group command or
+native sanction was tested. Addition still records membership without immediate
+punishment; only a later trusted actual rejoin mutes. Earlier dated snapshots below
+remain historical evidence. Source-publication coverage is described in the
+<a href="wangshangliao-source-release.html">release checklist</a>.</p>
+<h2>2026-10-23 22:59 名单互斥与退群成员移除已加载</h2>
+<p>负责人确认：北京时间<strong>2026-10-23 22:59:23（UTC14:59:23）完整重启已加载</strong>，
+PID3317496→<strong>4071721</strong>，<code>active/running</code>，<code>NRestarts=0</code>。
+<strong>22:59:51</strong>保护快照22面及config均与本轮重启前一致，无业务配置改动。
+最终主Python回归<strong>1794 passed、2 skipped、1条audioop警告</strong>；
+UI <strong>177项unit、9项browser通过</strong>，不与此前轮次累加。
+真实群成员未新增、移除或处罚；未进行真实满链路压测，原<strong>12条needs_review保留且不自动重试</strong>。</p>
+<p><strong>23:13:07在线只读补验</strong>：三正式群white／black共6接口通过，无preview／commit或真实制裁；
+汇赢white6／black1、交集1，真龙white5／black0，鼎峰white5／black0，历史交集保留不删。
+负责人已plugin reload加载纯展示conflict旗标，PID4071721未变；后端unit <strong>218 passed</strong>，
+与1794项覆盖重叠，不累加。<strong>23:14:32</strong>保护22面／config再次全同。
+历史6条unknown对应两笔已提交但回执不明的旧mute，保留并阻止后续加罚，不是新增6次请求，不自动重试。</p>
+<p>本轮加载新增名单同bot＋group＋UID互斥，冲突先提示移除另一名单，不自动转移／删除；
+历史重叠保留、黑名单优先、分别移除。退群／改名成员可按名单行图标或已有记录预览确认移除，
+目标绑定已存UID＋peer＋名单版本，操作者／机器人权限仍强制核验；添加仍按真实当前目录名称搜索。
+普通禁言24小时和黑名单重入时长不变，移除不解禁或连带移除另一名单。
+白名单列表／移除截图来自<code>/tmp/wsl-member-lists-l8zKJa/</code>，新增独立黑名单移除图；
+均为离线UI证据，原90分钟设置图、三踢历史图及下方20:02时长版本记录保留，不冒充本轮真实操作。</p>
+<p><strong>性能范围</strong>：22:30至22:31被动采样读取队列0，旧needs_review12不变；
+60分钟内349条processed，P95 <strong>106ms</strong>，CPU约<strong>单核7.5%</strong>、RSS <strong>546MiB</strong>，
+服务限制为<strong>2核／2GiB</strong>。隔离离线基准30秒、20群、100msg/s共3000条，
+基础接收／规则路径P95 <strong>12.311ms</strong>；<strong>不含真实上游动作，不是生产吞吐或端到端延迟承诺</strong>。
+本次仅更新文档并生成<code>dashboard/public/local-docs/</code>教程／索引／PDF，
+不操作生产服务，不向dist同步；最终dist同步及served hash由负责人完成。</p>
+<p>English: the owner confirms full-restart loading at <strong>22:59:23 Beijing time,
+October 23, 2026 (14:59:23 UTC)</strong>, PID3317496→<strong>4071721</strong>, active/running, NRestarts=0.
+At22:59:51 all22 protected surfaces and config matched the pre-restart snapshot;
+no business configuration changed. Final Python: <strong>1,794 passed,2 skipped,1 audioop
+warning</strong>; UI: <strong>177 unit and9 browser passes</strong>, not additive with earlier rounds.
+No real group members were added, removed or sanctioned; no real full-chain load
+test occurred. The original12 needs_review records remain without automatic retry.
+At23:13:07 all six whitelist/blacklist read APIs across three formal groups passed,
+without preview, commit or sanctions: Huiying6/1 with one overlap, Zhenlong5/0,
+Dingfeng5/0; historical overlaps remain. A plugin reload loaded display-only
+conflict flags with PID4071721 unchanged. Backend218 unit passes overlap with
+the1,794 suite and are not additive; all22 protected surfaces/config matched again
+at23:14:32. Six historical unknown records represent two submitted old mutes with
+uncertain receipts, blocking further sanctions, not six new requests; retain without retry.
+The loaded fix enforces exclusive additions and saved-entry removal without
+automatic transfers, cross-list deletions or unmuting. Updated screenshots are
+offline fixtures; the90-minute image, three-kick evidence and20:02 records remain.
+Passive22:30–22:31 sampling: read queue0,349 processed/60min, P95 106ms, about7.5%
+of one CPU core and546MiB RSS under a2-core/2GiB service limit. The isolated30-second,
+20-group,100msg/s,3,000-message receive/rule benchmark measured P95 12.311ms,
+<strong>excluding real upstream actions</strong>, not a production throughput or end-to-end
+latency guarantee. Local guide/index/PDF generation does not sync dist or operate
+production services; final synchronization and served-hash checks remain with the owner.</p>
+<h2>2026-10-23 黑名单代码加载、在线配置与保护摘要复核</h2>
+<p><strong>当前状态：代码已加载，在线配置流程验证通过，本轮新的真实重入／禁言处罚未测。</strong>
+以下时间均为北京时间，运行及业务复核结果由负责人提供；本次文档工作不执行生产操作。
+2026-10-23 <strong>20:02:56</strong>通过<code>systemctl</code>完成完整重启，主服务
+<strong>PID2602695 → 3317496，NRestarts=0</strong>。后补缺权限具体提示后，
+<strong>20:13前</strong>仅为该提示成功重载插件，PID3317496不变；这不是第二次完整重启。
+教程／索引／PDF重新生成到<code>dashboard/public/local-docs/</code>，本次不向<code>dashboard/dist</code>同步；
+最终dist同步及served hash由负责人另行完成，不据代码加载推断这些静态产物已发布。</p>
+<p>最终13文件综合回归为<strong>1229 passed、2 skipped、1条<code>audioop</code>警告</strong>；
+后补缺权限具体提示测试为<strong>257 passed、2 skipped</strong>，覆盖重叠，不与前者累加。
+前端<strong>55项通过</strong>，<strong>320／390／1440px截图通过</strong>，<code>vue-tsc</code>及Vite通过。
+首轮10文件的<strong>1106 passed、2 skipped、1 failed</strong>原记录继续保留：
+dashboard旧纠正提示缺「重新搜索」已改为成员操作重新搜索、时长操作重新预览，
+不能将最终通过改写为首轮通过。此前239、87及295等统计也不累加为本轮总数。</p>
+<p>三项并发补修已验证完成：按配置有效时间拒绝旧通知套用新时长；
+原生动作前最后同步权限fence；已有确证未提交的操作不再误记unknown。
+<strong>真正unknown仍保留并暂停核对，不自动重试</strong>，不清除旧未知回执。
+这些是离线与配置流程证据，不替代新的真实重入处罚验收。</p>
+<p><strong>20:10:45测试群1459282在线配置流程</strong>：读取默认41760分钟 →
+预览60分钟但配置保持41760 → 确认提交60 → 读回60 →
+预览41760 → 确认提交并读回41760，默认值已恢复。
+最初两次read因接收机器人已为普通成员，被权限保护以<strong>409</strong>拒绝，均<strong>无写入</strong>；
+随后补充了具体缺权限提示。既有接收机器人43506527临时grant核验，
+<strong>20:11:18 revoke verified，20:11:22刷新完成</strong>；
+31846829始终owner，23691273未启用。本轮<strong>没有新踢人或禁言实际处罚</strong>。
+测试receiver tenant version <strong>217 → 220</strong>为两次原生role变更及一次<code>role_lost</code> fence的
+正常递增，保留审计及版本，不回滚为217。</p>
+<p><strong>20:24:00最终业务保护摘要已复核</strong>：config hash与机器人启停状态完全一致；
+<code>financial</code>、<code>whitelist</code>、<code>activities</code>、<code>business_rules</code>、<code>group_ai</code>、<code>ai_profiles</code>、
+<code>settings</code>全部匹配。<code>tenants</code>原始整体hash<strong>不全同</strong>，不是未经解释的全匹配：
+除测试receiver1459282的217→220外，本时窗后台另对<strong>鼎峰1459534</strong>
+约<strong>20:12:06／20:13:27</strong>两次<code>tenant_changed</code>保存，形成version4／5。
+负责人已逐条重建audit before/after链，<strong>只在内存中比较</strong>；除此以外，全表原保护hash完全匹配。
+鼎峰最新version5与最后audit after完全一致，正式并发修改未被覆盖或回滚。
+准确口径是<strong>本轮操作不改正式群，并保留并发后台修改；其他保护面匹配</strong>，
+不是“正式群从未变动”或“所有原始hash均相同”。
+证据：<code>/opt/backups/wsl-blacklist-mute-20261023-0w1c7B/after.json</code>；
+<code>checks.only_audited_test_and_dashboard_changes=true</code>，
+原始<code>checks.business_finance_whitelist_activities_preserved=false</code>刻意保留，
+不能改写为true掩盖tenants差异。<code>checks.config_preserved</code>及<code>checks.bot_states_preserved</code>为true。</p>
+<p>用户「看得见」仅为原对应展示的手机显示确认；本轮未验证未来真实到期，
+也未新增真实重入／禁言验收。旧三踢证据仍只属于当日较早策略。
+<strong>以下“未发布／未重启／待当前验证”段落为此前阶段的原始历史记录，保留原文，
+不再代表本节所述当前加载与配置验证状态。</strong></p>
+<p>English: the owner reports a full <code>systemctl</code> restart at <strong>20:02:56 Beijing time,
+October 23, 2026</strong>, PID2602695 → <strong>3317496</strong>, NRestarts=0. Code is loaded and the
+online configuration workflow passed; <strong>no new actual rejoin/mute acceptance was
+performed</strong>. A permission-message-only plugin reload succeeded before20:13 with
+the same PID. Final13-file regression: <strong>1,229 passed,2 skipped,1 audioop warning</strong>.
+Subsequent permission-hint tests: <strong>257 passed,2 skipped</strong>, overlapping, not additive.
+Frontend55,320/390/1440px screenshots, vue-tsc and Vite passed. Preserve the first
+ten-file1,106/2/1 failed run and earlier three-kick evidence as dated history.
+All three concurrency fixes are verified: effective-time rejection of old notices,
+the final synchronous permission fence, and proven-unsent classification;
+genuinely unknown outcomes remain preserved and are never automatically retried.
+At20:10:45, test group1459282 read41,760, previewed60 without writing, committed/read60,
+then previewed/committed/read41,760 to restore the default. The first two reads were
+guarded409 refusals because the receiver was a member, with no writes. Receiver
+43506527's temporary native-admin grant was revoked and verified at20:11:18;
+refresh completed at20:11:22.31846829 remained owner;23691273 was not enabled.
+No new kicks or actual mutes occurred. Test receiver tenant version217→220 from
+two native role changes and the role_lost fence is intentionally retained.
+At<strong>20:24:00</strong>, config hash, bot enabled states and financial/whitelist/activities/
+business_rules/group_ai/ai_profiles/settings matched. The raw tenants hash differs:
+besides the test version increment, concurrent dashboard tenant_changed saves for
+Dingfeng1459534 at about20:12:06/20:13:27 produced versions4/5. The owner reconstructed
+each audit before/after chain in memory; all other original table protection hashes
+match, and current version5 equals the last audit after. This round did not edit
+formal groups and preserved concurrent dashboard changes, without overwriting or
+rolling them back; it does not claim formal groups never changed. The evidence above
+retains the raw business check=false and only_audited_test_and_dashboard_changes=true.
+The phone-display confirmation proves neither new-policy live acceptance nor future
+actual expiry. Regenerated guide/index/PDF files remain local to public/local-docs;
+dist synchronization and served-hash verification belong to the owner.</p>
+<h2>2026-10-23 黑名单教程与离线产物生成（未发布）</h2>
+<p>负责人已完成UI并提供390px离线夹具截图，授权生成教程／索引／PDF。
+当前教程图替换为<code>/tmp/wsl-blacklist-oMMu0C/blacklist-settings-390.png</code>，
+展示黑名单设置、90分钟确认预览及未知／处理中状态，不是真实手机或实群验收。
+旧三踢截图逐字节保留为<code>docs/public/images/wangshangliao/member-blacklist-three-kick-20261023.png</code>，
+旧三踢实测正文、回执及原日期均不改写。</p>
+<p><strong>状态：未发布，完整重启尚未做。</strong> 本轮只生成<code>dashboard/public/local-docs/</code>中的
+HTML、Markdown原文副本、分类索引、机器目录、全文与六份中英文PDF；
+不向公共<code>dashboard/dist</code>同步，不发布负责人临时UI构建
+<code>/tmp/wsl-blacklist-mute-build-20261023-O8YUeJ/index.html</code>，由负责人统一发布并补记加载实况。
+静态产物生成不证明生产已加载或新规则实群验收通过。</p>
+<p>负责人通报：后端相关回归239项通过；插件专项87项通过、夹具覆盖295项。
+这些统计有重叠，不累加。综合10文件首轮随后返回
+<strong>1106 passed、2 skipped、1 failed</strong>，不能写成综合通过。
+唯一失败为dashboard旧纠正提示缺少「重新搜索」；负责人已改为成员操作重新搜索、
+时长操作重新预览，<strong>待重跑</strong>。原首轮失败保留，不改写为首轮全部通过。</p>
+<p>负责人复查另列三项并发补修：最后同步权限fence；按配置有效时间拒绝旧通知套用新时长；
+已证实未提交的操作不再误记unknown，而真正unknown仍保留、不自动重试。
+其中配置有效时间项由负责人完成实现；权限fence及未提交分类由其他agent实现中。
+这是实现进度，不是三项均已验证或加载，后续回归及最终证据仍待负责人提供。
+本轮先前离线文档及权限表回归97项通过、1条既有<code>audioop</code>弃用警告；
+静态检查18份文档及54个本地索引链接通过，权限表非黑名单数据保持原值。
+以上均不能代替真实重入、平台禁言状态和恢复验收。</p>
+<p>本轮离线产物已生成：48篇教程、38项资源、逐篇原文副本、分类<code>llms.txt</code>、
+<code>docs-index.json</code>及两份全文；48份副本与来源SHA-256一致。
+截图源文件及教程内图片均与负责人提供的新PNG哈希一致，旧图副本哈希与替换前一致。
+390／1440px对全部48篇检查无横向溢出、缺图或远程请求；六份PDF均包含可检索文字，
+入门中／英17／21页、规则中／英21／24页、组件中／英9／10页。
+四份入门／规则PDF均检出新时长命令及1..41760范围。</p>
+<p>本轮实际执行的离线命令：</p>
+<pre><code class="language-sh">node dashboard/scripts/build-wangshangliao-guide.mjs
+node --test dashboard/scripts/build-wangshangliao-guide.test.mjs
+env ASTRBOT_DISABLE_FILE_LOGGING=1 ASTRBOT_DISABLE_METRICS=1 ASTRBOT_ROOT=&quot;$(mktemp -d /tmp/wsl-docs-contract-20261023-XXXXXX)&quot; .venv/bin/python -m pytest -q tests/test_wangshangliao_docs.py tests/test_wangshangliao_reference_tables.py
+env ASTRBOT_DISABLE_FILE_LOGGING=1 ASTRBOT_DISABLE_METRICS=1 .venv/bin/python scripts/build_wsl_guide_pdf.py
+</code></pre>
+<p>结果分别为<code>Built 48 Wangshangliao guides and 38 assets.</code>、生成器5项通过／0失败、
+<code>97 passed, 1 warning in 7.03s</code>及6份<code>PDF generated</code>。
+这些为文档生成和离线检查，不替代负责人修复后的综合重跑或完整重启。</p>
+<p>用户「看得见」仍仅记录为对应展示的手机显示确认，不冒称未来29天真实到期已发生。
+本轮不访问生产配置／数据库、不发真实消息或调用模型、不重载／重启服务。
+后续实际发布、完整重启和综合回归结果由负责人另行补记，不提前宣称完成。</p>
+<p>English: offline guide/index/PDF generation is authorized after the owner's UI
+screenshots, but <strong>unpublished; no full restart has been performed</strong>.
+The replacement is an isolated 390px UI fixture, not live or phone evidence; the
+old three-kick screenshot and dated records are preserved. The owner reports
+239 related backend passes, 87 plugin passes and 295 fixture checks with overlapping
+coverage; do not sum them. The first ten-file combined run returned <strong>1,106 passed,
+2 skipped and 1 failed</strong>: an old dashboard recovery message lacked “重新搜索”.
+The owner changed recovery to member re-search versus duration re-preview; rerun
+is pending. Preserve the first failure rather than claiming first-run success.
+Three additional concurrency fixes are tracked: a final synchronous permission
+fence, rejecting old notices against the configuration's effective time, and
+classifying proven-unsent operations without erasing genuinely unknown outcomes.
+The owner reports implementation of the effective-time fix; other agents are
+implementing the fence and unsent classification. Validation/loading is not claimed.
+This documentation run generated 48 guides, 38 assets and six searchable PDFs;
+all 48 source-copy/catalog hashes match. All guides passed 390px/1440px checks
+without overflow, missing images or remote requests. Generator tests: 5 passed;
+documentation/reference tests: 97 passed with one existing deprecation warning.
+Public dist publication and final runtime observations remain with the owner.
+The user's phone-display confirmation does not prove future actual expiry.</p>
+<h2>2026-10-23 黑名单直接禁言新契约与手机确认（待当前验证）</h2>
+<p>本条记录此前的新需求及文档源更新阶段，<strong>不声明已发布、已加载或新实测通过</strong>。
+只修改现行中英文规则、使用说明、插件README、权限表和阅读索引；
+当时未运行文档／前端构建，等待负责人测试／截图后通知；随后获准生成的状态见上一节。
+本轮不调用真实模型、网络或消息，不读写生产配置／数据库，不重载／重启服务。</p>
+<p><strong>旧→新映射</strong>：当日较早的“前三次真实重入成功踢出，第四次起固定29天禁言”
+改为“<strong>每次可信真实重新入群直接禁言并留群，不再踢人</strong>”，首次即生效；
+成功踢出次数不再决定新处罚阶段，原计数、回执、失败及恢复证据不删不改。
+后台「群管理 → 规则 → 黑名单」对应新「群管理 → 规则 → 黑名单设置」。
+加入名单仍只登记，不立即踢出、禁言或追罚；普通发言、重复入群通知、重复添加及重启不触发续封。</p>
+<p>时长按<strong>机器人＋群</strong>隔离，默认<strong>29天＝41760分钟</strong>，换算后范围<strong>1..41760整分钟</strong>。
+固定命令为<code>黑名单禁言时长 N分钟</code>／<code>黑名单禁言时长 N小时</code>／<code>黑名单禁言时长 N天</code>；
+私信先<code>群列表</code>、<code>选择群 序号</code>，核对机器人、群及分钟数预览后，
+本人另发<code>确认黑名单 token</code>（本次预览令牌）保存。后台「黑名单设置」也须预览确认。
+修改<strong>只影响确认后新的可信真实重入</strong>，不自动重设已有禁言、不追罚、不重放历史通知，不做每日续封。
+切群、取消、撤权或版本变化须重新预览；未知回执挂起核对、不重试。
+普通禁言24小时上限、原生管理授权、保护目标、白名单不覆盖黑名单及AI无执行／代确认权均不变；
+移除名单不解禁，独立解禁不移除名单，不新增后台登录权限。</p>
+<p><strong>用户手机确认补充</strong>：用户后续明确回复「看得见」，仅记为对应展示的手机显示确认，
+不扩展为未明确确认的画面或新策略实测，也不改写下方当时“仍待确认”的原始记录。
+这不是29天真实到期验证：未来到期并未据此证明已经发生，平台受理、当前禁言和手机显示也不能替代。</p>
+<p><strong>待当前验证</strong>：首次及后续可信真实重入均直接禁言且不踢出；加入不立即处罚、重复通知不续封；
+默认时长、1与41760边界、分钟／小时／天换算及非法输入拒绝；
+机器人／群隔离、私信选群、预览本人确认、旧令牌及撤权／取消／切群阻断；
+改时长不重设已有禁言、不追罚；未知结果不重试、保护目标及独立移除／解禁。
+旧三踢测试及旧截图仅是<strong>2026-10-23较早策略的带日期历史</strong>，不能冒充这些新规则已通过。</p>
+<p>English: this is a documentation-source/current-contract update, not a release or
+new live acceptance. Old three-kick-then-29-day behavior maps to direct muting on
+every trusted actual rejoin, without kicking or immediate punishment on addition.
+Duration defaults to 29 days/41,760 minutes, configurable per bot/group to
+1..41760 whole minutes using <code>黑名单禁言时长 N分钟</code> / <code>N小时</code> / <code>N天</code>,
+with private group selection, preview and personal <code>确认黑名单 token</code>.
+Dashboard: Group Management → Rules → Blacklist Settings. Changes affect future
+rejoins only, never reset existing mutes or apply retrospective sanctions; the
+ordinary 24-hour cap remains. The user's “看得见” confirms the corresponding
+phone display only, not future actual expiry or new-policy acceptance.
+Historical evidence below stays unchanged. Current verification and documentation
+builds were pending at that source-edit stage; the subsequently authorized
+generation and unpublished status are recorded in the preceding section.</p>
+<p>以下为较早轮次的原始记录；其中三踢规则与“手机仍待确认”均保留当时日期和证据口径，
+不能替代上方新契约或覆盖后续限定范围的用户确认。</p>
+<h2>2026-10-23 本群黑名单、私有图片去重与管理页更新</h2>
+<p>16:53:53（北京时间）完成一次受控完整重启，主服务由PID2736561切换为PID2602695，
+<code>active/running</code>、<code>NRestarts=0</code>；不是仅靠插件热重载加载接入器动作授权。
+发布前后配置、原账号启停及正式规则、白名单、财务、活动等保护摘要一致。
+源码、页面与业务保护摘要备份保存在<code>/opt/backups/wsl-blacklist-20261023-ti9FpO/</code>；
+回滚只恢复本轮代码和临时设置，不整库覆盖后续业务数据。</p>
+<p>黑名单按接收机器人及当前群隔离。管理员真实单人@或引用同群原始消息发送
+“黑名单”可直接加入，当前不踢；前三次重新进群成功踢出并核实离群后才计次，
+第四次及以后改为留群固定29天禁言。计数跨天及重启保留，重复拉黑不清零，
+移除再加入开启新轮；移除不自动解禁，解禁不自动移除名单。
+普通自动踢人仍禁止，普通禁言24小时上限不变；群主、管理员和机器人保护不扩大豁免。
+后台沿用读取、搜索、预览及确认，私信选择群后直达管理，不由AI代执行或确认。</p>
+<p>图片在同机器人、同群内按标准化摘要事务查重，不改旧图片ID、不跨群引用。
+压缩、存储和数据库工作不阻塞消息处理；仅读取当前规则引用缩略图，
+保护保存规则、有效预览及在途资产，未知状态不自动删除。
+新管理页包含黑名单列表、成功踢出次数、处罚阶段和异常状态；切换页签不再重置未保存草稿。
+管理员指引、中英文命令树、使用帮助及离线教程同步更新。</p>
+<p>发布基线三批回归共7790通过、55条件跳过；前端55项及类型检查通过。
+320／390／1440px明暗主题隔离浏览器通过，截图不能替代手机客户端验收。
+随后修复验收夹具对字符串策略版本及SQLite的0／1开关类型误判，
+相关276项通过、2条件跳过后仅重载插件；此前两次夹具绑定失败均未拉黑或处罚，
+临时管理员身份、窗口及账号启停已逐次恢复，原失败证据保留。
+真实测试仅在1459282使用既有三个账号及中性图片、文案，不新增NIM连接。
+17:19:12加入测试黑名单时没有立即踢人；17:20:08、17:20:34、17:21:05三次重入
+均取得踢出成功及完整成员目录离群回读。17:21:33第四次重入固定41760分钟禁言获平台受理，
+并从原生禁言名单核对当前禁言；17:21:35移除黑名单、解禁及夹具恢复验证完成。
+没有静默改为24小时，也没有设置每日续封。
+<strong>平台实际到期时间证据仍不可得，本轮官方手机客户端禁言时长显示仍待确认。</strong></p>
+<p>随后关键词第一次补测被原有防机器人互聊保护拒绝，未生成关键词发送；
+原失败与恢复记录保留。新增只限精确中性标记、原生单条消息、既有账号、当前群及
+300秒以内窗口的关键词验收夹具，不给生产机器人互聊增加通用例外。
+相关图文专项175项、既有探针／收件专项122项及最终后端专项665项通过、2条件跳过，统计有重叠不累加。
+三条20分钟错峰、各自60分钟循环的独立时钟测试跨午夜及年界共3种日期通过；
+文档、管理员指引、菜单及业务规则综合626项通过。</p>
+<p>17:39:49两条关键词图文取得独立收件；17:41至17:46六个自然定时边界完成
+A→B→C→A→B→C，每轮图片摘要匹配对应正文、图片先于正文，12条均有独立原生消息ID。
+首轮与后续窗口分段开启，每段不超过300秒；不改变正式20分钟间隔及60分钟循环。
+17:46:30确认测试规则、角色、窗口与原账号启停恢复。17:47:56在事务中核对保存规则、
+有效预览、图片发送引用、任务及轮换均无引用或在途操作后，先备份再精确删除3张本地测试图；
+不删远端平台资产、原生消息、黑名单历史、审计或回执，普通自动清理24小时阈值不变。
+本轮新图文的<strong>官方手机显示仍待确认</strong>，不借用上一轮用户确认冒称通过。</p>
+<p>17:51:55复核主服务PID2602695、重启次数0、原账号启停及全部测试窗口关闭；
+随后完整原生目录再次核对群主31846829、普通成员43506527和23691273三人角色恢复。
+正式群汇赢／鼎峰／真龙、白名单、财务、活动、AI与业务规则正文均与发布前保护摘要相符。
+真实测试保留正常版本及入群代数递增：测试接收租户版本205→217，测试目标版本1→13、
+入群代数1→9及已核验身份，测试业务规则版本20→25；不回写旧版本或整库覆盖。
+<code>final.json</code>保留整体原始哈希差异，并仅在内存替换上述测试元数据后匹配原始整表指纹，
+不把正常审计写入描述为全库零变化。
+原始实测、补测、清理及恢复证据分别见备份目录的<code>run03/acceptance.json</code>、
+<code>media-run01/acceptance.json</code>、<code>cleanup.json</code>及<code>native-final-roles.json</code>。</p>
+<p>最后界面复核纠正了一处“后续发言或入群”的错误提示：实际后端始终仅按可信重新入群处理，
+页面及预览现明确写为重新入群、累计三次成功踢出后才转长禁言。
+新版55项前端测试、320／390／1440px明暗主题浏览器及编译通过，教程截图随之重生成。
+黑名单权限、错群／版本变化、保护目标、搜索／确认过期等后台错误补齐具体原因和下一步，
+16种错误路径有隔离接口回归，不放宽权限或自动重试。</p>
+<h2>2026-10-23 关键词配图与三条定时错峰</h2>
+<p>14:32:42（北京时间）仅热重载旺商聊插件，主服务PID2736561、重启次数0不变。
+关键词回复增加1张本群静态配图，复用原有受限上传、紧凑原生图片包装和发送账本，
+先图后文；允许纯图片，图片未知时不续发正文，同一消息不重放，部分送达也计入冷却。
+反应式关键词配图不要求主动发送授权；定时图片仍要求原有主动发送授权。
+图片归属校验、预览缩略图和过期清理同时覆盖关键词，避免仍在使用的配图被清理；
+私信固定命令修改正文保留现有图片，不扩大普通私信自动收图范围。</p>
+<p>页面新增三条独立计划的每小时错峰表单，默认00／20／40分，
+每条每60分钟一次；可改各自分钟，校验三个不同计划、分钟及循环顺序。
+时间转换为原有每日24个时刻，不新增调度存储或重放机制。
+应用只更新草稿，保留启用状态，最终仍走原有预览确认；
+新建三个草稿均关闭，保存后保留当前所选计划及时间。
+本轮不填入此前推广素材，不自动更改三个正式群现有关键词、公告或排程。</p>
+<p>相关后端／发送／管理员说明629项、文档及菜单515项回归通过，Ruff及类型检查通过；
+编译页在320／390／1440px隔离浏览器覆盖关键词图、三条独立图文、默认与自定义时间、
+上传取消／超时、预览保存和不自动启用。截图为隔离测试资料，不是手机或真实群发信验收。
+14:33:22复核线上页面和关键词图片声明均已加载，配置、群规则、白名单、
+财务和活动保护摘要及原账号启停状态均未变；无新的真实群图片或定时消息测试。
+私有发布证据在<code>/opt/backups/wsl-keyword-media-20261023-V0rkcE</code>，
+原核心修改源码在<code>/opt/backups/wsl-keyword-images-source-before-20261023-b18c1.tar.gz</code>。</p>
+<h2>2026-10-23 用户手机确认与图片试点清理</h2>
+<p>本轮用户明确回复「现在正常了，清理吧」，补齐上一节定时图片的官方手机显示确认。
+该确认仅覆盖本轮定时图片，不扩展为其他首次入群、欢迎图或抽奖功能的手机验收；
+原自动化报告中的<code>transport_only</code>及当时<code>phone_verified=false</code>保持原样，
+用本条用户确认补充证据，不改写旧失败或原始运行结果。</p>
+<p>02:56:30（北京时间）在事务内清理两轮图片试点共6张本地测试图。
+仅处理1459282、43506527、运行报告列明且状态为ready的精确图片ID；
+核对全部保存配置和未使用的有效预览均不再引用，测试广告配置为空，
+无待发送任务、定时游标或轮换残留，逐张校验摘要后先备份再删除并复读确认。
+未清除其他群图片、平台远端资产或已发送的群聊天消息。</p>
+<p>临时规则、发送授权、原生管理员角色、测试窗口与大蛤启停已恢复并再次核验；
+不重新启用机器人、不新增发送／撤回／处罚、不重启服务。
+正式群规则、白名单、AI、抽奖和财务数据保留，必要收发回执、审计、
+持久测试计数、修复代码、回归测试及回滚备份均保留。
+本轮清理和用户确认记录在
+<code>/opt/backups/wsl-image-render-20261023-eBKiQp/cleanup.json</code>，
+6张精确资产的删除前私有备份为同目录<code>test-image-assets-before.sqlite3</code>。</p>
+<h2>2026-10-23 定时图片空白气泡的包装格式修复</h2>
+<p>用户手机截图确认00:47至00:50的四条定时图片均为空白气泡，后续文案可见；
+上一节的accepted及机器人独立收件只能证明传输，不能称官方手机客户端图片验收通过。
+旧证据不改写为手机成功，不自动重放这些已受理的操作。</p>
+<p>确认定时图片路径使用默认<code>json.dumps</code>，产生<code>{&quot;b&quot;: &quot;...&quot;}</code>。
+官方Android3.7.3的<code>com.xclient.sdk.crypto.a</code>仅在精确匹配<code>{&quot;b&quot;:&quot;</code>和<code>&quot;}</code>时
+剥除外壳，否则将整个字符串交给Base64解码。默认JSON空格因此造成明确的客户端协议
+不兼容；机器人自己的<code>json.loads</code>解码能够容忍空格，先前对端验证未发现这一问题。
+定时图片改为与现有文字及固定引导图一致的紧凑JSON；不改图片资产、正文、
+消息时间字段、核心收件解码器、轮换及先图后文逻辑。</p>
+<p>新增上传／缓存资产两条路径的精确包装断言：修复前两项均失败，修复后相关图片专项
+365通过，传输／发送守卫／刷屏专项391通过。旧失败证据保留。
+2026-10-23 02:40:24（北京时间）通过正式插件接口热重载，主服务PID2736561未变。
+02:41:39复核15组保护指纹、原账号启停和正式群配置一致。
+源码快照、官方只读提取源码、修复前失败及修复后结果保存在
+<code>/opt/backups/wsl-image-render-20261023-eBKiQp/</code>。</p>
+<p>本次受控补测只在1459282进行，不执行抽奖、处罚或财务操作。
+驾驶脚本明确标注<code>acceptance_level=transport_only</code>和<code>phone_verified=false</code>，
+后续即使原生收件通过，也必须另外确认官方手机实际显示。</p>
+<p>02:43／02:44／02:45／02:46四个自然边界完成新的图片1→2→3→1及文案发送，
+八条均accepted，对端时间与消息ID逐对确认先图后文；手机显示仍待用户复核。
+新图／文案消息ID依次为<code>4297058878635377650/651</code>、<code>4297058878635377652/653</code>、
+<code>4297058878635377654/655</code>、<code>4297058878635377656/657</code>（斜线后省略共同前缀）。
+新测试证据为<code>/opt/backups/wsl-activity-pilot-20261022T184201Z/summary.json</code>，
+不是对旧操作的重试。本次显式使用TestLab已有20次日上限档位，原持久计数继续累计，
+只新增一对已验证的临时管理员授予／撤销，不重置计数或使用额外角色豁免。</p>
+<p>02:46:43只读复核：测试发送授权、空关键词／广告配置、原生角色、账号启停和窗口
+均恢复；小满、林夕在线，大蛤停用，主服务未重启。正式群、财务、白名单、三份活动库、
+AI设置等保护摘要一致；测试元数据版本及审计按正常流程保留。
+补充驾驶脚本及文档专项237通过、1条件跳过，含手机验收标签回归；
+先前219项安全检查与其有重叠，不重复累计。Ruff及格式检查通过。</p>
+<h2>2026-10-23 定时发言先图后文与测试群补验</h2>
+<p>原实现先文案后图片；按本次要求改为先发送本次轮换图片，图片受理确认后再发文案。
+图片未知、被拒或明确未发送时不继续文案；图片已成功但文案被拒或明确未发送时记为
+部分发送并暂停，文案未知则按未知暂停。已发图片与文案均不自动重放，
+整次成功才推进图片轮换。纯图、纯文字、当前授权、长文分段与稳定操作ID不变。
+管理员手册及中英文使用帮助同步更新。</p>
+<p>北京时间2026-10-23 00:45:20正式插件接口热重载，主服务未重启。
+00:47／00:48／00:49／00:50四个自然定时边界在固定测试群<code>1459282</code>完成
+图片1→2→3→1轮换，每轮均为图片先、文案后，八条均accepted。
+小满43506527发送，大蛤23691273用既有连接独立记录图片摘要、原生时间与消息ID，
+林夕31846829保留群主身份用于临时原生管理授权及恢复；没有新增NIM连接或调用模型。
+四对图片／文案消息ID分别为：
+<code>4297058878635377638/639</code>、<code>4297058878635377640/641</code>、
+<code>4297058878635377642/643</code>、<code>4297058878635377644/645</code>（斜线后省略共同前缀）。
+本次只运行<code>--phase scheduled</code>，没有执行抽奖、禁言、撤回或付款。</p>
+<p>测试证据为<code>/opt/backups/wsl-activity-pilot-20261022T164602Z/summary.json</code>；
+代码备份、回归及加载核验为<code>/opt/backups/wsl-image-first-20261023-2LrECn/</code>。
+临时发送授权、测试群审核规则、空关键词／广告配置、原生管理角色均恢复，
+大蛤恢复停用，窗口关闭；00:53:34只读复核主服务PID2736561、
+<code>active/running</code>、<code>NRestarts=0</code>。正式群及财务保护摘要一致，三份活动库、白名单、
+AI设置等13组未涉及数据指纹一致。测试租户／业务规则版本按正式保存流程递增，
+原生收发回执与审计保留，不宣称所有生产库零写入。</p>
+<p>离线相关专项283通过；180文件三批最终回归7561通过、55条件跳过、0失败，
+7616项无重复，专项与完整结果有重叠。修改范围Ruff及格式检查通过。
+热重载及受控启停日志未发现导入或账本关闭异常；既有消息格式与其他插件告警
+不在本轮修复范围。原生图片与文案的独立收件已验证，官方手机图片显示仍未验收。</p>
+<h2>2026-10-23 红包到时公布与结果排序</h2>
+<p>普通红包保留固定份额均分、随机名单顺序，整数分无法整除时每份最多差1分。
+拼手气只在展示时按金额从大到小稳定排序，同额保持原随机顺序；
+不修改成员与金额的对应关系，不重写已保存结果，不提供隐蔽内定或最大红包对换。
+两种红包均须到设定时间才公布，满员、管理员「立即开奖」和受控测试入口均不能提前；
+提前请求不修改截止时间、活动状态、份额或控制回执，开奖事务在等待成员查询后再核验时间。
+到期后的管理员恢复仍保留原截止时间；旧奖品抽奖的立即开奖行为不变。
+未领取金额仍记为未支出，不重新分摊，不发生真实扣款、付款或退款。
+中英文入门、完整命令及系统生成的管理员手册同步更正，不改用户维护的其他知识条目。</p>
+<p>源码快照、三份活动库在线快照、离线结果与加载前后证据保存在
+<code>/opt/backups/wsl-packet-timing-20261023-3HtQQb/</code>。
+金额／时间／展示与受控入口最终专项315通过，含新增边界及错误映射专项21项，
+不重复累计唯一用例数。编译页隔离浏览器在320／390／1440px通过，
+没有在真实群新建活动、发送测试消息或付款，不将隔离截图称为真实手机验收。</p>
+<h3>验证与加载</h3>
+<p>单进程完整回归到44%时以退出码143终止，没有完整结果，不能计为通过。
+随后将180个相关测试文件分为三个互不重叠批次；第三批首轮发现仍按5秒边界断言的
+旧刷屏测试，将其输入更新为3秒／3.001秒，未修改生产刷屏逻辑。旧失败XML保留；
+最终三批合计7554通过、55条件跳过、0失败，7609项无重复。
+刷屏边界另行57通过，与完整结果有重叠；修改范围Ruff及格式检查通过。
+编译页隔离浏览器1项通过；帮助与维护专项52通过、1条件跳过，与完整结果有重叠。</p>
+<p>2026-10-23 00:31:00（北京时间）经正式插件接口热重载；
+00:31:26核验主服务仍为PID2736561、<code>active/running</code>、<code>NRestarts=0</code>。
+原平台配置、规则、白名单及三份活动库等15组保护指纹一致，
+小满43506527、林夕31846829保持在线，大蛤23691273保持停用。
+只读核验系统管理员手册已更新到时公布和金额排序规则；
+未新建真实活动、重抽旧结果、启用停用账号或执行财务操作。
+重载未发现导入或账本关闭异常；既有<code>message_decode/envelope</code>不支持格式和其他插件
+告警仍存在，不称整个服务零告警。文档生成器、HTML与PDF发布按本轮重新生成同步。</p>
+<h2>2026-10-22 三秒三条刷屏阈值热重载</h2>
+<p>按用户明确要求，仅热重载已修改的旺商聊插件，不重启主服务、不更改群配置。
+现行快速档位为同一成员3秒内3条，文字、图片、表情与视频均计数；
+仍同时校验原生发送时间和本地收件时间。原10秒8条、30秒同文5条及既有豁免不变，
+下方旧记录中的5秒3条属于当时版本，不作为本次加载后的快速档位。
+防刷屏离线专项164通过、1条警告，修改涉及文件Ruff检查通过；
+没有在真实群触发处罚或发送测试消息。</p>
+<p>2026-10-22 23:20:41（北京时间）正式插件接口确认重载成功；
+23:21:29核验主服务仍为PID2736561、<code>active/running</code>、<code>NRestarts=0</code>，
+原平台配置、业务规则、白名单及活动等15组保护指纹一致。
+小满43506527、林夕31846829在线，大蛤23691273仍停用。
+日志确认插件重新加载，无本次加载异常；原有消息格式与其他插件告警仍存在。
+源码快照、活动库快照及加载前后核验保存在
+<code>/opt/backups/wsl-flood-3s-reload-20261022-k3L5m7/</code>。</p>
+<h2>2026-10-22 深度审查：长规则回复与异步活动边界</h2>
+<p>用户要求分布式子代理审查。已分别发起处罚、活动、AI、规则／页面与财务五个任务，
+但五个子代理均在启动时被上游模型以<code>403 insufficient balance</code>拒绝，无审查产出。
+因此本节只记录主代理本地源码审查与离线验证，不能称五路独立复核完成。
+原始源码、测试结果和业务指纹位于
+<code>/opt/backups/wsl-deep-audit-20261022-znKyFd/</code>。</p>
+<p>确认并修复四类问题：</p>
+<ul>
+<li>关键词和定时文案允许2000字，却使用4096字节单条发送接口，较长中文／表情文字
+保存成功但投递失败。改用现有原生逻辑消息分段，不新建发送器；全部分段受理后才成功，
+任一段结果未知不重放、定时配图不继续发送，仍不自动撤回业务回复。</li>
+<li>抽奖开场／开奖等待平台回执期间，离群清理可先将活动取消；旧<code>finally</code>不带状态条件，
+会将清理后的活动重新改为报名中或已开奖。现在只从原<code>announcing</code>／<code>drawing</code>状态
+比较更新，迟到回执不覆盖取消和清理原因，也不报告已经重新开启。</li>
+<li>定时发言只在查询成员名单之前检查10秒时效；慢查询结束后仍发送过时计划。
+现在成员核验后再查时效，错过本次则直接进入下一未来时刻，不补发。</li>
+<li>删除或替换广告计划后，旧轮换行永久残留。现在仅在本群预览确认保存的事务内删除
+不再存在的计划轮换，保留现存计划位置、其他群及账号、图片和历史发送回执；
+不单独运行生产数据清理任务。</li>
+</ul>
+<p>同一组最终测试在进程内载入备份旧方法，15项中14项失败，覆盖上述四类问题；
+修复后15项通过。另保留“邀请管理员撤权停用统计”的反例测试，原实现本已通过，
+故未修改该分支；它仍在同一事务内停用统计／奖励，不清理积分或基线。
+不修改群权限、规则、白名单、红包金额、AI开关、套餐或财务账本；
+不开启停用机器人、不实群发信、不调用模型。完整回归与是否加载须按后续证据区分。</p>
+<h3>验证与加载</h3>
+<p>最终完整旺商聊及组件运行时相关离线回归7503通过、55条件跳过、2条警告，
+原始结果为<code>regression.xml</code>；上述15项新增测试包含在完整结果内，不重复累计。
+修改范围Ruff及格式检查通过。编译页隔离浏览器在320／390／1440px通过
+定时图片、抽奖备注与金额、邀请设置、正在禁言与解禁等既有流程；
+截图和<code>browser.xml</code>保留，不将隔离页面测试称为真实手机客户端或实群投递验收。
+帮助与维护相关专项52通过、1条件跳过，与完整结果有重叠。
+文档生成器5项通过，48篇HTML、机器阅读索引及六份中英文PDF重新生成并同步发布。</p>
+<p>2026-10-22 23:05:08（北京时间）通过正式插件接口热重载；
+23:05:31只读复核API及管理页可用，主服务PID2736561保持原值，
+<code>active/running</code>、<code>NRestarts=0</code>。平台配置、租户、业务规则、群AI、
+资料配置、白名单及三份活动库原有设置／活动／报名字段，共15组指纹一致。
+小满43506527、林夕31846829保持在线，大蛤23691273保持停用；
+没有新建真实活动、重放未知请求、向业务群发测试消息或执行财务业务操作。
+重载日志未发现插件导入、账本关闭或本次修改相关异常；接入器仍有
+<code>message_decode/envelope</code>不支持格式告警，其他插件也仍有原有告警，
+不称整个服务零告警。未取得上述格式对应的原始报文，尚不能判断是否影响用户消息，
+不能据本轮回归宣称所有消息类型均已支持。
+源文件备份、旧版复现及加载前后证据均在本节备份目录。</p>
+<h2>2026-10-22 固定红包份额、未领取金额与活动备注</h2>
+<p>按用户要求更正“报名不满仍分完整笔钱”的旧规则；下方旧验收保留为当时事实。
+新红包活动开场时按设定参加人数保存完整的整数分份额，普通红包每份最多差1分，
+拼手气预先随机拆份。开奖只向有效报名者分配已有份额，剩余份额不再重新分摊：
+100元10份普通红包，5人各10元、50元未领取；1人10元、90元未领取。
+无人报名、取消或开场通知未确认而没有开放报名时，全部记为未支出。
+结果、剩余金额与开奖状态同事务持久化；通知未知不重新随机，不自动重发。
+更新前已开启活动保留其原金额规则；历史结果不重算，原奖品抽奖兼容。</p>
+<p>新增可选的「抽奖备注／参与要求」，最多500字，支持多行。可填写头像、昵称等要求，
+备注随本期公告、状态和结果展示，开启后冻结，变更下一期参数不能改写本期要求。
+头像、昵称资格仍由管理员人工核验，不宣称自动图像识别或AI审核。
+旧客户端未提交备注时保留已有值；邀请奖励独立保存，不覆盖备注。
+跨群清理同时移除备注正文，旧库缺列仍可清理；隐藏控制字符与超长输入被拒绝。</p>
+<p>“未领取退回”仅表示未支出，不接入支付宝、没有真实扣款、自动付款或银行退款，
+不读写财务结账账本。测试只使用隔离数据库、合成原生收件和浏览器，不向业务群发信。
+源文件、三份活动库在线快照、回归XML、浏览器截图与部署前后指纹：
+<code>/opt/backups/wsl-packet-remarks-20261022-uiMQOW/</code>。</p>
+<h3>验证与加载</h3>
+<p>金额、活动、后台、生命周期和管理员指引首轮专项402通过、2条件跳过；
+旧试点中的两条断言仍要求1人分完3分钱，已改为验证固定两份、分配一份与剩余一份，
+更新后红包与受控试点专项98通过。这些结果有重叠，不累计为唯一用例数。
+320／390／1440px编译页通过隔离真实接口验证备注保存、换行与HTML文字安全展示、
+待发放及未领取金额、邀请开关，以及原有定时图片和解禁工作流。
+全量回归首轮7486通过、55条件跳过、2条旧断言失败，原XML保留；
+更新断言后的最终完整回归7488通过、55条件跳过、2条依赖弃用警告，
+XML为<code>regression.xml</code>。修改范围Ruff与格式检查、插件类型检查与构建通过；
+API客户端已重生成，文档对应120项及生成器5项通过，HTML与六份PDF同步更新。</p>
+<p>2026-10-22 20:31:00（北京时间）经正式插件重载接口加载旺商聊插件；
+20:31:53只读核验新页面与<code>remarks</code>接口字段已加载。主服务PID2736561保持原值，
+<code>active/running</code>、<code>NRestarts=0</code>；小满43506527、林夕31846829在线，大蛤23691273保持停用。
+原平台配置、租户、业务规则、群AI、资料配置、白名单，以及三份活动库的全部旧设置、
+活动及报名字段共15组指纹一致；数据库仅按需新增空备注、份额与未领取金额字段。
+没有新建真实活动、实际付款或修改财务结账账本，没有将隔离截图称为真实手机验收。</p>
+<h2>2026-10-22 图片上传等待恢复与管理员私信录图</h2>
+<p>本节是后续补修，不把下方旧版本“私信图片不录入”改写成当时已支持。
+源文件备份、完整回归XML、隔离浏览器截图和加载前后核验：
+<code>/opt/backups/wsl-image-input-fix-20261022-z2DkzF/</code>。</p>
+<p>后台原上传入口使用覆盖式文件输入，读取文件与桥接请求均无超时，
+请求迟迟不返回时整块规则表单会持续禁用，缺少可判断的进度提示。
+现在改为显式按钮触发文件选择，取消不锁定表单；读取15秒、上传45秒后提示失败并恢复操作，
+迟到响应不加入计划，切群或卸载也不会写入原界面。支持粘贴、拖入，仍须预览确认保存；
+提交后清除“尚未保存”旧状态。未复现用户原生系统选图窗口卡死，不把故障注入结果
+当作真实手机客户端文件选择器已验收。</p>
+<p>原私信图片在接入器中不支持，插件也主动忽略附件。本次只增加明确请求的管理员录图：
+<code>群列表</code> → <code>选择群 序号</code> → <code>定时发言</code> → <code>广告图片 计划序号</code> → 发送一张图片，
+收到预览后发送当次<code>确认广告 令牌</code>。须有现存计划，5分钟内收一张；
+确认后再录下一张，每计划最多3张、原图最多5MB，仅静态JPG／PNG／WebP。
+未指定计划的聊天图片仍忽略，不调用AI，不自动启用或发送计划。
+计划、选群、当前原生管理身份、租户版本及确认会话均绑定；
+撤权、取消、切群、过期或下载期间变化阻断保存。
+仅接受认证原生信封中的数字资源ID，从已审定固定媒体主机限时、限量、无Cookie下载，
+拒绝任意URL、重定向、动图、表情贴纸和隐藏文字命令，复用原有图片规范化与群范围存储。</p>
+<h3>加载与验证边界</h3>
+<p>2026-10-22 19:59:23（北京时间）完整重启加载接入器和插件，PID2736561，
+<code>active/running</code>、<code>NRestarts=0</code>。19:59:37只读核验小满43506527、林夕31846829在线，
+大蛤23691273仍停用；新<code>广告图片</code>命令目录与编译页均可读取。
+原配置文件指纹、14条租户业务字段、4条业务规则、4条群AI、7条AI资料配置、
+全局开关及15条发言白名单逐项指纹一致；三个江哥群仍各2条已启用关键词、广告计划0条。
+没有向业务群发测试消息、开启停用账号、调用模型或执行财务操作。
+启动期间仍出现维护前已有同一脱敏关联的两条<code>message_decode</code>不支持告警，
+不称所有日志零告警；未发现插件导入、数据库关闭或本次图片处理异常。</p>
+<p>完整相关离线回归7450通过、55条件跳过、2条依赖弃用警告；
+新增原生私信、图片资源、撤权与取消专项26项包含在完整结果中，不累加唯一用例数。
+编译页隔离浏览器在320／390／1440px验证真实文件选择触发与取消、三图上限、
+替换／排序／删除、粘贴／拖入、读取及上传超时恢复、迟到结果丢弃、预览保存及图片非空显示。
+修改范围Ruff与格式检查、插件类型检查及构建通过。
+这些是隔离接口与合成原生加密消息验收，<strong>没有实际手机客户端选图、私信附件下载与显示验收</strong>；
+此前已验证的定时原生图片发送不替代本次客户端录图验收。
+中英文入门、命令、权限目录、管理员指引及生成使用帮助同步更新。</p>
+<h2>2026-10-22 管理员AI超时与账本关闭竞态补修</h2>
+<p>本节是下节未通过项的后续修复，不改写原3轮completed／5轮unknown的失败证据。
+备份、回归、私信原始记录及启停日志：
+<code>/opt/backups/wsl-timeout-lifecycle-20261022-wDwKThnz/</code>。</p>
+<p>账本异常定位到<code>FloodRuntime.step</code>：账号已开始停用，但连接状态短暂仍为online，
+后台扫描未检查stopping，可能在<code>Ledger.close</code>之后继续操作旧连接。
+现在扫描与关闭共用入口锁，等待锁后及读取后重查停用状态与原账本连接；
+关闭先分离连接再等待I/O，重复或并发关闭不会再次关闭同一连接。
+真实数据库故障仍抛出，不通过吞异常或重放处罚掩盖问题。</p>
+<p>上轮管理员请求在约45秒后超时，原请求未明确关闭DeepSeek默认思考模式。
+本次只对管理员指引使用的明确支持模型补充非思考参数，并在计费预览前固定请求；
+没有修改全局模型／人格、普通客服或群AI参数，没有增加工具、延长期限或扩大预算。
+增加脱敏阶段诊断，分别记录异常类型、HTTP状态、响应头耗时和失败阶段，
+不记录密钥、提示正文或推理内容，也不把响应头耗时当作首字时间。
+历史记录缺少这些阶段字段，因此不推断旧供应商内部每次超时的具体阶段。</p>
+<h3>本次部署与复验</h3>
+<p>2026-10-22 18:33:29（北京时间）完整重启AstrBot加载核心账本与插件修复，
+PID2366297，<code>active/running</code>、<code>NRestarts=0</code>；不是仅插件热重载。
+18:39:18最终核验小满43506527、林夕31846829在线，大蛤23691273恢复原停用状态，
+两名在线账号均无待处理队列，所有测试窗口已关闭。</p>
+<ul>
+<li>完整旺商聊相关离线回归7404通过、55条件跳过、2条依赖弃用警告，
+<code>regression.xml</code>及<code>regression.log</code>保留结果。补充专项284通过，覆盖新竞态断言、
+真实数据库故障不被吞掉、管理员参数隔离、超时日志、关键词及定时图片；
+与完整回归有重叠，不机械累加为唯一用例数。</li>
+<li>使用原小满／林夕现有私信连接及8个原验收问题，以新消息ID重新实测：
+<strong>8轮模型全部completed、0超时／新增unknown</strong>，模型传输耗时2.702～12.975秒。
+取消、直接命令提示、菜单、进入／退出咨询及8个问题，共13条均有独立原生收件；
+费用回执均正常结算，不以兜底文字送达冒充正常模型回答。</li>
+<li>大蛤受控启用／停用两轮，原生online／stopped均确认，未再出现关闭数据库或扫描异常。
+期间一条已在途的目录请求记录response_invalid告警，不将该轮称为全日志零告警。</li>
+<li>正式保护指纹、全部非测试群租户行、原机器人配置均与维护前一致；
+旧calls及ai_charges逐行不变，包括原5条unknown。未重放未知请求，
+管理员专项试用余额未变，临时精确目标发送授权恢复，未修改付款或邀请账本。</li>
+<li>修改范围Ruff及格式检查通过；全仓仍有未触及的<code>reset_dashboard_live.py</code>导入排序问题
+及72份原有格式差异，不因此整理无关文件。</li>
+</ul>
+<p><code>native-guidance.json</code>、<code>native-lifecycle.json</code>及<code>final-verification.json</code>分别保存上述证据。
+手机图片实际显示和真人关键词命中仍须客户端观察；原生图片协议收件、离线关键词测试
+不能替代这两项，托管机器人豁免继续保留。</p>
+<h2>2026-10-22 旧站退役、定时图片与最新管理员指引</h2>
+<p>本节替代下节早先的旧站303／410过渡状态。独立结账域名<code>yqjz.xhn.top</code>
+的DNS、Cloudflare Tunnel精确主机路由和对应Access应用已移除；
+<code>astr.xhn.top</code>主站路由及Access应用保留。检查Caddy文件和运行配置，
+没有旧域名或6186代理项，因此未修改其他站点、未重载Caddy。
+<code>wangshangliao-cashier.service</code>停止、禁用并删除单元及加固覆盖，6186不再监听。
+独立HTTP／RPC服务、旧前端、构建配置及专用部署脚本已移除。</p>
+<p>结账继续在「旺商聊管理 → 活动与财务 → 邀请记账／结账」使用同一账本。
+采集器拆为<code>cashback_runtime.py</code>，仅保留采集与插件查询；
+请求模型放在<code>cashback_models.py</code>，不再加载独立网站或旧Access授权。
+新<code>collector.json</code>仅保存采集实例，属主为服务用户、0600；
+首次重载曾因root属主而只读降级，修正文件权限后重新重载已恢复，不改账本。
+旧配置、代码、服务、边缘路由及两份SQLite在线快照保存在
+<code>/opt/backups/wsl-media-retirement-20261022-vl2XvV/</code>，不通过覆盖业务库回退代码。</p>
+<p>「群管理 → 规则 → 关键词回复与定时发言」支持每计划最多3张静态JPG／PNG／WebP，
+单张上传最多5MB，去除元数据并规范化保存，拒绝动图及过大像素图片。
+每次按顺序发送1张，循环1→2→3→1；支持仅图片或文字加图片，
+可替换、排序、删除，预览确认后生效。文字修改保留轮换进度，
+替换／重排图片重置轮换；不补发错过时刻。图片按账号与群绑定，
+原生上传校验原图／缩略图读回字节，发送仍受当前授权及持久幂等约束。
+上传或发送结果未知时暂停，不自动重发；不开放任意URL上传、下载或跨群资源引用。</p>
+<p>管理员私信使用<code>群列表</code>、<code>选择群 序号</code>后直接发<code>规则</code>、<code>关键词回复</code>或<code>定时发言</code>。
+未选群时提示这两步，不再显示内部错误码；<code>定时广告</code>保留兼容。
+图片仅在插件页面上传，私信图片附件不会被当作已保存计划。
+「菜单／帮助」显示常用操作；只有主动发送「完整菜单」才进入旧树，
+管理员指引使用服务端最新命令目录、最短入口及当前权限，不猜旧菜单编号，
+无后台权限者不被要求共享总控登录，AI不代保存、付款或执行管理动作。
+中英文入门、规则说明及生成使用帮助同步更新。</p>
+<h3>本轮验证与未通过项</h3>
+<p>离线完整相关回归7389通过、55项条件跳过、2条依赖弃用警告，
+日志为备份目录中的<code>regression-post-witness.log</code>。编译管理页隔离浏览器13项通过，
+覆盖320／390／1440px的三图上传上限、替换、排序、删除、仅图预览保存及插件结账。
+这不等同于所有55项环境用例均补验，重叠专项数量不与完整回归相加。</p>
+<p>测试群真实证据：
+<code>/opt/backups/wsl-activity-pilot-20261022T093851Z/summary.json</code>。
+小满43506527、大蛤23691273、林夕31846829配合，复用保存会话，无额外NIM连接。
+普通／拼手气各一轮真实报名开奖，均仅1名有效报名者、3分钱待发放分配，
+未执行真实付款。北京时间17:41、17:42、17:43、17:44四个自然定时边界
+图片1→2→3→1均accepted，并由大蛤现有连接独立核对原生图片及摘要；
+消息ID依次为4297058878635377618／7620／7622／7624（后3项省略同一前缀）。
+手机显示尚未验收。30秒5条同文触发禁言及整批撤回，
+当前禁言列表查到测试成员，后台预览解禁后平台复查已解除。
+正式群及金融／连接配置保护指纹前后一致，临时规则、活动与发送授权恢复，
+管理角色原生复查恢复、大蛤恢复停用、测试窗口关闭。
+关键词只完成配置预览／保存／恢复，保留托管机器人豁免，不声称真人命中通过。</p>
+<p>首轮<code>20261022T092253Z</code>已有一张图片accepted，但观察机制原先只识别固定帮助图，
+未取得独立收件证据即停止，未重发、未重置未知状态。配置与角色均恢复，
+失败证据保留；修复限定测试观察后使用新计划完成上面的四次边界。
+本轮停用测试账号时还记录了一次关闭账本后的只读发现竞态异常；
+账号停用及配置恢复核验通过，但本次不因此宣称核心启停竞态已经修复。</p>
+<p><code>native-guidance.json</code>保存管理员私信实测：取消、未选群的<code>定时发言</code>提示、
+常用菜单、进入／退出咨询及8个问题，共13条均有独立原生收件。
+模型实际仅3轮completed、5轮unknown（约45秒超时），<strong>管理员AI答疑未全通过</strong>；
+已正常回答的三轮覆盖关键词最短入口、三图轮换说明、定时禁言及单成员解禁。
+未重试未知请求、未改模型或放宽预算，8次计量记录按既有规则保留，
+管理员指引专项试用余额未改变；退出咨询、窗口关闭及发送授权恢复均完成。
+不将兜底文字送达称为模型正常回答，也不以离线绿灯覆盖此线上缺项。</p>
+<h2>2026-10-22 结账入口合并与常用对话简化（早先阶段）</h2>
+<p>独立结账页迁入「旺商聊管理 → 活动与财务 → 邀请记账／结账」，旧首页303跳转，
+旧站API／资源410停用；保留底层采集服务、同一账本与私聊结算授权。
+新插件接口只接受总控JWT和有限动作，不代理任意URL、不接受浏览器指定操作者／角色，
+以独立<code>dashboard/…</code>身份审计，不冒用原Access结账员。旧Access允许名单不授予全局后台登录。
+新群仅在确有配置提交时增加不可网页登录的联系外键行，页面读取不创建财务用户或聊天授权。
+付款、撤回、切价沿用原记录版本、资格检查及幂等请求；配置／权限在异步核验后、
+事务开始和提交前重查，合并服务暂停、群暂停、租户版本变化均阻断写入。</p>
+<p>同时修复返现风控列表切群不清空、失败后可能使用旧记录的问题：
+旧确认框绑定原群，切群关闭并清空；嵌入式解冻增加原生命周期及事务守卫。
+此前财务文档2026-10-20记录的这两项问题由此修复，其余历史缺口不因此关闭。</p>
+<p>「菜单／帮助」默认简化为五类常用操作，原固定命令仍可直接发；
+旧配置树须主动发送「完整菜单」。插件帮助默认只列常用命令，按钮可直接切至设置页，
+完整目录按需展开。管理员AI手册与每轮回答约束同步：有后台权限先给表单，
+无后台权限给最短直接命令，不要求普通群主获取全局后台或共享密码。
+危险操作、付款和本人承担群AI扣费的必要确认保留，AI仍无执行工具。</p>
+<p>备份与离线证据：<code>/opt/backups/wsl-settlement-menu-20261022/</code>，源文件归档及两份SQLite在线备份。
+金融／菜单／原生命令回归1196通过；控制台及权限、管理员指引回归412通过、3跳过；
+新增结账、编译页及静态入口13通过，文档和入口对应校验140通过；
+320／390／1440px验证表单、确认框、切群失败清空和帮助跳转，
+均使用临时账本，不登记真实付款或代替手机客户端验收。并行构建期间曾有两项静态页发现
+检查读到输出目录清空瞬间，构建完成后均复验通过，不把当时失败改写成首次成功。
+API客户端已重生成且内容不变。中英文入口映射、截图及生成手册随同更新。</p>
+<p>发布仅热重载旺商聊插件，主服务PID3601197未重启；
+旧结账服务于2026-10-22 16:01:07（北京时间）重启以加载停用跳转，
+新PID1721123；两服务均active、<code>NRestarts=0</code>。
+16:12:07只读复核：插件结账身份／状态／群目录均200，采集群6个；
+不完整付款参数400，未提交真实付款。旧源站首页303且目的地正确，
+旧<code>/api/me</code>及<code>/api/entries</code>均410；未修改旧域名的边缘Access策略。
+最终插件HTML与线上字节相同，SHA-256：
+<code>7f76bfe99e2dbfcb8416171aeffbdb815204d96766d9bb597e77393e8bb6a492</code>。
+<code>deployment-final.json</code>保存核对结果：结账业务记录、群返现价格及版本、聊天财务授权、
+完整租户行和主机器人配置与发布前指纹一致；不把服务审计或手册同步称为全库零变化。</p>
+<h2>2026-10-22 抽奖拆分、当前禁言与受控试点</h2>
+<p>北京时间14:49前发布仅插件热重载，管理页字节与构建一致：
+<code>87e74740c280d8defb441c1245c9a427a17db3288775bd961a6767978c204db3</code>。
+随后仅补活动刷新未保存保护，静态页再次字节核对一致，最终SHA-256为
+<code>c725f19ef0beddaf5fc0bdf2c0c41b680c52a497239258ab9db329bf9bbb8061</code>。
+主服务PID3601197、结账服务PID212703不变，均active、<code>NRestarts=0</code>。
+源码与活动／开放服务库备份在<code>/opt/backups/wsl-activities-ui-20261022-DbhbdH/</code>；
+不得为回退代码覆盖业务数据库。</p>
+<p>界面将「开通与规则」拆成「开通」和「规则」，两页保存互不覆盖管理与规则配置；
+活动拆成「玩家福利抽奖」和独立「邀请奖励」。旧入口映射与截图已更新中英文教程。
+新报名文字为<code>参与玩家福利抽奖</code>，旧<code>参加抽奖</code>兼容。
+新增普通红包／拼手气、总金额、1至100名参加人数，以及独立邀请门槛开关；
+未勾选时服务端强制门槛为0。金额按整数分存储、总额守恒、每人至少1分；
+普通红包余分在打乱后的成员中分配。开奖时未满员按实际有效报名人数分配，
+无人报名不分配。原有奖品活动与已冻结历史保留兼容。
+这是待发放分配记录，<strong>没有原生转账、真实付款或财务结账写入</strong>。</p>
+<p>处罚页增加平台当前禁言成员和单成员「解除禁言」：
+十分钟单次预览绑定后台操作者、完整租户版本与成员原生身份，提交和发送前重新核验；
+受理后另查平台名单，回执未知不自动重试，不删除历史违规或批量释放其他成员。
+列表读取失败不显示成无处罚。</p>
+<p><code>/opt/backups/wsl-activity-pilot-20261022T065159Z/summary.json</code>记录本轮真实试点：</p>
+<ul>
+<li>仅测试群<code>1459282</code>，固定三成员：林夕31846829群主、小满43506527机器人、
+大蛤23691273普通测试成员；通过现有保存会话临时启用大蛤，林夕连接原已在线，
+不新增账号登录或第二条NIM连接。小满临时原生管理角色通过既有TestLab受限接口授予并恢复。</li>
+<li>普通／拼手气各一轮，配置3分钱、上限2人，1名有效成员使用新口令真实报名并提前开奖，
+均持久化3分钱待发放结果，开场及开奖通知均accepted。
+多成员随机金额分布与邀请门槛的覆盖来自离线测试，不将单人试点宣称为多人手机验收。</li>
+<li>邀请积分独立保存后保持抽奖设置不变，恢复原奖励与抽奖参数。
+关键词回复完成真实预览／保存／恢复；托管机器人继续被关键词回复豁免，
+没有为凑验收移除豁免，普通真人关键词命中未作本轮线上验证。</li>
+<li>北京时间14:54定时通知accepted，消息ID<code>4297058878635377583</code>。
+这不是手机客户端显示证明。</li>
+<li>30秒内5条同文真实入站触发刷屏；禁言accepted，5条撤回均accepted，
+大蛤既有账本另收到5条独立原生撤回通知。
+后台当前名单查到大蛤，预览／确认解禁accepted，独立平台复查已不在名单，
+操作ID<code>dashboard-unmute/e691c468e4b1064d4da7c468e2c39d10636cb5fc869bdbfd0301ef4d300acaf8</code>。</li>
+<li>临时规则、广告计划、活动参数、奖励、主动发送授权与原生管理角色均恢复，
+窗口关闭，大蛤恢复停用；小满、林夕在线。<code>cmd_config.json</code>前后语义一致。
+试点中正式群／金融／配置保护检查持续通过；最后summary的
+<code>protected_unchanged:null</code>是当时脚本未跨临时启停比较指纹，不能写成最终完整指纹核验。
+后续脚本已增加启停前后完整指纹检查，本轮另有只读恢复核对。
+<code>/opt/backups/wsl-activities-ui-20261022-DbhbdH/restore-verification.json</code>的6项检查全部通过：
+非测试群租户稳定字段未变，测试群配置与原生角色、抽奖参数、邀请参数、
+机器人配置恢复，没有未结束测试抽奖。</li>
+</ul>
+<p>先前14:49一轮因验收脚本RPC参数名与活动动作重名，在创建抽奖前停止，
+无抽奖消息；其临时配置和角色同样恢复，证据保留不删除。
+修复后第二轮完成上述链路，不重试未知消息。
+离线相关回归1537通过、3项条件跳过；编译页面真实隔离接口30通过，
+覆盖320／390／1440px及升级、预览取消、分开保存和解禁确认；
+维护文档相关54通过、1跳过，新增验收驱动安全回归4通过，
+目录生成5项Node检查通过。48篇本地教程390／1440px无脚本错误、缺图或横向溢出。
+这些是本轮功能的有界验收，不代表全插件、真实付款、普通真人关键词回复或手机全流程验收。</p>
+<h2>2026-10-22 媒体误罚修复与更正</h2>
+<p>用户报告普通表情包、图片被逐条撤回并明确授权修复、上线及解除对应误伤。
+根因是<code>content_rules.py</code>把图片、视频、合并记录直接映射为禁止媒体，
+并绕过广告前三次警告执行禁言；该行为与正常媒体仅参与刷屏计数的预期冲突。
+13:38:33（北京时间）仅热重载<code>wangshangliao_moderation</code>：
+移除媒体类型处罚与独立媒体快速队列，保留文字广告、真实刷屏及原生身份／权限核验。
+AstrBot PID3601197和结账PID212703未变，两服务active、<code>NRestarts=0</code>。</p>
+<p>读取平台当前禁言名单并核对原始入站、原禁言回执、时长及后续动作：
+13:41:25为鼎峰<code>1459534</code>成员<code>40829403</code>提交一次独立解禁，平台受理后复查已不在禁言名单。
+有后续刷屏处罚或原媒体禁言已过期但平台仍禁言的成员，无法明确归因，保留当前禁言；
+不批量清空名单。真龙<code>1516387</code>当前禁言名单无可明确归因的有效媒体误罚。</p>
+<p>逐条匹配小满<code>43506527</code>下两群原消息的类型、发送者、NIM路由、违规类别及操作ID，
+仅将95条媒体误罚的<code>automatic_mutes.closed</code>置1，退出未来递进计数：
+真龙62条（61条accepted、1条unknown），鼎峰33条accepted。
+原unknown仍为unknown，原生操作回执、内容审计及非媒体处罚计数不变；
+两群各追加一条<code>media_false_positive_corrected</code>总控审计，没有删除历史或重新发送已撤回消息。
+变更前源码及更正前处罚库备份位于<code>/opt/backups/wsl-media-fix-20261022-SKZhSl/</code>；
+备份仅留证，禁止为代码回退覆盖生产数据库。</p>
+<p>首批相关离线回归602通过，自动处罚／白名单／入站／群AI／公共服务专项357通过。
+这是离线行为覆盖，不是由维护者向正式群发媒体做处罚试验。
+上线后自然入站的两条视频已正常处理，未生成媒体违规记录；
+未操作AI配置、套餐、财务、其他群授权或结账服务。</p>
+<h2>2026-10-22 仅规则群升级入口</h2>
+<p>北京时间05:41:48核对：已增加服务端<code>ai_admission_preview</code>、<code>ai_admission</code>，
+管理页“开通与规则”和“群聊与热群AI”均提供“预览升级正式AI → 确认升级”。
+十分钟单次令牌绑定后台操作者、租户完整快照、成员代次、现有管理员原生发送者身份
+及服务版本；完整成员核验、原生管理权限、暂停及撤权边界仍生效。
+提交只解除<code>rules_only</code>并递增租户版本，保留规则、管理员、邀请来源、套餐和承担人同意；
+AI各发话开关保持关闭，旧数据异常开启时关闭并递增AI配置版本，主题及限额等不变。
+取消时等待事务结束并刷新授权，提交前撤权会回滚租户、令牌和审计。</p>
+<p>仅热重载<code>wangshangliao_moderation</code>，加载后小满与林夕在线；
+AstrBot主进程PID3601197、独立结账PID212703未变，两服务均active、<code>NRestarts=0</code>。
+所有群租户／AI配置、套餐订阅、承担人及服务预算设置的稳定字段前后相同。
+用鼎峰群的旧租户版本请求新预览入口，返回409且没有创建预览或升级；
+实际服务端管理页与本地构建SHA-256一致。
+线上只读浏览器在390／1440px核对两个视图中的鼎峰升级按钮均可用，
+没有点击预览或确认；只允许状态、成员及既有规则的读取请求。
+<code>43506527/1459534</code>仍为version 3、<code>rules_only=1</code>，没有自动升级、启用AI或代替本人确认扣费；
+其他群不变。此补丁不改变托管机器人消息的防互聊过滤，也不伪造林夕的本人确认。</p>
+<p>相关离线回归582通过、2项既有可选浏览器测试跳过；
+包含新增升级接口与编译页测试，离线真实RPC浏览器覆盖320／390／1440px、
+预览取消和确认后AI仍关闭。前端专页类型检查、构建及修改范围Ruff检查通过；
+已重新生成API客户端，字节内容未变化。不是全插件全量回归或真实群消息验收，
+未为测试发送群消息、调用模型或操作财务。
+另有文档专项17通过、1跳过，目录及生成一致性5项Node检查通过。
+变更前源码、管理页及静态文档备份位于
+<code>/opt/backups/wsl-ai-admission-20261022-ITjXmp/</code>。</p>
+<h2>2026-10-22 江哥群 AI 与 PC28 展示</h2>
+<p>北京时间05:02:31核对：仅热重载<code>wangshangliao_moderation</code>插件，AstrBot主进程
+PID3601197及独立结账进程PID212703未变，账号连接未重启。此次不是完整后端重启，
+不覆盖下方03:56:52原生接入器加载证据，也不代表已完成实群对话或手机客户端验收。</p>
+<p>本轮按用户明确选择，仅处理小满<code>43506527</code>下列三群，不扩大到其他“江哥”同名群：</p>
+<table>
+<thead>
+<tr>
+<th>群</th>
+<th>操作与当时状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>1516387</code> 真龙国际满点招商（江哥团队）</td>
+<td>原已绑定本人确认的PRO承担人<code>31846829</code>；群AI从version 5保存为6，开启总开关、真实@回复和自主接话；保留每日100次、全天时段及原主题，冷场发话保持关闭；只读<code>readiness.ready=true</code></td>
+</tr>
+<tr>
+<td><code>1459534</code> 鼎峰-满点内排-江哥团队</td>
+<td>仍为仅规则群；总控提名现有PRO管理<code>31846829</code>为额度承担人，<code>confirmed=0</code>，未代替本人确认扣费；群AI仍关闭，正式AI准入及本人确认尚未完成</td>
+</tr>
+<tr>
+<td><code>1417872</code> 汇赢-江哥团队｜大海传媒旗下</td>
+<td>保持未开通；小满原生角色为普通成员，须先取得群管理员权限并完成现行开通及承担人确认流程；未更换邀请归属或伪造开通证据</td>
+</tr>
+</tbody>
+</table>
+<p>PRO属于已核验个人共享池，不按群重复创建订单；上述承担人的现有周期截至
+2026-11-19 05:35:31（北京时间），每日共享5000次，仍受群自身上限和费用预算约束。
+本轮前后<code>ai_subscriptions</code>完整行一致，未新增收费／续期、代替本人确认、
+直接修改SQLite或改变其他群AI配置；配置写入均通过现行版本化后台接口。
+本人确认须由承担人发送<code>确认本群扣费</code>并依预览回复<code>1</code>，提名或PRO状态不能解除仅规则限制。
+现有接口没有仅规则转正式AI的升级动作，本次没有通过直接改标记绕过限制。</p>
+<p><code>pc28.py</code>保留固定来源、时效核验及内部工具结果来源字段；模型提示和群内投递边界
+不再输出来源域名或链接。正常续答、自主接话、固定失败模板及被截断回退均保留
+“第三方数据仅供参考，不保证下期结果”；不更改查询域名、额度和权限。</p>
+<p>全量离线首跑7394通过、52跳过，唯一失败为旧隔离测试强制要求来源链接的断言；
+该断言已改为核对对外无链接、内部保留来源，随后相关隔离／工具专项116通过。
+另有190项早期专项及120项自主接话专项通过，与上述覆盖重叠，不相加；
+不能将首跑表述为零失败或完整新版全量重跑通过。索引与教程各5项Node检查通过，
+48份教程在390px／1440px无脚本错误、缺图或溢出，6份PDF已重建。
+证据、变更前源码及静态帮助备份位于
+<code>/opt/backups/wsl-jiang-ai-20261022-wQ2fdD/</code>；不为验收发送真实群消息或调用模型。</p>
+<h2>2026-10-22 防误罚与取消边界</h2>
+<p>源码审查后的最终离线回归7392项通过、52项跳过、0失败；白名单专项566项通过，
+其中新增16项撤权竞态在修复前均失败。前端类型检查、44项前端检查及修改范围Ruff检查通过。
+用户已授权重载；2026-10-22 03:56:52（北京时间）完整重启<code>astrbot.service</code>，
+PID772193变为3601197，<code>NRestarts=0</code>。三类媒体解析及本轮修复已加载；
+这是加载核实，不代表已完成新版本实群禁言／撤回验收。</p>
+<p>03:57:19只读核对：小满、林夕在线，原停用账号仍停用，9个已启用平台运行；
+测试窗口关闭。生产及隔离测试AI配置／计费表、群授权／规则表均与维护前一致。
+原有主配置逐项不变；既有Telethon插件启动时补登3个默认停用条目，因此配置全文哈希不同，
+不能称整个配置文件未变。返现库仅新增1条<code>service_started</code>审计，其余表一致；
+独立结账服务PID212703未变。未发送测试消息、调用模型或补罚历史消息。
+保护证据保存在<code>/opt/backups/wsl-distributed-audit-20261022-a1flym/</code>。
+中英文离线HTML及6份PDF已同步发布；文档与维护专项另有17项通过、1项跳过。
+44份教程在390px／1440px检查通过；线上管理页桌面／手机无脚本错误或页面横向溢出，
+只读浏览器检查拦截全部POST请求，未执行服务端写入。
+回退本轮修复时仅恢复<code>source-before/</code>中的对应源码，并按维护授权重新加载；
+该审查前快照已包含三类媒体解析，不是媒体规则上线前版本。静态教程旧版另存于
+<code>local-docs-before-publication.tar.gz</code>。数据库备份仅供留证，不能为代码回退覆盖业务库。</p>
+<ul>
+<li><code>content_rules.py</code>同时核对原始入站账本和当前载荷的<code>_media_revision</code>与当前群规则版本，
+缺失或过期不提交媒体处罚；拆分广告在有界入站证据内按原生发送时间判断先后，不按入库顺序拼接。</li>
+<li><code>group_ai.py</code>在工具续调及回复投递前复核原生会话快照；续调已发出但结果未知时
+以<code>model_result_unknown</code>锁定群AI，保留费用状态，不自动再次调用。</li>
+<li><code>private_batches.py</code>在等待身份核验前冻结账号守卫及会话代次，等待后复核，
+退出、取消或切换账号不能把旧输入归入新批次。</li>
+<li><code>native_conversations.py</code>读取对话后再次核对当前会话ID；仍不是检查／更新的原子比较交换。</li>
+<li><code>member_whitelist.py</code>的守卫在<code>authority_guard()</code>后，将<code>service.store.tenant(account, group)</code>
+与原租户完整快照比较，不一致拒绝<code>tenant_changed</code>；入写前和事务提交前复用同一守卫，
+不仅依赖内存授权；已包含在上述最终回归并随完整重启加载。</li>
+</ul>
 <h2>调度与持久化</h2>
-<p>不改变登录、业务菜单、权限或前端。接入器最多同时处理 16 个会话，待调度队列最多 1,024 个会话；其余消息保留于 SQLite。每个会话按消息入库顺序逐条处理，完成后重新排队。启动、重连、消息入库、任务完成均唤醒调度，每 30 秒补查遗漏通知。空闲会话不再永久轮询。</p>
+<p>当前接入器分别保留2个控制、4个固定命令及12个普通消息处理槽，模型等待不占审核或管理队列。
+同一发送者的普通消息与固定命令按入库顺序处理，不让后来的命令越过前一条消息。
+每账号普通消息积压最多4096条、私聊最多256条，每个私聊发送者最多4条待处理固定命令；
+满载时拒绝新增操作并汇总告警，审核证据不完整时停止相关自动处罚，不能假设其余消息会无限入库。
+上述4条约束覆盖该私聊发送者的待处理／处理中消息，不仅是固定命令；
+<code>/chat</code>、<code>/exit</code>有小额保留余量。普通群消息按同群同发送者排序，不是全群串行。
+启动、重连、消息入库、任务完成均唤醒调度，每30秒补查遗漏通知。空闲会话不永久轮询。</p>
 <p>群名片和清理任务使用内部版本校验及不可逆停止标记。停止不能撤回已经发送到上游的操作，但状态刷新和启动恢复不会复活已停止任务。未知结果不自动重试。</p>
 <h2>正文保留</h2>
-<p>内部收件账本的终态正文保留 30 天，按本地完成时间计算。旧记录从迁移时开始计算，非上游消息时间。仅清除正文、姓名、提及等非必要载荷，保留发送身份、消息标识、会话及撤回路由。待处理、处理中和待核查记录不清理；AstrBot 聊天历史、发件去重凭据和群管理审计记录不受影响。</p>
+<p>内部收件账本的终态正文保留 30 天，按本地完成时间计算。旧记录从迁移时开始计算，非上游消息时间。仅清除正文、姓名、提及等非必要载荷，保留发送身份、消息标识、会话及撤回路由。待处理、处理中和待核查记录不清理；AstrBot 聊天历史、发件去重凭据和群管理审计记录不受影响。
+这是定期正文清理边界，不覆盖确认离群后的精确群工作数据清理。
+<code>queue_full</code>／<code>oversized</code>拒绝记录一小时后删除，原生撤回观察90天后有界删除；
+二者不等待正文清理批准。离群清理保留财务账本与未知动作证据，按代次逐库完成。</p>
 <p>清理任务每小时运行，单批最多 500 条，不运行 VACUUM。上线后默认禁用，迁移满 24 小时且管理员确认观察健康后才允许开启。释放的 SQLite 页面可重用，文件大小不一定立即下降。身份及审计元数据仍持续增长，应结合磁盘监控维护。</p>
 <p>在项目目录运行以下只读命令查看各实例状态、磁盘空间及清理开关：</p>
 <pre><code class="language-bash">.venv/bin/python scripts/wangshangliao_maintenance.py status
@@ -26,13 +1002,22 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 <ol>
 <li>运行旺商聊全套测试及修改文件的 Ruff 检查。只用模拟上游，不执行真实群操作。</li>
 <li>保存旧代码并准备兼容回滚副本：旧 <code>storage.py</code> 的 pending INSERT 和旧 <code>adapter.py</code> 的 rejected_identity INSERT 必须明确指定原五个列名，否则新增列后旧版无法写入。</li>
-<li>用 <code>status</code> 确认没有 queued/running 群管理任务或 processing 消息。停止 AstrBot 后立即使用下面的命令生成最终一致性备份，失败时不要继续上线。</li>
+<li><code>status</code>只汇总原生收件状态、正文清理开关及名片任务，不能证明全部计划、
+审批、活动和财务任务已停止。另查对应后台任务并协调停止AstrBot及独立结账服务写入，
+再生成完整备份，失败时不要继续上线。</li>
 </ol>
-<pre><code class="language-bash">.venv/bin/python scripts/wangshangliao_maintenance.py backup --destination /ABSOLUTE/NEW/BACKUP_DIRECTORY
+<pre><code class="language-bash">PYTHONPATH=. .venv/bin/python scripts/wsl_policy_migrate.py backup \
+  --data /opt/astrbot-prod/data --output /ABSOLUTE/NEW/BACKUP_DIRECTORY
 </code></pre>
-<p>备份包含旺商聊本地会话密钥及密文、SQLite 在线备份快照与 <code>cmd_config.json</code>，目录 0700、文件 0600，并执行 SQLite 完整性检查。必须将备份视作敏感数据保护。</p>
-<p>同时核对消息、群管、名片、活动和 <code>schedules.sqlite3</code> 都在备份清单中。
-人格/知识库与其他 AstrBot 配置另按所属存储备份；不要假设接入器备份覆盖全部资料。
+<p>备份包含主配置、旺商聊原生目录、集中策略／租户／返现目录中的相关SQLite、
+JSON侧文件和密封会话，使用SQLite backup、完整性检查及SHA-256清单；
+目录0700、文件0600。逐库快照不等于跨库原子事务，必须先停写，备份按敏感数据保护。
+旧<code>wangshangliao_maintenance.py backup</code>仍可备份原生目录与主配置，
+但不包含集中业务库，不能单独充当合并部署的完整备份。</p>
+<p>同时核对消息、群管、名片、活动、计划、好友审批、首次引导和账号目录绑定索引，
+以及<code>settings.sqlite3</code>、<code>open-service.sqlite3</code>、<code>cashback.sqlite3</code>均在清单中。
+凭证目录仍绑定实例，业务目录可绑定账号，两者不一定相同；不能删旧目录或跨账号复用退役实例ID。
+全局人格／知识库、AstrBot对话库与其他配置另按所属存储备份；不要假设旺商聊备份覆盖全部资料。
 不打印 <code>session.key</code>、协议部署 JSON、JWT 或密封会话全文。</p>
 <ol start="4">
 <li>启动新版；读取连接日志、<code>status</code> 和本地 WebUI 健康响应。观察 24 小时后才执行正文清理批准命令。</li>
@@ -42,6 +1027,69 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 <pre><code class="language-bash">WSL_ROLLBACK_STORAGE=/ABSOLUTE/ROLLBACK/adapter/storage.py .venv/bin/python -m pytest -q tests/test_wangshangliao_maintenance.py
 </code></pre>
 <h2>排障</h2>
+<h3>公共模式维护窗口</h3>
+<p>用户授权「加载核实」后，2026-10-20 09:47:09 UTC（北京时间17:47:09）
+仅完整重启<code>astrbot.service</code>，已加载原生<code>actions.py</code>警告姓名／12秒撤回及群AI路由修正，
+非插件重载。AstrBot PID2490557变为772193，<code>NRestarts=0</code>；独立结账服务PID212703未变。
+经测试的管理页已原子发布，新标签已部署。
+修正以本账号本群权威完整名单核验UID／NIM及真昵称；缺昵称但身份可信时仅发正文，
+身份冲突仍拒绝，警告<code>auto_recall=True</code>依实际发送回执安排12秒撤回。
+619项通过早于缺昵称回退细化，仅保留为此前结果，不作为最终回归或实群验证；
+该加载阶段没有发送测试消息或调用模型，不补发旧警告、不恢复旧源码／配置，也不改写原审计结果。</p>
+<p>后续最终离线回归已分六个互不重叠批次完成：<code>a-b</code>、<code>c</code>、<code>d-f</code>、<code>g-m</code>、<code>n-r</code>、<code>s-z</code>。
+证据为<code>/opt/backups/wsl-resume-20261020-YN7uIb/regression-{range}.xml</code>，聚合6481个唯一用例：
+6429项通过、52项条件跳过、0失败、0错误；文件范围完整匹配<code>tests/test_wangshangliao*.py</code>及
+<code>tests/test_wsl*.py</code>，无重复用例。此前单进程运行因SIGTERM（退出码143）中止，不计为通过或纳入汇总。
+群@有界历史及隔离离线回归已通过，本批已完成上述完整后端加载及只读核对；
+群AI及手机显示验收不由该回归证明；随后警告限定实测单独记录，其他审计发现不据此视为修复。</p>
+<p>重启后离线专项<code>actions</code>、<code>reply_recall</code>、<code>group_ai</code>、<code>native_conversations</code>再跑308项通过，
+耗时14.07秒，证据为<code>/opt/backups/wsl-load-20261020-78MTwE/focused-regression.xml</code>。
+加载时的原生只读回执观察为0条新撤回意图、0条待处理，不能据此认定真昵称或12秒手机效果已实测。</p>
+<p>随后三账号在<code>1459282</code>通过<code>test_advertising</code>完成3次真实警告核对，两个独立fixture为1＋2次，
+不是同轮完整三级升级。原生<code>userNick</code>的<code>@大蛤</code>与提及身份正确，不优先用群名片<code>testfork</code>；
+原消息撤回、警告接收及自撤回均有对端证据，警告受理至撤回通知为12.112／12.115／12.125秒。
+测试规则恢复、临时原生管理员角色恢复为原普通成员，窗口关闭；正式群、财务及正常处罚计数未变，
+原生回执及最小审计保留。该实测未重启服务、无额外NIM连接、0模型调用。
+这不是禁言升级、全功能或手机画面验收；首条核验脚本哈希误解析已只读恢复，未重发，
+原失败证据保留。汇总为<code>/opt/backups/wsl-warning-live-20261020-I5Z5qf/result.json</code>，
+详见<a href="wangshangliao-testing.html">测试与验收</a>。</p>
+<p>2026-10-20 09:49:14 UTC（北京时间17:49:14）核对大蛤<code>43506527</code>在线，
+9个已启用平台运行／连接状态均与加载前一致，队列<code>pending=0</code>、<code>rejected=0</code>、<code>review=[]</code>。
+群<code>1516387</code>最新群AI配置为version 5，<code>enabled/mentions/autonomous/idle</code>均为<code>false</code>；
+全部群AI稳定行及<code>ai_profiles</code>行未变，加载没有开启群AI。受保护指纹与加载前
+<code>149a44e0f399add009c69d9c027fbf2b95314a7242d69130ed0a71d749bbe8a1</code>完全一致，
+后端源码SHA及结账服务PID未变，管理页SHA与待发布产物一致。真实管理页等待成员名单响应200后，
+390／1440px均无JS错误、溢出或浏览器写入尝试；启动日志110行无ERROR／traceback标记。
+证据见同一部署备份中的<code>before.json</code>、<code>after.json</code>及<code>browser.json</code>。</p>
+<p>当前使用共享 AstrBot，不恢复旧 <code>astrbot-open.service</code>。维护执行
+<code>scripts/harden_wsl_shared_service.py --apply</code> 前先完成离线回归；脚本协调停止
+AstrBot与结账服务，SQLite一致性备份，保存文件权限、原运行时链接和服务配置。
+仅将现有CPython3.12.14复制至<code>/opt/astrbot-runtime</code>，不升级依赖。
+两个服务同用无登录权限<code>astrbot</code>用户；源码和运行环境只读，仅数据、日志、临时文件和缓存可写。
+公共<code>OpenRPC</code>当前是进程内控制面，旧<code>control.sock</code>不恢复；
+独立结账服务及其<code>cashier.sock</code>写入／诊断桥仍需保留。不能把旧公共socket停用解释为结账桥也停用。</p>
+<p><code>services/astrbot-hardening.conf</code>限制共享进程两核CPU、1GiB软限／2GiB硬限内存、
+256任务；结账服务仍保留原独立资源限制。<code>ProtectHome</code>隐藏<code>/root</code>，禁用提权。
+现有Telethon会话需要外部协调锁与SQLite相邻文件；用
+<code>scripts/fix_wsl_telegram_session_access.py --apply</code>安装仅命名服务用户可访问的ACL，
+不开放其他用户权限，不复制登录凭证。额外锁修复使用<code>--extend</code>保留原回滚记录。</p>
+<p>权限／运行时回滚执行<code>harden_wsl_shared_service.py --rollback</code>，
+外部会话ACL回滚执行<code>fix_wsl_telegram_session_access.py --rollback</code>。
+两者不恢复或覆盖账本。代码回滚使用维护前对应源码和静态页面备份，随后重启；
+<strong>绝不能将旧SQLite备份直接覆盖期间产生的数据</strong>。
+后台安装、升级或改写只读源码需要管理员维护窗口，不能由聊天触发。</p>
+<p>上线后逐项比对当前配置中的全部启用实例与<code>GET /api/v1/bots/stats</code>，
+同时核对原生<code>connection_state</code>；进程<code>running</code>或空统计不能证明平台在线。
+旧<code>check_wsl_shared_platforms.py</code>已于2026-10-21归档移除，不再作为验收命令。
+<code>check_wsl_shared_soak.py</code>仍要求旧预算未确认，须先核对适用性；前置条件不符时
+保留阻断，不改生产预算或群开关凑通过。至少三十分钟观察仍须保存重启基线、
+实例全集及实际连接状态；低占用不等于资源硬限或真实消息已核验。
+非本次授权目标群维持原开关，不批量启用或关闭；金额、邀请归属、结账状态、
+规则及财务指纹必须保持一致。2026-10-20早先开启群内@及自主接话的快照仅为历史；
+本次加载前后群<code>1516387</code>的version 5四项群AI开关均关闭，不把业务群运行视为AI开启。
+合成负载用<code>check_wsl_open_load.py --integrated --seconds 30</code>，覆盖解码、存储、调度、
+本地规则、慢模型及私聊洪泛；账本读取强制只读，失败样本保留，不能当作通过。
+该测试不代替真实新群首次邀请或手机客户端自动撤回画面。</p>
 <p>结构化日志字段、权限拒绝、回复拦截和 AI 审核回退见<a href="wangshangliao-diagnostics.html">日志与排障</a>。</p>
 <ul>
 <li><code>dispatch/scan_failed</code>：检查 SQLite 可读写、磁盘与数据库完整性。队列数据仍在账本，下轮会重新扫描。</li>
@@ -49,11 +1097,49 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 <li><code>maintenance/prune_failed</code>：正文清理失败，下小时重试；检查磁盘空间、载荷格式与数据库权限，不删除待核查记录。</li>
 <li><code>card_version_conflict</code>：过期任务快照被拒绝；重新读取当前任务，不强制覆盖，也不自动重发上游请求。</li>
 <li>needs_review 或 outbox unknown：保留现场，只做结果核验，不通过重启触发重放。</li>
+<li>好友读取至少间隔3秒、自动同意至少间隔30秒，瞬时读取错误退避不等于审批失败。
+<code>sending/unknown</code>只经后台版本化读回核对；开关不清除暂停，不删除审批／欢迎认领库。
+好友删除功能与已移除的<code>friends</code>路由不得恢复。</li>
+<li><code>Friend approval worker failed; no automatic retry</code>可能表示共享好友worker已退出，
+不只是一个账号关闭。异常UTF-8推送也可能外溢为<code>connection_failed</code>；
+已复现边界及无正文诊断见<a href="wangshangliao-diagnostics.html">日志与排障</a>，本轮未改代码。</li>
 </ul>
 <h2>文档、页面与代码更新</h2>
+<h3>聚合与 AI 索引</h3>
+<p>统一入口为 <a href="wangshangliao-ai-index.html">AI 阅读与主题索引</a>，仓库 AI 从根目录
+<code>llms.txt</code>进入。原文仍是唯一内容源，不手工合并或删除历史报告。
+现有教程生成器同步生成逐篇原文 Markdown、<code>docs-index.json</code>、<code>llms.txt</code>、
+现行参考全文<code>llms-full.txt</code>及独立历史全文<code>llms-history.txt</code>。
+目录包含语言、类别、主题、原文SHA-256及标题行区间，示例人格不进入全文包。
+当前规则和运维说明中的带日期快照仍须按原日期解释，分类不表示全部内容已实测。</p>
+<p>新增文档在<code>dashboard/scripts/build-wangshangliao-guide.mjs</code>的<code>guides</code>登记一次，
+执行下文已有教程／PDF命令，再同批同步<code>dashboard/public/local-docs/</code>
+到<code>dashboard/dist/local-docs/</code>。只生成索引不重启后端，也不读写生产业务数据、
+客服知识正文或联系人资料；本段为2026-10-22文档整理，不是新的实群验收。
+目录覆盖、原文哈希、历史／人格隔离及链接回归使用
+<code>node --test dashboard/scripts/build-wangshangliao-guide.test.mjs</code>，仅在临时目录生成。</p>
 <h3>代码清理边界</h3>
+<p>2026-10-22（北京时间）接手时的文件清理仅有一个无对应源码的
+<code>developer_gate.cpython-312.pyc</code>已备份后删除；本次仅补记，不再执行删除。
+不删除其他脚本、缓存或历史。下列2026-10-20及更早整理记录保留原日期与结论，
+不是本轮新增清理或回归结果。</p>
+<p>2026-10-20本轮仅改三份生产源码：<code>event.py</code>将三个等价<code>send_reply_text</code>调用合并为一个，
+保留<code>mentions</code>／<code>test_mid</code>互斥、引用、授权及可选<code>auto_recall</code>参数；
+<code>policy.py</code>合并<code>keywords</code>／<code>mute_keywords</code>／<code>kick_keywords</code>相同校验，边界及错误码不变；
+<code>cashback_store.py</code>删除未使用私有旧头像定价迁移函数<code>_normalize_automatic_avatar_pricing</code>。
+生产源码净减66行（接入器28、插件38），不是执行迁移、清理数据库或改写历史财务行。
+新增回归101＋9＝110项；完整相关离线回归6564通过、52条件跳过、3 warnings，
+耗时237.65秒，证据<code>/opt/backups/wsl-cleanup-20261020-IsoIYB/full-regression.xml</code>。
+适配器527项、插件81项及主控安全门禁192项有重叠，不累加为唯一用例数；
+此前6429／52及308等结果保留为原轮次历史。
+全部管理页Vue严格未使用项检查通过，没有强删前端组件。
+本轮修改的三份生产文件及两份新增测试Ruff通过；全仓扫描仍发现未触及的
+<code>scripts/reset_dashboard_live.py</code>一条I001和66份原有格式差异，不以此宣称全仓全绿。
+此轮只做代码整理与文档重建发布，不重载、不重启、不发消息，新后端尚未加载。
+以下删除项为此前轮次的历史整理，不代表本轮再次执行。</p>
 <ul>
-<li>管理动作统一调用接入器 <code>execute_moderation</code>。未被使用的 <code>mute_member</code>、
+<li>当前业务动作通过V1 <code>execute_action</code>分发，原生<code>execute_moderation</code>仍是其底层及后台兼容入口。
+未被使用的 <code>mute_member</code>、
 <code>unmute_member</code>、<code>mute_all</code>、<code>unmute_all</code> 和 <code>announce</code> 便捷封装已移除；
 群命令、管理员私聊、定时任务及后台审批接口仍保留相同的权限检查和动作能力。</li>
 <li>移除未挂载的旧 <code>WangshangliaoModeration.vue</code> 组件，不删除仍在使用的审批 API
@@ -82,16 +1168,59 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 和认证代理。不能为了加载页面添加 iframe <code>allow-same-origin</code> 或绕过后台权限。</p>
 <p>接入器 <code>text.py</code>、核心 pipeline/鉴权或 provider 更新必须重启 AstrBot；
 插件热重载不会重载已经导入的核心模块。重启使开发窗口、内存 AI 草案失效，
-未知动作仍不重发，计划错过边界须复核恢复。只更新静态教程无需重启消息服务。</p>
+未知动作仍不重发，计划错过边界须复核恢复。只更新静态教程无需重启消息服务。
+本批群@配置分流、成员历史隔离及去前缀已于上述授权完整重启后加载，新管理页标签已发布；
+不是插件重载，且未启用群AI。教程发布、旧自主回复证据和本次重启均不替代新版本实群效果验收。</p>
+<h2>2026-10-23审核排队修复</h2>
+<p>2026-10-23 20:51:56（北京时间）仅热重载<code>wangshangliao_moderation</code>插件，
+加载<code>settings.py</code>、<code>flood.py</code>、<code>content_rules.py</code>的确定性审核快通道修复。
+聊天原限流配置保留，高置信新入站广告、关键词及组合规则不再等待聊天／AI队列。
+保留最终原生权限、目标身份、白名单、规则版本、暂停、防重及未知回执保护；
+不重放历史消息，不把组合规则的“全部词同时命中”改为“任一词命中”。</p>
+<p>相关离线回归1376通过、1条件跳过（需另设<code>WSL_ROLLBACK_STORAGE</code>的旧迁移账本验收）、
+1条现有<code>audioop</code>弃用警告；文档生成器回归5通过，修改的Python文件Ruff检查通过。
+证据及源码备份位于<code>/opt/backups/wsl-moderation-fastlane-20261023T1236Z/</code>，
+离线结果不代替平台回执或手机显示验收。</p>
+<p>热加载前后主进程<code>3317496</code>不变、重启次数0；两个已启用账号在线，第三个账号保持停用，
+原有启用群不变。正式群规则、业务图文计划、白名单、财务、活动及黑名单共35项保护摘要
+一致。新指标<code>rule_workers</code>、<code>rule_pending</code>、<code>rule_oldest_pending_ms</code>已出现且检查时均为0。
+历史聊天队列延时样本不会因本次热加载清零，也不能把它误读为新的审核快通道延时。
+本次不在正式群发送测试广告，不放宽目标保护，不补罚历史失败／未知动作。
+如需回退，仅恢复本轮三份插件源码并受控重载；不得整库覆盖后续业务变更。</p>
+<p>20:56:49观察到鼎峰<code>1459534</code>自然新入站命中3秒3条刷屏；20:56:50—51核对原生动作审计，
+同一连续批次禁言1次、4条证据消息撤回均为<code>accepted</code>且<code>submitted=1</code>。
+后续同批命中复用既有禁言，没有重复禁言；不是本轮主动发送测试消息。
+此实群证据仅覆盖刷屏，广告快通道的聊天限流隔离由离线回归覆盖，
+尚不据此宣称新广告处罚或手机客户端展示完成验收。</p>
 <h2>无回复排查</h2>
 <ol>
 <li>确认消息实际发给哪个旺商聊账号，业务 UID 与显示账号/实例 ID 不混用。</li>
 <li>看接收实例入站账本；未入站查连接，<code>ignored_bot</code> 查互斥及接收端窗口。</li>
-<li>看私聊/当前群回复是否已保存、群是否启用、群 AI 是否真实 @ 当前机器人。</li>
-<li>精确命令查有效 <code>admins_id</code> 与确定性路由；普通咨询查模型、人格/工具、知识库耗时。</li>
-<li>管理执行查动作授权、完整目录和平台角色；输出查可见正文、推理标签过滤及 outbox。</li>
+<li>群管理查是否已开通、正在运行、机器人是否在群；未单独开启群聊天AI时，群内普通文字和@不触发AI。未开通群只保留受限开通入口。
+逐群开启后，结构化@、自主接话及冷场均走本账号／本群的群聊配置，不走私聊客服咨询；
+<code>mentions</code>独立于<code>autonomous</code>，共享人格但每名核验成员的@历史独立，
+仅带新@键下配置允许的有界往轮历史，不跨群、账号或私聊，不迁移或复用旧群客服历史。
+自主候选缓存及原<code>/group</code>来源不变；群输出均为纯文本，不加<code>【群聊AI】</code>或<code>【客服咨询】</code>前缀，私聊只读AI不变。
+普通文字仅在另开自主接话时可进入筛选后的有界上下文，
+冷场发话另查独立开关。仍受硬预算、扣费人确认、时段、每日次数及未知结果暂停约束；
+不承诺开启自主接话后全部旁观内容永不传模型。旧加额接口停用，付费套餐仅总控向已核验管理授予；
+私聊、@与热群使用本人确认的共享池。</li>
+<li>固定命令查可信身份、本群业务管理员与群选择；<code>管理 </code>前缀可省略，<code>admins_id</code>不会直接授予公共群管理权。私聊咨询须先发<code>/chat</code>，并核对预算门禁、模型、额度和会话是否退出／过期。</li>
+<li>管理执行查动作授权、完整目录、平台角色和配置版本；输出查可见正文、推理标签过滤及 outbox。AI不调用管理工具，不能用“让AI操作”排查固定命令。</li>
 <li>只查询操作结果，不伪造入站、不把 unknown 重置 pending，不重放历史消息。</li>
 </ol>
+<h3>旧AI工具模式（历史排障，不适用于公共合并模式）</h3>
+<p>历史<code>admin_private/management_enabled</code>等只解释当时日志，不能据此重新开放工具。
+当前抽奖使用本群管理固定命令，<code>/chat</code>只解释命令，所有聊天角色均无AI管理执行权限。
+旧配置器只保留拒绝兼容壳；不要把旧工具教程当作模型故障修复步骤。
+脚本整理及风险分级见<a href="wangshangliao-scripts.html">工具分类</a>；
+仍被测试或部署检查引用的维护函数不应随意删除。</p>
 <p>完整复现矩阵见<a href="wangshangliao-testing.html">当前验收</a>，
 旧记录中的固定部署路径、临时权限及旧行为不用于本次操作。</p>
+<p>2026-10-20本轮仅只读核对代码及
+<code>/opt/backups/wsl-group-ai-20261020-format/runtime.json</code>、
+<code>/opt/backups/wsl-ai-enable-20261020T0724Z/enable.json</code>，并以内存mock验证局部故障路径；
+未执行上述维护命令、网络／真实群调用、备份、重启或数据库写入。
+运行快照仅覆盖所列账号／群的记录时点，未验证供应商额度耗尽和手机展示，
+不替代完整线上验收，也未重新测量历史混合负载指标。</p>
 </body></html>

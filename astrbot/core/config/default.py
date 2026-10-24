@@ -91,6 +91,7 @@ WEBHOOK_SUPPORTED_PLATFORMS = [
 # 默认配置
 DEFAULT_CONFIG = {
     "config_version": 4,
+    "wangshangliao_open": {"mode": "disabled"},
     "platform_settings": {
         "unique_session": False,
         "rate_limit": {
@@ -341,6 +342,15 @@ WebUI 的配置文件在 `CONFIG_METADATA_3` 中。
 CONFIG_METADATA_2 = {
     "platform_group": {
         "metadata": {
+            "wangshangliao_open": {
+                "type": "object",
+                "items": {
+                    "mode": {
+                        "type": "string",
+                        "options": ["disabled", "integrated"],
+                    },
+                },
+            },
             "platform": {
                 "description": "消息平台适配器",
                 "type": "list",
@@ -4848,6 +4858,12 @@ CONFIG_METADATA_3_SYSTEM = {
                         "description": "对外可达的回调接口地址",
                         "type": "string",
                         "hint": "外部服务可能会通过 AstrBot 生成的回调链接（如文件下载链接）访问 AstrBot 后端。由于 AstrBot 无法自动判断部署环境中对外可达的主机地址（host），因此需要通过此配置项显式指定 “外部服务如何访问 AstrBot” 的地址。如 http://localhost:6185，https://example.com 等。",
+                    },
+                    "wangshangliao_open.mode": {
+                        "description": "旺商聊群管理运行模式",
+                        "type": "string",
+                        "options": ["disabled", "integrated"],
+                        "hint": "integrated 使用当前AstrBot实例连接，变更后需要重载旺商聊插件。",
                     },
                     "timezone": {
                         "description": "时区",
