@@ -36,6 +36,9 @@ forced read cannot be mistaken for a concurrent coalesced read.
 CodeQL findings are fixed in application code, not hidden by query exclusions,
 alert dismissal or weaker branch policies. Path access must use a normalized,
 directory-confined path, including when a symlink exists.
+Deletion confines the resolved parent but preserves the selected directory
+entry, so removing a symlink never deletes its target. Configuration and
+persistent data are inspected for cleanup only when their deletion is selected.
 
 AI-avatar credential verifier changes require special care for already paid
 remote tasks. See the plugin README's credential verifier maintenance section:

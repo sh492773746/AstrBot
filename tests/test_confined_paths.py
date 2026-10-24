@@ -24,6 +24,14 @@ def test_confined_paths_reject_unsafe_requests(tmp_path, value):
         resolve_path_within(tmp_path, value)
 
 
+@pytest.mark.parametrize(
+    "value", ["", ".", "..", "branch/..", "../escape", "/tmp/escape", "C:escape", r"a\b"]
+)
+def test_entry_cleanup_rejects_unsafe_requests(tmp_path, value):
+    with pytest.raises(ValueError):
+        resolve_path_within(tmp_path, value, preserve_leaf=True)
+
+
 def test_confined_paths_allow_nested_nonexistent_files(tmp_path):
     assert (
         resolve_path_within(tmp_path, "files/key/image.png")
@@ -43,6 +51,11 @@ def test_confined_paths_reject_sibling_prefix_and_symlink_escape(require_symlink
         resolve_path_within(root, "escape/secret")
     with pytest.raises(ValueError):
         resolve_path_within(root, "../plugin-other/secret")
+    assert (
+        resolve_path_within(root, "escape", preserve_leaf=True) == root / "escape"
+    )
+    with pytest.raises(ValueError):
+        resolve_path_within(root, "escape/secret", preserve_leaf=True)
     assert (outside / "secret").read_text() == "unchanged"
 
 
