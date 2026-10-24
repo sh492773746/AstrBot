@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -39,6 +40,23 @@ PROMPT = (
 
 class EligibilityUnavailable(Rejected):
     """Membership could not be confirmed because verification was unavailable."""
+
+
+def credential_fingerprint(key: str, salt: str | None = None) -> str:
+    """Derive a salted credential-change verifier, not a reusable credential.
+
+    Args:
+        key: Provider credential whose continuity must be checked.
+        salt: Existing per-operation salt, or None for a new operation.
+
+    Returns:
+        A versioned, computationally expensive verifier.
+    """
+    salt_bytes = bytes.fromhex(salt) if salt is not None else secrets.token_bytes(16)
+    if len(salt_bytes) != 16:
+        raise ValueError("Invalid credential verifier salt")
+    digest = hashlib.pbkdf2_hmac("sha256", key.encode(), salt_bytes, 600_000).hex()
+    return f"pbkdf2_sha256$600000${salt_bytes.hex()}${digest}"
 
 
 class AIAvatar(Avatar):
@@ -117,6 +135,52 @@ class AIAvatar(Avatar):
         except (OSError, KeyError, ValueError):
             raise Rejected("头像服务尚未配置，请联系管理员。") from None
         return key
+
+    async def approve_credential_verifier(
+        self, actor: str, job: str, *, confirm_current_credential: bool = False
+    ) -> None:
+        """Approve a legacy verifier without repeating a paid submission.
+
+        Args:
+            actor: Verified store owner performing an explicit maintenance action.
+            job: Existing remote task to resume, never a queued submission.
+            confirm_current_credential: Explicit confirmation that the installed
+                provider credential still belongs to the original task.
+
+        Raises:
+            Rejected: Approval is missing, unauthorized, stale or unsafe.
+        """
+        self.store.require(str(actor), owner=True)
+        if not confirm_current_credential:
+            raise Rejected("Explicit credential continuity confirmation is required")
+        async with self.tick_lock:
+            row = self.store.db.execute(
+                "SELECT * FROM avatar_ai WHERE job=?", (job,)
+            ).fetchone()
+            if (
+                not row
+                or row["stage"] != "processing"
+                or not re.fullmatch(r"imgtask_[A-Za-z0-9_-]+", row["task"])
+                or not re.fullmatch(r"[a-f0-9]{64}", row["credential"])
+            ):
+                raise Rejected("Only an existing legacy remote task may be approved")
+            verifier = await asyncio.to_thread(
+                credential_fingerprint, self.credential()
+            )
+            with self.store.tx() as db:
+                cursor = db.execute(
+                    "UPDATE avatar_ai SET credential=?,next=0,error='' "
+                    "WHERE job=? AND stage='processing' AND task=? AND credential=?",
+                    (verifier, job, row["task"], row["credential"]),
+                )
+                if cursor.rowcount != 1:
+                    raise Rejected("The remote task changed; inspect it again")
+                self.store.audit(
+                    db,
+                    actor,
+                    "avatar_credential_verifier_approved",
+                    {"job": job, "task": row["task"]},
+                )
 
     async def eligible_group(self, uid, chat):
         """Verify current membership without sweeping every registered group.
@@ -234,7 +298,7 @@ class AIAvatar(Avatar):
                     ),
                 )
             rows = self.store.db.execute(
-                "SELECT j.*,a.stage FROM avatar_jobs j LEFT JOIN avatar_ai a ON a.job=j.id WHERE j.uid=? ORDER BY j.at DESC LIMIT 10",
+                "SELECT j.*,a.stage,a.error AS ai_error FROM avatar_jobs j LEFT JOIN avatar_ai a ON a.job=j.id WHERE j.uid=? ORDER BY j.at DESC LIMIT 10",
                 (uid,),
             ).fetchall()
             states = {
@@ -246,7 +310,14 @@ class AIAvatar(Avatar):
                 "done": "已制作",
             }
             summary = "\n".join(
-                f"{row['name']} · {states.get(row['stage'], '已制作' if row['status'] == 'ready' else '待核查')}"
+                f"{row['name']} · "
+                + (
+                    "凭据升级待管理员确认"
+                    if row["ai_error"] == "credential_verifier_review"
+                    else states.get(
+                        row["stage"], "已制作" if row["status"] == "ready" else "待核查"
+                    )
+                )
                 for row in rows
             )
             choices = [
@@ -404,7 +475,7 @@ class AIAvatar(Avatar):
                 "SELECT count(*) FROM avatar_paid_budget"
             ).fetchone()[0]
             unknown = self.store.db.execute(
-                "SELECT count(*) FROM avatar_ai WHERE stage='unknown'"
+                "SELECT count(*) FROM avatar_ai WHERE stage='unknown' OR error='credential_verifier_review'"
             ).fetchone()[0]
             await self.panel(
                 update,
@@ -562,7 +633,23 @@ class AIAvatar(Avatar):
                 (now + 60, job),
             )
             return
-        fingerprint = hashlib.sha256(key.encode()).hexdigest()
+        stored_verifier = row["credential"]
+        if row["stage"] != "queued" and not re.fullmatch(
+            r"pbkdf2_sha256\$600000\$[a-f0-9]{32}\$[a-f0-9]{64}",
+            stored_verifier,
+        ):
+            # Legacy or malformed verifiers cannot authorize a paid operation.
+            # Keep the task, remote ID and reservation for explicit review.
+            self.store.db.execute(
+                "UPDATE avatar_ai SET next=?,error='credential_verifier_review' WHERE job=?",
+                (now + 60, job),
+            )
+            return
+        fingerprint = await asyncio.to_thread(
+            credential_fingerprint,
+            key,
+            stored_verifier.split("$")[2] if row["stage"] != "queued" else None,
+        )
         headers = {"Authorization": "Bearer " + key}
         if row["stage"] == "queued":
             try:
@@ -686,7 +773,7 @@ class AIAvatar(Avatar):
                 if isinstance(exc, asyncio.CancelledError):
                     raise
             return
-        if row["credential"] != fingerprint:
+        if not hmac.compare_digest(stored_verifier, fingerprint):
             self.store.db.execute(
                 "UPDATE avatar_ai SET next=?,error='credential_changed' WHERE job=?",
                 (now + 60, job),

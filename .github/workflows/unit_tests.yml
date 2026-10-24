@@ -13,22 +13,20 @@ on:
 
 jobs:
   unit-tests:
-    name: Run pytest suite (${{ matrix.os }})
+    name: Run pytest suite (${{ matrix.os }}, shard ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 55 || matrix.os == 'macos-15-intel' && 60 || 45 }}
     env:
       PYTHONUTF8: "1"
-      ASTRBOT_CI_TEST_TIMEOUT_SECONDS: ${{ matrix.os == 'windows-latest' && '2400' || '0' }}
+      ASTRBOT_CI_TEST_TIMEOUT_SECONDS: "2400"
+      ASTRBOT_CI_SHARD_INDEX: ${{ matrix.shard }}
+      ASTRBOT_CI_SHARD_COUNT: "4"
     strategy:
       fail-fast: false
       matrix:
         # Keep macOS coverage without depending on the constrained arm64 pool.
         os: [ubuntu-latest, windows-latest, macos-15-intel]
-
-    # The Windows lane stays best-effort for now: the suite still has
-    # pre-existing Windows-specific failures there. Promote to blocking
-    # once those tests are fixed.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+        shard: [0, 1, 2, 3]
 
     defaults:
       run:
@@ -75,10 +73,32 @@ jobs:
       - name: Run tests
         run: |
           chmod +x scripts/run_pytests_ci.sh
-          # Preserve the existing best-effort Windows lane, but report the first
-          # real failure instead of cancelling the entire workflow after 45 min.
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            bash ./scripts/run_pytests_ci.sh ./tests --maxfail=1 --durations=25 -o faulthandler_timeout=120
-          else
-            bash ./scripts/run_pytests_ci.sh ./tests --durations=25 -o faulthandler_timeout=120
-          fi
+          mkdir -p ci-results
+          bash ./scripts/run_pytests_ci.sh ./tests --durations=25 -o faulthandler_timeout=120 2>&1 | tee ci-results/pytest.log
+
+      - name: Archive test evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tests-${{ matrix.os }}-${{ matrix.shard }}-${{ github.sha }}
+          path: ci-results/
+          if-no-files-found: error
+
+  verify:
+    name: Verify complete test collection (${{ matrix.os }})
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tests-${{ matrix.os }}-*-${{ github.sha }}
+          path: test-parts
+      - name: Verify all cases ran in exactly one shard
+        run: python scripts/verify_ci_shards.py test-parts

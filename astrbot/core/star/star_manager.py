@@ -39,6 +39,7 @@ from astrbot.core.utils.astrbot_path import (
     get_astrbot_plugin_path,
     get_astrbot_system_tmp_path,
     get_astrbot_temp_path,
+    resolve_path_within,
 )
 from astrbot.core.utils.io import remove_dir
 from astrbot.core.utils.metrics import Metric
@@ -346,8 +347,8 @@ class PluginManager:
             for p in self.context.get_all_stars():
                 to_update.append(p.root_dir_name)
         for p in to_update:
-            plugin_path = os.path.join(plugin_dir, p)
-            await self._ensure_plugin_requirements(plugin_path, p)
+            plugin_path = resolve_path_within(plugin_dir, p)
+            await self._ensure_plugin_requirements(str(plugin_path), p)
         return True
 
     async def _ensure_plugin_requirements(
@@ -355,7 +356,9 @@ class PluginManager:
         plugin_dir_path: str,
         plugin_label: str,
     ) -> None:
-        requirements_path = os.path.join(plugin_dir_path, "requirements.txt")
+        requirements_path = str(
+            resolve_path_within(plugin_dir_path, "requirements.txt")
+        )
         if not os.path.exists(requirements_path):
             return
 
@@ -999,13 +1002,13 @@ class PluginManager:
         """
 
         async with self._pm_lock:
+            plugin_path = resolve_path_within(self.plugin_store_path, dir_name)
             if dir_name not in self.failed_plugin_dict:
                 return False, "插件不存在于失败列表中"
 
             self._cleanup_plugin_state(dir_name)
 
-            plugin_path = os.path.join(self.plugin_store_path, dir_name)
-            await self._ensure_plugin_requirements(plugin_path, dir_name)
+            await self._ensure_plugin_requirements(str(plugin_path), dir_name)
 
             success, error = await self.load(specified_dir_name=dir_name)
             if success:
@@ -1486,6 +1489,10 @@ class PluginManager:
         dir_name: str,
         plugin_path: str,
     ) -> None:
+        expected_path = resolve_path_within(self.plugin_store_path, dir_name)
+        if Path(plugin_path).resolve() != expected_path:
+            raise ValueError("Failed installation is outside its plugin directory")
+        plugin_path = str(expected_path)
         plugin = None
         for star in self.context.get_all_stars():
             if star.root_dir_name == dir_name:
@@ -1514,9 +1521,8 @@ class PluginManager:
                     f"installation {plugin_path}: {e!s}",
                 )
 
-        plugin_config_path = os.path.join(
-            self.plugin_config_path,
-            f"{dir_name}_config.json",
+        plugin_config_path = resolve_path_within(
+            self.plugin_config_path, f"{dir_name}_config.json"
         )
         if os.path.exists(plugin_config_path):
             try:
@@ -1540,11 +1546,15 @@ class PluginManager:
         delete_config: bool,
         delete_data: bool,
     ) -> None:
+        config_file = resolve_path_within(
+            self.plugin_config_path, f"{root_dir_name}_config.json"
+        )
+        data_base_dir = Path(self.plugin_store_path).parent
+        data_dirs = [
+            resolve_path_within(data_base_dir / data_dir_name, root_dir_name)
+            for data_dir_name in ("plugin_data", "plugins_data")
+        ]
         if delete_config:
-            config_file = os.path.join(
-                self.plugin_config_path,
-                f"{root_dir_name}_config.json",
-            )
             if os.path.exists(config_file):
                 try:
                     os.remove(config_file)
@@ -1558,13 +1568,8 @@ class PluginManager:
                     )
 
         if delete_data:
-            data_base_dir = os.path.dirname(self.plugin_store_path)
-            for data_dir_name in ("plugin_data", "plugins_data"):
-                plugin_data_dir = os.path.join(
-                    data_base_dir,
-                    data_dir_name,
-                    root_dir_name,
-                )
+            for plugin_data_dir in data_dirs:
+                data_dir_name = plugin_data_dir.parent.name
                 if os.path.exists(plugin_data_dir):
                     try:
                         remove_dir(plugin_data_dir)
@@ -1719,7 +1724,7 @@ class PluginManager:
 
             # 删除插件文件夹
             try:
-                remove_dir(os.path.join(ppath, root_dir_name))
+                remove_dir(str(resolve_path_within(ppath, root_dir_name)))
             except Exception as e:
                 raise Exception(
                     f"移除插件成功，但是删除插件文件夹失败: {e!s}。您可以手动删除该文件夹，位于 addons/plugins/ 下。",
@@ -1743,6 +1748,7 @@ class PluginManager:
     ) -> None:
         """卸载加载失败的插件（按目录名）。"""
         async with self._pm_lock:
+            plugin_path = resolve_path_within(self.plugin_store_path, dir_name)
             failed_info = self.failed_plugin_dict.get(dir_name)
             if not failed_info:
                 raise Exception(
@@ -1756,10 +1762,9 @@ class PluginManager:
 
             self._cleanup_plugin_state(dir_name)
 
-            plugin_path = os.path.join(self.plugin_store_path, dir_name)
             if os.path.exists(plugin_path):
                 try:
-                    remove_dir(plugin_path)
+                    remove_dir(str(plugin_path))
                 except Exception as e:
                     raise Exception(
                         format_plugin_error(
