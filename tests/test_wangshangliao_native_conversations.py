@@ -25,7 +25,10 @@ from astrbot.core.platform.sources.wangshangliao.event import WangshangliaoEvent
 from astrbot.dashboard.services.conversation_service import ConversationService
 from tests.test_wangshangliao_group_ai import fake_http
 from tests.test_wangshangliao_group_ai import model_scope as group_model_scope
-from tests.test_wangshangliao_model_stats import metrics_model as metrics_model
+from tests.test_wangshangliao_model_stats import (
+    metrics_headers_gate as metrics_headers_gate,
+    metrics_model as metrics_model,
+)
 from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
 from tests.test_wangshangliao_public_hardening import chat_event
 
