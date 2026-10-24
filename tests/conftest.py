@@ -4,6 +4,7 @@ AstrBot 测试配置
 提供共享的 pytest fixtures 和测试工具。
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -25,6 +26,27 @@ if str(PROJECT_ROOT) not in sys.path:
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("ASTRBOT_TEST_MODE", "true")
 os.environ.setdefault("ASTRBOT_DISABLE_FILE_LOGGING", "1")
+
+
+def pytest_make_parametrize_id(val, argname):
+    """Bound diagnostic IDs without changing test inputs or selection.
+
+    Args:
+        val: Parameter value retained unchanged by pytest.
+        argname: Parameter name used to distinguish the bounded label.
+
+    Returns:
+        Stable short identity for long strings or bytes, otherwise pytest's default.
+    """
+    if isinstance(val, (str, bytes)) and len(val) > 128:
+        data = (
+            val.encode("utf-8", errors="backslashreplace")
+            if isinstance(val, str)
+            else val
+        )
+        digest = hashlib.sha256(data).hexdigest()[:16]
+        return f"{argname}-{type(val).__name__}-{len(val)}-{digest}"
+    return None
 
 
 @pytest.fixture(autouse=True)

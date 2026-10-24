@@ -11,6 +11,18 @@ from scripts.ci_pytest import ModuleShard
 from scripts.verify_ci_shards import verify
 
 
+def test_large_parameter_ids_are_bounded_stable_and_keep_distinct_inputs(request):
+    hook = request.config.hook.pytest_make_parametrize_id
+    labels = []
+    for value in (b"x" * 1_048_577, "x" * 100_000, b"y" * 1_048_577):
+        label = hook(config=request.config, val=value, argname="body")
+        assert len(label) < 80
+        assert label == hook(config=request.config, val=value, argname="body")
+        labels.append(label)
+    assert len(set(labels)) == 3
+    assert hook(config=request.config, val="short", argname="body") is None
+
+
 def test_module_shards_are_disjoint_complete_and_order_independent(tmp_path):
     items = [
         SimpleNamespace(path=Path(f"tests/{module}.py"), nodeid=f"{module}::{index}")
