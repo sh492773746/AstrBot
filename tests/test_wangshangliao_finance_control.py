@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import pytest_asyncio
 
 from astrbot.builtin_stars.wangshangliao_moderation.cashback import CashbackService
 from astrbot.builtin_stars.wangshangliao_moderation.cashback_finance import FinanceActor
@@ -30,8 +31,8 @@ from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
 
 
-@pytest.fixture(autouse=True)
-def forbid_network(monkeypatch):
+@pytest_asyncio.fixture(autouse=True)
+async def forbid_network(monkeypatch):
     """Fail any accidental network connection in these offline regressions.
 
     Args:

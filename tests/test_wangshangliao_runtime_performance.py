@@ -126,6 +126,9 @@ async def test_complete_member_snapshots_coalesce_without_weakening_force(
     )
     bot.connection_state = "online"
     bot.business = object()
+    monkeypatch.setattr(
+        native, "time", SimpleNamespace(monotonic=lambda: 1000.0, time=lambda: 1000.0)
+    )
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def fetch(*_):

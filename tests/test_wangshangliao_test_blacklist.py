@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 
 from astrbot.builtin_stars.wangshangliao_moderation import test_blacklist as binding
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
@@ -26,8 +27,8 @@ OPERATION = "WSL_TEST_BLACKLIST_" + "a" * 32
 ERRORS = (OpenError, ProtocolError)
 
 
-@pytest.fixture
-def lab(tmp_path, monkeypatch):
+@pytest_asyncio.fixture
+async def lab(tmp_path, monkeypatch):
     """Build original authenticated adapter doubles with all IO mocked.
 
     Args:
@@ -41,6 +42,8 @@ def lab(tmp_path, monkeypatch):
     def no_network(*args, **kwargs):
         raise AssertionError("Network access is forbidden in blacklist fixture tests")
 
+    # Start the loop before blocking sockets: Windows uses TCP for its wakeup pair.
+    asyncio.get_running_loop()
     monkeypatch.setattr(socket.socket, "connect", no_network)
     clock = [1000.0]
     fake_time = SimpleNamespace(monotonic=lambda: clock[0], time=lambda: clock[0])
@@ -167,6 +170,14 @@ def lab(tmp_path, monkeypatch):
             kw.get("payload", {"operation_id": OPERATION}),
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_offline_guard_rejects_even_loopback_after_loop_start(lab):
+    assert asyncio.get_running_loop().is_running()
+    with socket.socket() as connection:
+        with pytest.raises(AssertionError, match="Network access is forbidden"):
+            connection.connect(("127.0.0.1", 9))
 
 
 def native_intent(

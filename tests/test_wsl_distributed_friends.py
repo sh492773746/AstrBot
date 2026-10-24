@@ -21,8 +21,8 @@ from tests.test_wangshangliao_friend_auto import application
 from tests.test_wangshangliao_friend_auto import approval as approval
 
 
-@pytest.fixture(autouse=True)
-def offline_only(monkeypatch):
+@pytest_asyncio.fixture(autouse=True)
+async def offline_only(monkeypatch):
     """Prevent synthetic tests from reaching a network transport.
 
     Args:

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
+import pytest_asyncio
 
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Plain
@@ -30,8 +31,8 @@ from astrbot.core.platform.sources.wangshangliao.test_window import (
 )
 
 
-@pytest.fixture(autouse=True)
-def offline_audit(monkeypatch, tmp_path):
+@pytest_asyncio.fixture(autouse=True)
+async def offline_audit(monkeypatch, tmp_path):
     """Forbid network and redirect native audit storage to a temporary directory.
 
     Args:

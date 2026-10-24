@@ -199,65 +199,25 @@ async def test_individual_text_actions_preserve_others_and_reject_stale():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("gap", [2, 7, 3600])
-async def test_unknown_send_continues_next_item_without_replay(gap):
-    source = Path("data/plugins/astrbot_plugin_rebo_live/main.py").read_text()
-    cls = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef))
-    method = next(
-        n
-        for n in cls.body
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "room_step"
-    )
-    scope = {
-        "asyncio": asyncio,
-        "json": json,
-        "time": time,
-        "uuid": uuid,
-        "aiohttp": aiohttp,
-        "RemoteError": RemoteError,
-        "logger": logging.getLogger("test"),
-    }
-    exec(
-        compile(ast.Module(body=[method], type_ignores=[]), "<scheduler>", "exec"),
-        scope,
-    )
-    ws = AsyncMock()
-    send = AsyncMock(side_effect=[TimeoutError(), "confirmed-id", "third-id"])
-    room = {
-        "enabled": True,
-        "revision": 1,
-        "interval": 50,
-        "item_interval": gap,
-        "text": "one",
-        "texts": ["one", "two", "three"],
-    }
-    obj = SimpleNamespace(
-        state={"rooms": {"r": room}},
-        status="已登录",
-        checked=time.monotonic(),
-        visible={"r": {"status": 1}},
-        due={"r": 0},
-        network=asyncio.Semaphore(1),
-        client=SimpleNamespace(
-            request=AsyncMock(return_value={}),
-            connect=AsyncMock(return_value=ws),
-            send=send,
-        ),
-        save=lambda *args: None,
-    )
-    await scope["room_step"](obj, "r")
+async def test_unknown_send_continues_next_item_without_replay(room_scheduler, gap):
+    obj = room_scheduler
+    room = obj.state["rooms"]["r"]
+    room.update(item_interval=gap, texts=["one", "two", "three"])
+    send = obj.client.send
+    send.side_effect = [TimeoutError(), "confirmed-id", "third-id"]
+    await obj.room_step("r")
     assert room["enabled"] and room["cursor"] == 1
     assert room["history"][-1]["result"] == "uncertain"
-    assert obj.due["r"] > time.monotonic()
-    assert gap - 1 < obj.due["r"] - time.monotonic() <= gap
+    assert obj.due["r"] == obj.clock.now + gap
     obj.due["r"] = 0
-    await scope["room_step"](obj, "r")
+    await obj.room_step("r")
     assert [c.args[1] for c in send.await_args_list] == ["one", "two"]
     assert room["cursor"] == 2 and room["result"] == "confirmed"
-    assert gap - 1 < obj.due["r"] - time.monotonic() <= gap
+    assert obj.due["r"] == obj.clock.now + gap
     obj.due["r"] = 0
-    await scope["room_step"](obj, "r")
+    await obj.room_step("r")
     assert room["cursor"] == 0
-    assert 49 < obj.due["r"] - time.monotonic() <= 50
+    assert obj.due["r"] == obj.clock.now + 50
 
 
 @pytest.mark.asyncio

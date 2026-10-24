@@ -648,7 +648,7 @@ class WangshangliaoAdapter(Platform):
         Raises:
             ProtocolError: If the roster cannot establish consistent identities.
         """
-        requested_at = time.monotonic()
+        previous = self.member_snapshots.get(group)
         lock = self.member_refresh_locks.setdefault(group, asyncio.Lock())
         async with lock:
             now = time.monotonic()
@@ -657,7 +657,7 @@ class WangshangliaoAdapter(Platform):
                 cached
                 and cached[0] == self.account
                 and (
-                    cached[1] >= requested_at
+                    cached is not previous
                     or (max_age > 0 and now - cached[1] < max_age)
                 )
             ):

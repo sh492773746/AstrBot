@@ -3,13 +3,15 @@
 import copy
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
-from urllib.parse import parse_qs, unquote, urlsplit
+from unittest.mock import AsyncMock, Mock, patch
+from urllib.parse import parse_qs, urlsplit
+from urllib.request import url2pathname
 
 import httpx
 import pytest
@@ -147,7 +149,7 @@ def observation(tmp_path, monkeypatch):
         parsed = urlsplit(database)
         assert uri is True and parsed.scheme == "file"
         assert parse_qs(parsed.query) == {"mode": ["ro"]}
-        assert Path(unquote(parsed.path)).is_relative_to(root)
+        assert Path(url2pathname(parsed.path)).is_relative_to(root)
         connection = sqlite3.connect(database, uri=True)
         connections.append(connection)
         return connection
@@ -330,7 +332,13 @@ async def test_stable_observation_is_read_only_bounded_and_writes_private_eviden
     fingerprints = {
         path: hashlib.sha256(path.read_bytes()).hexdigest() for path in protected
     }
-    await shared_soak.main()
+    with (
+        patch.object(Path, "mkdir", autospec=True, side_effect=Path.mkdir) as mkdir,
+        patch.object(Path, "chmod", autospec=True, side_effect=Path.chmod) as chmod,
+    ):
+        await shared_soak.main()
+    mkdir.assert_any_call(observation.output, mode=0o700)
+    chmod.assert_any_call(observation.evidence, 0o600)
     evidence = json.loads(observation.evidence.read_text("utf-8"))
     assert evidence["required_seconds"] == evidence["elapsed_seconds"] == 60
     assert evidence["complete"] is True
@@ -344,8 +352,9 @@ async def test_stable_observation_is_read_only_bounded_and_writes_private_eviden
         assert sample["platform_stats"]["platforms"] == observation.platforms
         assert sample["queue_health"] == {"pending": 0}
         assert sample["disk_free_bytes"] == 2**40
-    assert observation.output.stat().st_mode & 0o777 == 0o700
-    assert observation.evidence.stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert observation.output.stat().st_mode & 0o777 == 0o700
+        assert observation.evidence.stat().st_mode & 0o777 == 0o600
     assert [call.args for call in observation.sleep.await_args_list] == [(30,), (30,)]
     assert observation.systemctl.call_count == observation.thread.await_count == 3
     assert observation.snapshot.call_count == 4

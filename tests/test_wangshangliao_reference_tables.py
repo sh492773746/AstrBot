@@ -124,12 +124,12 @@ def test_architecture_paths_are_real_and_bilingual(row):
 def test_architecture_covers_every_python_module(source):
     """Require a responsibility owner for every plugin and adapter module."""
     directory = ROOT / source
-    actual = {str(path.relative_to(ROOT)) for path in directory.glob("*.py")}
+    actual = {path.relative_to(ROOT).as_posix() for path in directory.glob("*.py")}
     documented = {
         name
         for row in REFERENCE["architecture"]
         for name in row["files"]
-        if name.startswith(str(directory.relative_to(ROOT)) + "/")
+        if name.startswith(directory.relative_to(ROOT).as_posix() + "/")
     }
     assert actual == documented
 

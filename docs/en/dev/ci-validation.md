@@ -22,6 +22,15 @@ Omit both shard variables for the complete suite in one process. The runner
 keeps its watchdog active through output flushing and returns pytest's actual
 exit status even if tests leave non-daemon workers alive.
 
+Offline socket guards are installed after the asyncio loop starts, including
+on Windows where the loop's wakeup pair uses TCP. They still reject loopback
+connections initiated by the test body. Large binary parameters use short
+explicit case IDs so `PYTEST_CURRENT_TEST` remains within Windows limits.
+Permission tests verify the private-mode calls on every OS and actual POSIX
+mode bits on Unix; this does not assert that Windows ACLs equal Unix modes.
+Native permission refresh tests use a fixed clock to ensure a sequential
+forced read cannot be mistaken for a concurrent coalesced read.
+
 CodeQL findings are fixed in application code, not hidden by query exclusions,
 alert dismissal or weaker branch policies. Path access must use a normalized,
 directory-confined path, including when a symlink exists.

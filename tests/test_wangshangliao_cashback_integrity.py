@@ -2,7 +2,7 @@
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from time import time as wall_time
+from itertools import count
 
 import pytest
 from test_wangshangliao_cashback_qualification import (
@@ -223,7 +223,8 @@ def test_payment_kind_uses_settlement_timestamp_not_audit_clock(
         set(),
         now=1500,
     )
-    monkeypatch.setattr("time.time", wall_time)
+    clock = count(1_700_000_000, 0.001)
+    monkeypatch.setattr("time.time", lambda: next(clock))
     store.snapshot("5", "bot", "99", members, proofs)
     reader = CashbackStore(store.path, read_only=True, reuse_reads=reuse_reads)
     try:

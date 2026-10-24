@@ -15,9 +15,11 @@ from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import pytest
+import pytest_asyncio
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNER, PEER, ORDINARY = "31846829", "43506527", "23691273"
@@ -124,8 +126,8 @@ class _Dashboard:
         )
 
 
-@pytest.fixture
-def checks(tmp_path, monkeypatch):
+@pytest_asyncio.fixture
+async def checks(tmp_path, monkeypatch):
     """Block real transports and vaults, then construct only isolated script objects.
 
     Args:
@@ -168,7 +170,9 @@ def checks(tmp_path, monkeypatch):
     def fixture_connect(database, *args, **kwargs):
         raw = str(database)
         path = (
-            Path(unquote(urlsplit(raw).path)) if raw.startswith("file:") else Path(raw)
+            Path(url2pathname(urlsplit(raw).path))
+            if raw.startswith("file:")
+            else Path(raw)
         )
         assert path.resolve().is_relative_to(tmp_path.resolve()), raw
         opens.append((raw, kwargs.copy()))
@@ -473,9 +477,13 @@ def test_cold_cli_without_apply_has_no_native_imports_credentials_or_network(
     tmp_path, script, args
 ):
     child = textwrap.dedent("""
-        import builtins, os, runpy, sys
+        import asyncio, builtins, os, runpy, sys
         from pathlib import Path
         script, root, scratch, *arguments = sys.argv[1:]
+        # Bootstrap Windows' internal socket pair before enforcing the IO audit.
+        runner = asyncio.Runner()
+        runner.get_loop()
+        asyncio.run = runner.run
         sys.path.insert(0, root)
         sys.argv = [script, *arguments]
         original = builtins.__import__

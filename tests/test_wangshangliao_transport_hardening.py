@@ -33,8 +33,8 @@ from astrbot.core.platform.sources.wangshangliao.progression_store import (
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 
 
-@pytest.fixture(autouse=True)
-def offline(monkeypatch, tmp_path):
+@pytest_asyncio.fixture(autouse=True)
+async def offline(monkeypatch, tmp_path):
     def forbidden(*args, **kwargs):
         raise AssertionError("real_network_forbidden")
 

@@ -3,7 +3,6 @@
 import argparse
 import asyncio
 import copy
-import fcntl
 import hashlib
 import io
 import json
@@ -2898,6 +2897,8 @@ async def main():
             )
         )
         return
+    import fcntl
+
     import aiohttp
     import httpx
     import jwt
