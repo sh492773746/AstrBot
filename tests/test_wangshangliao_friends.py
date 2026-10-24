@@ -111,6 +111,16 @@ async def test_friend_directory_paginates_and_excludes_deleted_relations():
         friend_page([(str(i), 3000 - i, b"1") for i in range(3000)]),
         friend_page([(str(i + 1), 1, b"1") for i in range(3000)]),
     ],
+    ids=[
+        "over-limit",
+        "truncated",
+        "duplicate-account",
+        "invalid-peer",
+        "wrong-account",
+        "unsafe-account",
+        "oversized-page",
+        "ambiguous-peers",
+    ],
 )
 async def test_incomplete_or_ambiguous_friend_directory_fails_closed(body):
     """Reject malformed read responses.

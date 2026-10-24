@@ -45,8 +45,8 @@ from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
 
-@pytest.fixture(autouse=True)
-def offline_paths(tmp_path, monkeypatch):
+@pytest_asyncio.fixture(autouse=True)
+async def offline_paths(tmp_path, monkeypatch):
     """Isolate storage and fail immediately on an attempted network connection."""
     for module in (
         activities,

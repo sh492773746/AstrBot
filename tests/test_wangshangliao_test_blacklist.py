@@ -2,14 +2,17 @@
 
 import asyncio
 import copy
+import os
 import socket
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict, replace
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+import pytest_asyncio
 
 from astrbot.builtin_stars.wangshangliao_moderation import test_blacklist as binding
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
@@ -26,8 +29,8 @@ OPERATION = "WSL_TEST_BLACKLIST_" + "a" * 32
 ERRORS = (OpenError, ProtocolError)
 
 
-@pytest.fixture
-def lab(tmp_path, monkeypatch):
+@pytest_asyncio.fixture
+async def lab(tmp_path, monkeypatch):
     """Build original authenticated adapter doubles with all IO mocked.
 
     Args:
@@ -41,6 +44,8 @@ def lab(tmp_path, monkeypatch):
     def no_network(*args, **kwargs):
         raise AssertionError("Network access is forbidden in blacklist fixture tests")
 
+    # Start the loop before blocking sockets: Windows uses TCP for its wakeup pair.
+    asyncio.get_running_loop()
     monkeypatch.setattr(socket.socket, "connect", no_network)
     clock = [1000.0]
     fake_time = SimpleNamespace(monotonic=lambda: clock[0], time=lambda: clock[0])
@@ -167,6 +172,14 @@ def lab(tmp_path, monkeypatch):
             kw.get("payload", {"operation_id": OPERATION}),
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_offline_guard_rejects_even_loopback_after_loop_start(lab):
+    assert asyncio.get_running_loop().is_running()
+    with socket.socket() as connection:
+        with pytest.raises(AssertionError, match="Network access is forbidden"):
+            connection.connect(("127.0.0.1", 9))
 
 
 def native_intent(
@@ -352,8 +365,12 @@ async def test_begin_binds_only_original_window_without_business_or_window_edits
         copy.deepcopy(lab.tenant),
         dict(lab.receiver.test_window.__dict__),
     )
-    result = await lab.begin()
+    with patch.object(
+        Path, "chmod", autospec=True, side_effect=Path.chmod
+    ) as chmod:
+        result = await lab.begin()
     fixture = lab.service._blacklist_fixture
+    chmod.assert_any_call(fixture.path, 0o600)
     assert result == {
         "test_only": True,
         "operation_id": OPERATION,
@@ -367,7 +384,8 @@ async def test_begin_binds_only_original_window_without_business_or_window_edits
         getattr(fixture.window, key) == value for key, value in before[2].items()
     )
     assert not (fixture.path.parents[2] / "member_blacklist.sqlite3").exists()
-    assert fixture.path.stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert fixture.path.stat().st_mode & 0o777 == 0o600
     assert (await lab.begin())["replayed"]
     lab.upstream.assert_not_awaited()
 

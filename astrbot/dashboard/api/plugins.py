@@ -1096,8 +1096,8 @@ async def update_plugin_log_level(
 ):
     try:
         LogManager.set_plugin_log_level(plugin_id, payload.level)
-    except ValueError as e:
-        return error(str(e))
+    except ValueError:
+        return error("Invalid plugin log level")
     level_desc = payload.level.upper() if payload.level else "global"
     return ok(
         message=f"Log level of plugin {plugin_id} set to {level_desc}.",

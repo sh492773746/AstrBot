@@ -1,7 +1,6 @@
 """No-network paid-task lifecycle, quota and credential isolation tests."""
 
 import asyncio
-import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -11,7 +10,12 @@ import pytest_asyncio
 from telegram.error import BadRequest, RetryAfter, TimedOut
 from test_superbot_avatar import avatar, confirmation, update  # noqa: F401
 
-from data.plugins.astrbot_plugin_superbot.avatar_ai import ASSETS, MODEL, AIAvatar
+from data.plugins.astrbot_plugin_superbot.avatar_ai import (
+    ASSETS,
+    MODEL,
+    AIAvatar,
+    credential_fingerprint,
+)
 from data.plugins.astrbot_plugin_superbot.store import Rejected
 
 
@@ -310,7 +314,7 @@ async def test_restart_processing_polls_original_id(ai):
     await ai.action(update(), p, t)
     ai.store.db.execute(
         "UPDATE avatar_ai SET stage='processing',task='imgtask_resume',credential=?",
-        (hashlib.sha256(b"fixture-secret").hexdigest(),),
+        (credential_fingerprint("fixture-secret"),),
     )
     restarted = AIAvatar(ai.runtime)
     calls = []
@@ -324,6 +328,57 @@ async def test_restart_processing_polls_original_id(ai):
     await restarted.tick()
     assert len(calls) == 1 and restarted.remaining(2) == 1
     await restarted.client.aclose()
+
+
+def test_credential_verifiers_are_salted_expensive_and_reproducible():
+    one = credential_fingerprint("fixture-secret")
+    two = credential_fingerprint("fixture-secret")
+    assert one != two
+    assert one.startswith("pbkdf2_sha256$600000$")
+    assert credential_fingerprint("fixture-secret", one.split("$")[2]) == one
+    assert credential_fingerprint("different", one.split("$")[2]) != one
+
+
+@pytest.mark.asyncio
+async def test_legacy_remote_task_requires_owner_approval_without_resubmission(ai):
+    p, t = confirmation(ai, update())
+    await ai.action(update(), p, t)
+    ai.store.db.execute(
+        "UPDATE avatar_ai SET stage='processing',task='imgtask_legacy',credential=?",
+        ("a" * 64,),
+    )
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.method == "GET" and request.url.path.endswith("/imgtask_legacy")
+        return httpx.Response(200, json={"status": "processing"})
+
+    await transport(ai, handler)
+    await ai.tick()
+    row = ai.store.db.execute("SELECT * FROM avatar_ai").fetchone()
+    assert row["error"] == "credential_verifier_review" and not calls
+    assert ai.remaining(2) == 1
+    with pytest.raises(Rejected):
+        await ai.approve_credential_verifier(
+            "2", row["job"], confirm_current_credential=True
+        )
+    with pytest.raises(Rejected):
+        await ai.approve_credential_verifier("1", row["job"])
+    await ai.approve_credential_verifier(
+        "1", row["job"], confirm_current_credential=True
+    )
+    await ai.tick()
+    assert len(calls) == 1
+    assert ai.remaining(2) == 1
+    audit = ai.store.db.execute(
+        "SELECT data FROM audit WHERE action='avatar_credential_verifier_approved'"
+    ).fetchone()
+    assert "fixture-secret" not in audit["data"]
+    with pytest.raises(Rejected):
+        await ai.approve_credential_verifier(
+            "1", row["job"], confirm_current_credential=True
+        )
 
 
 @pytest.mark.asyncio
@@ -362,7 +417,7 @@ async def test_untrusted_asset_never_requested_and_key_change_pauses(ai, monkeyp
     await ai.action(event, p, t)
     ai.store.db.execute(
         "UPDATE avatar_ai SET stage='processing',task='imgtask_resume',credential=?",
-        (hashlib.sha256(b"fixture-secret").hexdigest(),),
+        (credential_fingerprint("fixture-secret"),),
     )
     calls = []
 
@@ -388,7 +443,7 @@ async def test_failed_task_and_delivery_error_do_not_resubmit(ai):
     await ai.action(update(), p, t)
     ai.store.db.execute(
         "UPDATE avatar_ai SET stage='processing',task='imgtask_failed',credential=?",
-        (hashlib.sha256(b"fixture-secret").hexdigest(),),
+        (credential_fingerprint("fixture-secret"),),
     )
     await transport(ai, lambda request: httpx.Response(200, json={"status": "failed"}))
     await ai.tick()

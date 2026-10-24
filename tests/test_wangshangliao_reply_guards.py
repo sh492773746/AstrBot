@@ -22,8 +22,8 @@ from tests.test_wangshangliao_transport_hardening import BlockingLock
 pytestmark = pytest.mark.usefixtures("wsl_active_policy", "wsl_command_classifier")
 
 
-@pytest.fixture(autouse=True)
-def offline(monkeypatch):
+@pytest_asyncio.fixture(autouse=True)
+async def offline(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("real_network_forbidden")
 

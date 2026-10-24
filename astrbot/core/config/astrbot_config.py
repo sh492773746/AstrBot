@@ -215,7 +215,6 @@ class AstrBotConfig(dict):
             child_schema = schema.get(key) if schema else None
             if key not in conf:
                 # 配置项不存在，插入默认值
-                path_ = path + "." + key if path else key
                 logger.info("Config key missing; added default.")
                 new_conf[key] = value
                 has_new = True
@@ -261,14 +260,13 @@ class AstrBotConfig(dict):
         # 检查是否存在参考配置中没有的配置项
         for key in list(conf.keys()):
             if key not in refer_conf:
-                path_ = path + "." + key if path else key
-                logger.info("Config key removed: %s", path_)
+                logger.info("Removed an obsolete configuration key")
                 has_new = True
 
         # 顺序不一致也算作变更
         if list(conf.keys()) != list(new_conf.keys()):
             if path:
-                logger.info("Config key order fixed: %s", path)
+                logger.info("Fixed nested configuration key ordering")
             else:
                 logger.info("Config key order fixed")
             has_new = True

@@ -15,8 +15,42 @@ Data subdirectories:
 
 import os
 import tempfile
+from pathlib import Path, PureWindowsPath
 
 from astrbot.core.utils.runtime_env import is_packaged_desktop_runtime
+
+
+def resolve_path_within(
+    base: str | Path, relative: str | Path, *, allow_root: bool = False
+) -> Path:
+    """Resolve a relative path without allowing traversal or symlink escape.
+
+    Args:
+        base: Trusted directory containing the requested resource.
+        relative: Untrusted relative resource path.
+        allow_root: Whether the resource may be the base directory itself.
+
+    Returns:
+        A normalized path contained by the trusted directory.
+
+    Raises:
+        ValueError: The path is absolute, malformed or outside the directory.
+    """
+    raw = str(relative)
+    if not raw or "\x00" in raw or "\\" in raw or PureWindowsPath(raw).drive:
+        raise ValueError("Invalid relative path")
+    requested = Path(raw)
+    if requested.is_absolute():
+        raise ValueError("Absolute paths are not allowed")
+    root = os.path.realpath(base)
+    candidate = os.path.realpath(os.path.join(root, raw))
+    if candidate == root:
+        if allow_root:
+            return Path(root)
+        raise ValueError("The allowed directory itself is not a resource")
+    if not candidate.startswith(root.rstrip(os.sep) + os.sep):
+        raise ValueError("Path is outside the allowed directory")
+    return Path(candidate)
 
 
 def get_astrbot_path() -> str:

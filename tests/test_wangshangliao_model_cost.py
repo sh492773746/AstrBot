@@ -1,10 +1,12 @@
 """Keep opt-in cost checks bounded and separate from production AI admission."""
 
 import json
+import os
 import sqlite3
 import sys
 from contextlib import contextmanager
 from json import dumps
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -130,7 +132,10 @@ def test_four_calls_use_real_history_without_opening_gate(lab, install_http):
     config, output, sent = lab
     original = config.read_bytes()
     install_http(sent)
-    cost.main()
+    with patch.object(cost.os, "chmod", wraps=cost.os.chmod) as chmod:
+        cost.main()
+    chmod.assert_any_call(output, 0o700)
+    chmod.assert_any_call(output / "evidence.json", 0o600)
     record = json.loads((output / "evidence.json").read_text())
     assert len(sent) == 4
     assert [len(p["messages"]) for p in sent] == [2, 2, 4, 6]
@@ -147,8 +152,9 @@ def test_four_calls_use_real_history_without_opening_gate(lab, install_http):
     assert record["production_config_unchanged"] is True
     assert record["finance_opened"] is False
     assert "fixture-secret" not in (output / "evidence.json").read_text()
-    assert (output / "evidence.json").stat().st_mode & 0o777 == 0o600
-    assert output.stat().st_mode & 0o777 == 0o700
+    if os.name == "posix":
+        assert (output / "evidence.json").stat().st_mode & 0o777 == 0o600
+        assert output.stat().st_mode & 0o777 == 0o700
 
 
 @pytest.mark.parametrize(

@@ -24,7 +24,9 @@ def snapshot():
     """
     data = ROOT / "data/plugin_data"
     with sqlite3.connect(
-        f"file:{data / 'wangshangliao_cashback/cashback.sqlite3'}?mode=ro", uri=True
+        (data / "wangshangliao_cashback/cashback.sqlite3").resolve().as_uri()
+        + "?mode=ro",
+        uri=True,
     ) as db:
         entries = db.execute(
             "SELECT id,group_id,member,inviter,amount,state,verification,eligible,"
@@ -35,7 +37,9 @@ def snapshot():
             "require_speech,agent_only FROM groups ORDER BY id"
         ).fetchall()
     with sqlite3.connect(
-        f"file:{data / 'wangshangliao_open/open-service.sqlite3'}?mode=ro", uri=True
+        (data / "wangshangliao_open/open-service.sqlite3").resolve().as_uri()
+        + "?mode=ro",
+        uri=True,
     ) as db:
         tenants = db.execute(
             "SELECT account,group_id,active,paused,version,managers,rules "

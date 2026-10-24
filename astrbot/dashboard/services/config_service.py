@@ -29,7 +29,10 @@ from astrbot.core.db import BaseDatabase
 from astrbot.core.platform.register import platform_cls_map, platform_registry
 from astrbot.core.provider.register import provider_registry
 from astrbot.core.star.star import star_registry
-from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+from astrbot.core.utils.astrbot_path import (
+    get_astrbot_plugin_data_path,
+    resolve_path_within,
+)
 from astrbot.core.utils.totp import (
     is_totp_enabled,
     revoke_user_trusted_devices,
@@ -236,7 +239,7 @@ def validate_config(
                 continue
             meta = metadata[key]
             if "type" not in meta:
-                logger.debug(f"配置项 {path}{key} 没有类型定义, 跳过校验")
+                logger.debug("Skipping configuration item without a declared type")
                 continue
             if value is None:
                 data[key] = DEFAULT_VALUE_MAP[meta["type"]]
@@ -1370,11 +1373,12 @@ class ConfigFileService:
 
         files: list[str] = []
         for path in target_dir.rglob("*"):
-            if not path.is_file():
-                continue
             try:
                 rel_path = path.relative_to(plugin_root_path).as_posix()
+                checked_path = resolve_path_within(plugin_root_path, rel_path)
             except ValueError:
+                continue
+            if not checked_path.is_file():
                 continue
             if rel_path.startswith("files/"):
                 files.append(rel_path)
@@ -1397,21 +1401,19 @@ class ConfigFileService:
     @staticmethod
     def _plugin_root_path(name: str) -> Path:
         storage_root_path = Path(get_astrbot_plugin_data_path()).resolve(strict=False)
-        plugin_root_path = (storage_root_path / name).resolve(strict=False)
+        if "/" in name or name in {".", ".."}:
+            raise ValueError("Invalid name parameter")
         try:
-            plugin_root_path.relative_to(storage_root_path)
+            return resolve_path_within(storage_root_path, name)
         except ValueError as exc:
             raise ValueError("Invalid name parameter") from exc
-        return plugin_root_path
 
     @staticmethod
     def _safe_plugin_path(plugin_root_path: Path, rel_path: str) -> Path | None:
-        target_path = (plugin_root_path / rel_path).resolve(strict=False)
         try:
-            target_path.relative_to(plugin_root_path)
+            return resolve_path_within(plugin_root_path, rel_path)
         except ValueError:
             return None
-        return target_path
 
 
 class BotConfigService:

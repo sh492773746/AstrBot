@@ -13,6 +13,16 @@ from astrbot.core.skills.skill_manager import (
     build_skills_prompt,
 )
 
+
+@pytest.fixture(autouse=True)
+def isolated_builtin_skills(tmp_path, monkeypatch):
+    """Keep inventory fixtures independent of globally registered plugins."""
+    monkeypatch.setattr(
+        "astrbot.core.skills.skill_manager.get_astrbot_builtin_plugin_path",
+        lambda: str(tmp_path / "empty_builtin_plugins"),
+    )
+
+
 # ---------- _parse_frontmatter_description tests ----------
 
 

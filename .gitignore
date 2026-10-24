@@ -4,6 +4,8 @@ __pycache__
 .venv*
 .conda/
 .coverage
+.coverage.*
+ci-results/
 
 # IDE and editors
 .vscode

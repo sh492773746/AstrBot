@@ -256,6 +256,15 @@ class Worker:
                 "astrbot_plugin_superbot",
                 "astrbot_plugin_tenant_health",
             ]
+        # Host environment defaults must never become tenant credentials.
+        sandbox = config.setdefault("provider_settings", {}).setdefault("sandbox", {})
+        for credential in (
+            "cua_api_key",
+            "shipyard_access_token",
+            "shipyard_neo_access_token",
+        ):
+            token_changed = token_changed or bool(sandbox.get(credential))
+            sandbox[credential] = ""
         dashboard = config.setdefault("dashboard", {})
         token_changed = token_changed or dashboard.get("enable", True)
         if "astrbot_plugin_tenant_health" not in config.get("plugin_set", []):
@@ -287,8 +296,12 @@ class Worker:
                 provider["embedding_api_key"] = model_key
                 provider["embedding_api_base"] = self.proxy_url
         temp = config_path.with_suffix(".tmp")
-        temp.write_text(json.dumps(config, ensure_ascii=False))
-        temp.chmod(0o600)
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            os.fchmod(file.fileno(), 0o600)
+            json.dump(config, file, ensure_ascii=False)
+            file.flush()
+            os.fsync(file.fileno())
         temp.replace(config_path)
         if not plugin_path.exists():
             plugin_path.write_text(

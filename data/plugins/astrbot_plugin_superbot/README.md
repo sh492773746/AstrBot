@@ -180,3 +180,20 @@ python data/plugins/astrbot_plugin_superbot/maintenance.py verify /备份路径/
 新群和公众自助接入默认关闭。平台总开关表示平台允许，本群开关表示本群启用；两者都满足才受理。付费 AI／制图还需要平台单独设置本群调用预算。
 
 独立广告采用“先审核、后付款”。付款单显示当前群主地址、USDT-TRC20 网络、完整金额及识别尾数；系统只核验链上到账，不托管私钥、不自动转账或退款。少付、多付、迟付、重复交易、地址扫描落后和发布结果不明均进入核查，不自动发布、不要求重复付款。详见 `docs/multi-owner.md`。
+# Credential Verifier Maintenance
+
+AI-avatar remote jobs now use per-operation salted PBKDF2-SHA256 verifiers
+(600,000 iterations), computed outside the event loop. This verifier detects
+credential changes; it is not an API credential.
+
+An existing processing job with an old SHA-256 verifier is paused with
+`credential_verifier_review`. Its original remote task ID, quota reservation and
+audit history remain intact. It must not be reset to queued or submitted again.
+After independently confirming that the installed provider credential belongs
+to that original task, the verified store owner can call the maintenance method
+`await avatar_ai.approve_credential_verifier(owner_uid, job_id,
+confirm_current_credential=True)` on the existing runtime. This only upgrades
+that task's verifier and resumes polling its original remote ID. Missing
+confirmation, non-owner actors, unknown submissions, completed tasks and repeat
+approval are rejected. This is an explicit operator action, not an AI tool or an
+automatic migration.

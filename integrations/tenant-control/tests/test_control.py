@@ -268,10 +268,28 @@ class WorkerTests(ControlFixture):
             "UPDATE bots SET token_cipher=? WHERE id=123",
             (self.fernet.encrypt(b"token"),),
         )
-        data, _ = worker._prepare(
-            self.store.db.execute("SELECT * FROM bots WHERE id=123").fetchone()
-        )
+        from astrbot.core.config.default import DEFAULT_CONFIG
+
+        row = self.store.db.execute("SELECT * FROM bots WHERE id=123").fetchone()
+        with patch.dict(
+            DEFAULT_CONFIG["provider_settings"]["sandbox"],
+            {
+                "cua_api_key": "host-only-test-secret",
+                "shipyard_access_token": "host-only-test-secret",
+                "shipyard_neo_access_token": "host-only-test-secret",
+            },
+        ):
+            data, _ = worker._prepare(row)
         config = json.loads((data / "cmd_config.json").read_text())
+        self.assertNotIn("host-only-test-secret", json.dumps(config))
+        self.assertEqual((data / "cmd_config.json").stat().st_mode & 0o777, 0o600)
+        config["provider_settings"]["sandbox"]["cua_api_key"] = "legacy-host-secret"
+        (data / "cmd_config.json").write_text(json.dumps(config))
+        _, changed = worker._prepare(row)
+        self.assertTrue(changed)
+        self.assertNotIn(
+            "legacy-host-secret", (data / "cmd_config.json").read_text()
+        )
         plugin = json.loads(
             (data / "config/astrbot_plugin_superbot_config.json").read_text()
         )

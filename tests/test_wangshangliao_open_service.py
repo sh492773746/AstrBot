@@ -639,7 +639,7 @@ async def test_retired_socket_never_starts_or_forwards(tmp_path, monkeypatch):
     value = service(tmp_path)
     rpc = OpenRPC(value, tmp_path / "control.sock")
     monkeypatch.setenv("ASTRBOT_WSL_OPEN_SOCKET", str(rpc.path))
-    monkeypatch.setenv("ASTRBOT_WSL_CONTROL_UID", str(__import__("os").getuid()))
+    monkeypatch.setenv("ASTRBOT_WSL_CONTROL_UID", "1000")
     with pytest.raises(OpenError, match="isolated_mode_retired"):
         await rpc.start()
     with pytest.raises(OpenError, match="isolated_mode_retired"):

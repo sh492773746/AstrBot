@@ -747,6 +747,14 @@ class TestComputerClient:
 class TestSyncSkillsToSandbox:
     """Tests for _sync_skills_to_sandbox function."""
 
+    @pytest.fixture(autouse=True)
+    def isolated_builtin_skills(self, tmp_path, monkeypatch):
+        from astrbot.core.skills import skill_manager
+
+        monkeypatch.setattr(
+            skill_manager, "get_astrbot_builtin_plugin_path", lambda: str(tmp_path)
+        )
+
     @pytest.mark.asyncio
     async def test_sync_skills_no_skills_dir(self):
         """Test sync does nothing when skills directory doesn't exist."""

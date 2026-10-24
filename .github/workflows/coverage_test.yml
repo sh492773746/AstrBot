@@ -13,9 +13,13 @@ on:
 
 jobs:
   test:
-    name: Run tests and collect coverage
+    name: Run tests and collect coverage (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -59,7 +63,7 @@ jobs:
           # Offline diagnostics must never receive live model credentials.
           export OPENAI_API_KEY=""
           export ZHIPU_API_KEY=""
-          unit="wsl-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          unit="wsl-coverage-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.shard }}"
           {
             free -m
             df -h .
@@ -83,23 +87,15 @@ jobs:
             --setenv="RUNNER_OS=$RUNNER_OS" --setenv="RUNNER_TEMP=$RUNNER_TEMP" \
             --setenv=TESTING=true --setenv=ASTRBOT_TEST_MODE=true \
             --setenv=ASTRBOT_DISABLE_FILE_LOGGING=1 --setenv=PYTHONUTF8=1 \
+            --setenv="ASTRBOT_CI_SHARD_INDEX=${{ matrix.shard }}" \
+            --setenv=ASTRBOT_CI_SHARD_COUNT=4 \
+            --setenv=ASTRBOT_CI_TEST_TIMEOUT_SECONDS=3600 \
+            --setenv="COVERAGE_FILE=$GITHUB_WORKSPACE/.coverage.${{ matrix.shard }}" \
             --setenv="OPENAI_API_KEY=" --setenv="ZHIPU_API_KEY=" \
-            "$GITHUB_WORKSPACE/.venv/bin/python" -u - \
-            > coverage-test.log 2>&1 <<'PY' &
-          import os
-          import sys
-
-          import pytest
-
-          result = int(pytest.main([
-              "tests", "--cov=astrbot", "--cov-report=xml", "-v",
-              "--durations=25", "-o", "log_cli=false",
-              "-o", "faulthandler_timeout=120",
-          ]))
-          sys.stdout.flush()
-          sys.stderr.flush()
-          os._exit(result)
-          PY
+            "$GITHUB_WORKSPACE/.venv/bin/python" -u scripts/ci_pytest.py \
+            tests --cov=astrbot --cov-report=xml -v --durations=25 \
+            -o log_cli=false -o faulthandler_timeout=120 \
+            > coverage-test.log 2>&1 < /dev/null &
           service_pid=$!
           while kill -0 "$service_pid" 2>/dev/null; do
             sleep 30
@@ -115,12 +111,39 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-${{ github.sha }}
+          name: coverage-${{ matrix.shard }}-${{ github.sha }}
+          include-hidden-files: true
           path: |
             coverage.xml
+            .coverage.*
             coverage-test.log
             coverage-resources.log
+            ci-results/
           if-no-files-found: warn
+
+  combine:
+    name: Combine complete coverage
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-*-${{ github.sha }}
+          path: coverage-parts
+      - name: Verify collection and combine coverage
+        run: |
+          python -m pip install coverage
+          python scripts/verify_ci_shards.py coverage-parts
+          python -m coverage combine --keep coverage-parts/*/
+          python -m coverage xml
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-complete-${{ github.sha }}
+          path: coverage.xml
 
       - name: Upload results to Codecov
         if: github.repository == 'AstrBotDevs/AstrBot'

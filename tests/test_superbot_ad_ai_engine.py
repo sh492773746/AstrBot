@@ -169,8 +169,10 @@ async def test_runtime_requires_observation_age_and_distinct_reviews(env):
 
 
 @pytest.mark.asyncio
-async def test_execution_can_complete_after_decision_deadline(env):
-    import time
+async def test_execution_can_complete_after_decision_deadline(env, monkeypatch):
+    from types import SimpleNamespace
+
+    from integrations.superbot_legacy import ad_ai_engine
 
     ai = configure(env, "auto")
     ai.submit(message("推广广告"))
@@ -178,11 +180,35 @@ async def test_execution_can_complete_after_decision_deadline(env):
         "SELECT * FROM ak_ai_jobs WHERE message=1"
     ).fetchone()
     original = env.runtime.ad_killer._execute
+    monotonic = [100.0]
+    monkeypatch.setattr(
+        ad_ai_engine, "time", SimpleNamespace(monotonic=lambda: monotonic[0])
+    )
 
     async def delayed(*args, **kwargs):
-        await asyncio.sleep(0.03)
+        monotonic[0] = 102.0
+        await asyncio.sleep(0)
         return await original(*args, **kwargs)
 
     env.runtime.ad_killer._execute = delayed
-    assert await ai.execute(job, time.monotonic() + 0.01) == "accepted"
+    assert await ai.execute(job, 101.0) == "accepted"
     env.runtime.bot.delete_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execution_rejects_expired_decision_before_claim(env, monkeypatch):
+    from types import SimpleNamespace
+
+    from integrations.superbot_legacy import ad_ai_engine
+
+    ai = configure(env, "auto")
+    ai.submit(message("test advertisement"))
+    job = env.runtime.store.db.execute(
+        "SELECT * FROM ak_ai_jobs WHERE message=1"
+    ).fetchone()
+    monkeypatch.setattr(ad_ai_engine, "time", SimpleNamespace(monotonic=lambda: 102.0))
+    assert await ai.execute(job, 101.0) == "cancelled"
+    assert not env.runtime.store.db.execute(
+        "SELECT 1 FROM ak_hits WHERE message=1"
+    ).fetchone()
+    env.runtime.bot.delete_message.assert_not_awaited()
