@@ -13,7 +13,7 @@ from .storage import instance_dir
 from .test_rules import advertising_path, rule_target
 from .wire import ProtocolError
 
-MUTE_MINUTES = (5, 15, 60)
+MUTE_MINUTES = (1, 3, 10)
 
 
 def database(adapter, *, path=None):
@@ -42,6 +42,8 @@ def database(adapter, *, path=None):
             status TEXT NOT NULL, created REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS automatic_kick_events(
             operation TEXT PRIMARY KEY, message TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS automatic_mute_durations(
+            operation TEXT PRIMARY KEY,minutes INTEGER NOT NULL,accepted_at REAL NOT NULL DEFAULT 0);
     """)
     return db
 
@@ -70,7 +72,7 @@ async def mute_and_escalate(
     *,
     execution_check=None,
 ) -> dict:
-    """Apply progressive mutes capped at sixty minutes, never automatic removal.
+    """Apply one, three and ten minute mutes, never automatic removal.
 
     Args:
         adapter: Authorized native platform adapter.
@@ -175,6 +177,10 @@ async def mute_and_escalate(
                 "INSERT INTO automatic_mutes VALUES(?,?,?,?,?,?,'unknown',?,0)",
                 (operation, account, group, member, peer, message, time.time()),
             )
+            await db.execute(
+                "INSERT INTO automatic_mute_durations(operation,minutes) VALUES(?,?)",
+                (operation, minutes if progressive else 1),
+            )
     result = {"status": prior[0] if prior else "accepted", "action": "mute"}
     if should_mute:
         failure = None
@@ -239,6 +245,11 @@ async def mute_and_escalate(
                 "UPDATE automatic_mutes SET status=? WHERE operation=?",
                 (status, operation),
             )
+            if status in {"accepted", "verified"}:
+                await db.execute(
+                    "UPDATE automatic_mute_durations SET accepted_at=? WHERE operation=?",
+                    (time.time(), operation),
+                )
         result = {**result, "status": status, "action": "mute"}
         if failure is not None:
             raise failure
@@ -251,6 +262,7 @@ async def mute_and_escalate(
         count = len(mutes)
         return {
             **result,
+            "minutes": minutes if progressive else 1,
             "mute_count": count,
             "reason": "automatic_kick_disabled",
         }

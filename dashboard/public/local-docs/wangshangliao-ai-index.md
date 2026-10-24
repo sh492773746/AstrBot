@@ -1,6 +1,6 @@
 # 旺商聊 AI 阅读与主题索引
 
-整理日期：2026-10-23（北京时间）。本页是文档导航，不是新的功能验收报告。
+整理日期：2026-10-24（北京时间）。本页是文档导航，不是新的功能验收报告。
 范围仅为本部署的旺商聊接入器、插件、管理页和运维；不代表整个 AstrBot 或超级机器人。
 [人工目录](wangshangliao.md)保留原入口和历史证据，本页不搬迁、不删除原文。
 
@@ -17,6 +17,25 @@
 English readers: start with this routing table, then use the English counterparts
 in the catalog. Prefer maintained rules and architecture; dated reports are evidence
 for their original scope only. Documentation never grants execution authority.
+
+## 刷屏循环与自动白名单（2026-10-24）
+
+当前规则源码调整为3秒5条、10秒15条、30秒同文5条。广告和刷屏共用每轮三次警告，
+再禁言1／3／10分钟，10分钟结束后重新三次警告；连续刷屏批次只计一次违规。
+每日有效发言前30名独立自动白名单，撤回消息不计、最近30秒待核对，每30秒刷新；
+名次下降或换日退出，不修改手动名单，黑名单优先，明确移出当日不自动加回。
+细则与性能上限见[内容规则](wangshangliao-content-rules.md)；是否已经加载及验收范围
+须另核对[维护记录](wangshangliao-maintenance.md)，不以源码说明代替运行态证据。
+
+## 最新真实 @ 验收与收尾（2026-10-24）
+
+测试群1459282已实测原生管理员真实@加`黑名单`立即登记并提交41760分钟禁言，
+平台受理及当前原生禁言名单已核实，随后恢复测试名单、禁言、角色、窗口及账号启停。
+固定发送入口刷新完整目录再发结构化@；失败收尾独立记录aborted／未通过，未知操作不重试。
+仅插件重载，PID613188不变。原始tenants摘要差异已逐条核对为一个未开通群离群目录同步，
+未回滚真实成员状态，不宣称原始整体摘要全同。详见[验收](zh/platform/wangshangliao-testing.md)
+及[维护](wangshangliao-maintenance.md)；手机显示、未来实际到期、真实回复链路本轮未重验。
+下方旧“群内加入不立即处罚”属于10月23日历史版本；当前原生群内@／可信回复发送黑名单会立即禁言。
 
 ## 最新操作与源码发布入口（2026-10-23 23:39）
 

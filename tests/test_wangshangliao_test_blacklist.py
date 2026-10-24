@@ -1111,3 +1111,222 @@ async def test_durable_unknown_with_finished_flag_cannot_be_resubmitted(lab):
             lab.receiver, GROUP, TARGET, lab.target.nim_account, blacklist_intent=intent
         )
     lab.upstream.assert_not_awaited()
+
+
+@pytest.fixture
+def abort_lab(lab):
+    """Provide durable empty message ledgers for read-only abort verification."""
+    for adapter in lab.bots.values():
+        path = lab.root / adapter.config["id"] / "messages.sqlite3"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("CREATE TABLE inbox(account TEXT,team TEXT,state TEXT)")
+            db.execute("CREATE TABLE outbox(key TEXT,state TEXT)")
+    return lab
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reloaded", [False, True])
+async def test_unsent_abort_closes_without_claiming_acceptance(abort_lab, reloaded):
+    lab = abort_lab
+    await lab.begin()
+    fixture = lab.service._blacklist_fixture
+    worker = helper.BlacklistMembershipTest(fixture)
+    await worker.change("leave")
+    await worker.change("invite/1")
+    lab.clock[0] += 301
+    if reloaded:
+        del lab.service._blacklist_fixture
+    result = await binding.control_blacklist(
+        lab.service,
+        "dashboard/offline",
+        {"operation": "abort", "operation_id": OPERATION},
+    )
+    assert result == {
+        "test_only": True,
+        "restored": True,
+        "outcome": "aborted",
+        "passed": False,
+    }
+    assert getattr(lab.service, "_blacklist_fixture", None) is None
+    with closing(sqlite3.connect(fixture.path)) as db:
+        assert db.execute("SELECT restored FROM fixture").fetchone() == (1,)
+        assert db.execute("SELECT outcome,actor FROM closure").fetchall() == [
+            ("aborted", "dashboard/offline")
+        ]
+    assert len(lab.writes) == 2
+    assert not list(lab.root.rglob("member_blacklist.sqlite3"))
+    lab.renew()
+    lab.receiver.test_window.keywords = ["WSL_TEST_BLACKLIST_" + "b" * 32]
+    await lab.begin(payload={"operation_id": "WSL_TEST_BLACKLIST_" + "b" * 32})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "open_window",
+        "unknown_membership",
+        "partial_membership",
+        "native_unknown",
+        "native_rejected",
+        "native_accepted",
+        "muted",
+        "target_promoted",
+        "missing_member",
+        "incomplete",
+        "wrong_peer",
+        "pending",
+        "processing",
+        "outbox_unknown",
+        "outbox_sending",
+        "missing_ledger",
+        "command_unknown",
+        "command_accepted",
+        "paused",
+        "disabled",
+    ],
+)
+async def test_abort_never_hides_unknown_work_or_changed_state(abort_lab, fault):
+    lab = abort_lab
+    await lab.begin()
+    fixture = lab.service._blacklist_fixture
+    if fault == "partial_membership":
+        fixture.reserve("leave")
+        with closing(sqlite3.connect(fixture.path)) as db, db:
+            db.execute("UPDATE attempts SET state='verified'")
+    elif fault == "unknown_membership":
+        fixture.reserve("leave")
+    elif fault.startswith("native_"):
+        native_intent(lab, state=fault.removeprefix("native_"), finished=1)
+    elif fault == "muted":
+        binding.muted_member_ids.return_value = {TARGET}
+    elif fault == "target_promoted":
+        lab.roster[TARGET]["groupRole"] = "GROUP_ROLE_ADMIN"
+    elif fault == "missing_member":
+        lab.roster.pop(TARGET)
+    elif fault == "incomplete":
+        lab.receiver.get_moderation_members.side_effect = None
+        lab.receiver.get_moderation_members.return_value = {"complete": False}
+    elif fault == "wrong_peer":
+        lab.roster[TARGET]["nimId"] = "999"
+    elif fault in {"pending", "processing", "outbox_unknown", "outbox_sending"}:
+        path = lab.root / lab.receiver.config["id"] / "messages.sqlite3"
+        with closing(sqlite3.connect(path)) as db, db:
+            if fault.startswith("outbox_"):
+                db.execute(
+                    "INSERT INTO outbox VALUES(?,?)",
+                    ("proactive/" + OPERATION + "/command", fault[7:]),
+                )
+            else:
+                db.execute("INSERT INTO inbox VALUES(?,?,?)", (RECEIVER, GROUP, fault))
+    elif fault == "missing_ledger":
+        (lab.root / lab.target.config["id"] / "messages.sqlite3").unlink()
+    elif fault.startswith("command_"):
+        with closing(sqlite3.connect(fixture.path)) as db, db:
+            db.execute("CREATE TABLE commands(operation TEXT,state TEXT)")
+            db.execute("INSERT INTO commands VALUES('test',?)", (fault[8:],))
+    elif fault == "paused":
+        lab.service.settings["paused"] = 1
+    elif fault == "disabled":
+        lab.target.config["enable"] = False
+    if fault != "open_window":
+        lab.clock[0] += 301
+    with pytest.raises(ERRORS):
+        await binding.control_blacklist(
+            lab.service,
+            "dashboard/offline",
+            {"operation": "abort", "operation_id": OPERATION},
+        )
+    with closing(sqlite3.connect(fixture.path)) as db:
+        assert db.execute("SELECT restored FROM fixture").fetchone() == (0,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["accepted", "preflight", "unknown"])
+async def test_fixed_native_send_refreshes_sender_and_never_retries(lab, outcome):
+    from astrbot.api.message_components import At, Plain
+
+    owner = lab.bots[OWNER]
+    owner.get_moderation_members = AsyncMock(
+        side_effect=lab.receiver.get_moderation_members.side_effect
+    )
+    owner.send_by_session = AsyncMock(
+        return_value={"status": "accepted", "operation_id": OPERATION + "/command"}
+    )
+    owner.ledger = SimpleNamespace(receipt=AsyncMock(return_value=None))
+    if outcome != "accepted":
+        owner.send_by_session.side_effect = ProtocolError("mention_identity")
+        if outcome == "unknown":
+            owner.ledger.receipt.return_value = {"status": "unknown"}
+    await lab.begin()
+    body = {"operation": "send", "operation_id": OPERATION}
+    owner.get_moderation_members.reset_mock()
+    if outcome == "accepted":
+        result = await binding.control_blacklist(lab.service, "dashboard/offline", body)
+        assert result["status"] == "accepted"
+    else:
+        with pytest.raises(ProtocolError, match="mention_identity"):
+            await binding.control_blacklist(lab.service, "dashboard/offline", body)
+    owner.get_moderation_members.assert_awaited_once_with(GROUP)
+    args = owner.send_by_session.call_args
+    assert args.args[0].session_id == GROUP
+    parts = args.args[1].chain
+    assert isinstance(parts[0], At) and str(parts[0].qq) == TARGET
+    assert isinstance(parts[1], Plain) and parts[1].text == "黑名单"
+    with closing(sqlite3.connect(lab.service._blacklist_fixture.path)) as db:
+        assert db.execute("SELECT operation,state FROM commands").fetchall() == [
+            (
+                OPERATION + "/command",
+                "not_submitted" if outcome == "preflight" else outcome,
+            )
+        ]
+    with pytest.raises(OpenError, match="unresolved"):
+        await binding.control_blacklist(lab.service, "dashboard/offline", body)
+    owner.send_by_session.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_abort_keeps_unrelated_historical_unknown_sends_unchanged(abort_lab):
+    lab = abort_lab
+    await lab.begin()
+    path = lab.root / lab.bots[OWNER].config["id"] / "messages.sqlite3"
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("INSERT INTO outbox VALUES('proactive/old-ai-test','unknown')")
+    before = path.read_bytes()
+    lab.clock[0] += 301
+    result = await binding.control_blacklist(
+        lab.service,
+        "dashboard/offline",
+        {"operation": "abort", "operation_id": OPERATION},
+    )
+    assert result["passed"] is False
+    assert path.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_failed_preflight_aborts_without_unmute_or_native_record(abort_lab):
+    lab = abort_lab
+    owner = lab.bots[OWNER]
+    owner.get_moderation_members = AsyncMock(
+        side_effect=lab.receiver.get_moderation_members.side_effect
+    )
+    owner.ledger = SimpleNamespace(receipt=AsyncMock(return_value=None))
+    owner.send_by_session = AsyncMock(side_effect=ProtocolError("mention_identity"))
+    await lab.begin()
+    with pytest.raises(ProtocolError, match="mention_identity"):
+        await binding.control_blacklist(
+            lab.service,
+            "dashboard/offline",
+            {"operation": "send", "operation_id": OPERATION},
+        )
+    lab.clock[0] += 301
+    result = await binding.control_blacklist(
+        lab.service,
+        "dashboard/offline",
+        {"operation": "abort", "operation_id": OPERATION},
+    )
+    assert result["outcome"] == "aborted" and result["passed"] is False
+    assert lab.writes == []
+    assert not list(lab.root.rglob("member_blacklist.sqlite3"))
+    owner.send_by_session.assert_awaited_once()

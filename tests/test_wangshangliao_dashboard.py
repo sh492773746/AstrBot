@@ -1842,7 +1842,7 @@ async def test_progressive_audit_shows_separate_recall_and_mute_results(
         )
     assert result.status_code == 200
     row = result.json()["data"]["sanctions"][0]
-    assert row["minutes"] == 15 and row["status"] == "accepted"
+    assert row["minutes"] == 3 and row["status"] == "accepted"
     assert row["recall_status"] == "rejected"
 
 

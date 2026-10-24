@@ -871,6 +871,11 @@ class WangshangliaoAdapter(Platform):
             if await quote_test.receive(self, outer, inner):
                 await self.nim.acknowledge(1, outer[12])
                 return
+        flood_test = getattr(service, "flood_rehearsal", None)
+        if inner is not None and flood_test is not None:
+            if await flood_test.receive(self, outer, inner):
+                await self.nim.acknowledge(1, outer[12])
+                return
         if service is not None and outer.get(8) == "5":
             if await service.receive_membership(self, outer):
                 await self.nim.acknowledge(1, outer[12])
@@ -1997,7 +2002,9 @@ class WangshangliaoAdapter(Platform):
         require_manual_kick()
         if action == "kick" and operation.startswith(AUTOMATIC_KICK_PREFIXES):
             raise wire.ProtocolError("automatic_kick_not_authorized")
-        progressive_mute = action == "mute" and operation.startswith("progressive/")
+        progressive_mute = action == "mute" and operation.startswith(
+            ("progressive/", "flood/")
+        )
         expected_peer = self.members.get(str(group), {}).get(str(member))
         if blacklist_action and (
             expected_peer != blacklist_intent.peer
@@ -2099,6 +2106,13 @@ class WangshangliaoAdapter(Platform):
                 )
 
         parameters = {}
+        if progressive_mute:
+            from .test_rules import flood_fixture
+
+            fixture = flood_fixture(self, str(group))
+            if fixture is not None:
+                fixture.check(self, str(group), str(member), operation, action, minutes)
+                parameters["rule_fixture"] = fixture
         if blacklist_action:
 
             def submission_guard():

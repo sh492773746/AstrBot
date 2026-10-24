@@ -37,16 +37,19 @@ def is_exempt(instance, account, group, member, peer):
     ):
         return False
     path = instance_dir(instance) / "member_exemptions.sqlite3"
-    if not path.is_file():
-        return False
-    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
-        return bool(
-            db.execute(
+    if path.is_file():
+        with closing(
+            sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        ) as db:
+            if db.execute(
                 "SELECT 1 FROM speech_exemptions WHERE account=? AND group_id=? "
                 "AND member=? AND peer=? AND enabled=1",
                 (account, group, member, peer),
-            ).fetchone()
-        )
+            ).fetchone():
+                return True
+    from .automatic_whitelist import read_automatic
+
+    return bool(read_automatic(instance, account, group, member=member, peer=peer))
 
 
 def set_exemption(
@@ -182,7 +185,13 @@ def set_exemption(
 
 
 def read_exemptions(
-    instance, account, group, *, include_names=False, include_conflicts=False
+    instance,
+    account,
+    group,
+    *,
+    include_names=False,
+    include_conflicts=False,
+    include_automatic=False,
 ):
     """Read one collector/group list and its monotonically increasing audit version.
 
@@ -192,15 +201,23 @@ def read_exemptions(
         group: Exact authorized group.
         include_names: Return saved peer/name records instead of peer strings.
         include_conflicts: Flag historical overlaps in a named display response.
+        include_automatic: Merge fresh daily grants for display/removal only.
 
     Returns:
         Scope version and enabled UID/NIM bindings, or UID/peer-name records.
         Legacy entries retain their IDs and have an empty name until updated.
         Named records flag historical overlaps for display, not authorization.
     """
+    automatic = {}
+    if include_automatic:
+        from .automatic_whitelist import read_automatic
+
+        automatic = read_automatic(instance, account, group)
+        if not include_names:
+            automatic = {uid: row["peer"] for uid, row in automatic.items()}
     path = instance_dir(instance) / "member_exemptions.sqlite3"
     if not path.is_file():
-        return 0, {}
+        return 0, automatic
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         db.execute("BEGIN")
         version = db.execute(
@@ -238,12 +255,15 @@ def read_exemptions(
                         )
                     }
         return version, {
-            uid: {
-                "peer": peer,
-                "name": name,
-                **({"conflict": True} if uid.lstrip("0") in conflicts else {}),
-            }
-            if include_names
-            else peer
-            for uid, peer, name in rows
+            **automatic,
+            **{
+                uid: {
+                    "peer": peer,
+                    "name": name,
+                    **({"conflict": True} if uid.lstrip("0") in conflicts else {}),
+                }
+                if include_names
+                else peer
+                for uid, peer, name in rows
+            },
         }

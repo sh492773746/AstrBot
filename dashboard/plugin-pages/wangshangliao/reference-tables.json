@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-23",
+  "updated": "2026-10-24",
   "mode": "integrated",
   "scope": [
     "当前公共合并模式的静态职责对照；实时状态与服务端鉴权另行核验。本群管理不等于 AstrBot 超管，AI 不执行操作。“允许”仅表示入口可用，不代表平台执行成功。",
@@ -234,8 +234,8 @@
         "astrbot/builtin_stars/wangshangliao_moderation/recall_audit.py"
       ],
       "responsibility": [
-        "V1 固定动作、当前授权与原生角色校验；前三次撤回警告，后续5/15/60分钟禁言；分开核对原消息撤回、警告发送与撤回来源",
-        "Fixed V1 actions with current grants and native-role checks; first three recall warnings, then five/fifteen/sixty-minute mutes; separately correlate original recalls, warning sends and recall sources"
+        "V1 固定动作、当前授权与原生角色校验；每轮前三次撤回警告，后续1/3/10分钟禁言，最终10分钟结束后重置；分开核对撤回、警告及禁言回执",
+        "Fixed V1 actions with current grants and native-role checks; three warnings per cycle, then1/3/10-minute mutes, resetting after final expiry; correlate recall, warning and mute receipts separately"
       ],
       "boundary": [
         "不自动踢人；只计有成功回执的处罚，人工禁言不累计；结果不明先核对，不重放；撤回通知本身不证明机器人执行",
@@ -249,15 +249,16 @@
         "Daily rankings"
       ],
       "files": [
-        "astrbot/builtin_stars/wangshangliao_moderation/rankings.py"
+        "astrbot/builtin_stars/wangshangliao_moderation/rankings.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/automatic_whitelist.py"
       ],
       "responsibility": [
-        "北京时间当天有效文字计数、分页、原生 @",
-        "Asia/Shanghai daily eligible text counts, pagination and native mentions"
+        "北京时间当天有效文字计数、分页、原生 @；有效文字前30名短期自动白名单",
+        "Asia/Shanghai eligible text counts, pagination, native mentions and short-lived daily top30 exemptions"
       ],
       "boundary": [
-        "只读本实例已收到的记录；排除机器人、命令与已确认违规；不自动派奖",
-        "Only records received by this instance; exclude bots, commands and confirmed violations; no automatic prizes"
+        "仅统计本实例已收记录；排除机器人、命令及已撤回／撤回未知消息；不覆盖手动名单，黑名单优先，不自动派奖",
+        "Count this instance's records only; exclude bots, commands and recalled or uncertain-recall messages; preserve manual lists, prioritize blacklists and never award prizes"
       ]
     },
     {
@@ -520,6 +521,7 @@
         "scripts/check_wsl_pair_rejoin_live.py",
         "scripts/check_wsl_model_cost.py",
         "astrbot/builtin_stars/wangshangliao_moderation/test_advertising.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/test_flood.py",
         "astrbot/builtin_stars/wangshangliao_moderation/test_lottery.py",
         "astrbot/builtin_stars/wangshangliao_moderation/test_group_ai.py",
         "astrbot/builtin_stars/wangshangliao_moderation/test_probe.py",

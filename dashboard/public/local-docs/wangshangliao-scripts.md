@@ -220,13 +220,18 @@ October19; the prior long-card unknown remains recorded and is never replayed.
 
 - 接收／权限／活动：[check_wsl_integrated_live.py](check_wsl_integrated_live.py)、
   [check_wsl_authorization_live.py](check_wsl_authorization_live.py)、
-  [check_wsl_progressive_live.py](check_wsl_progressive_live.py)、
+  [check_wsl_flood_cycle_live.py](check_wsl_flood_cycle_live.py)、
   [check_wsl_flood_live.py](check_wsl_flood_live.py)、
   [check_wsl_workflows_live.py](check_wsl_workflows_live.py)、`check_wsl_tree_menu_live.py`。
   其中真实消息、禁言、公告和活动脚本可能修改测试状态，不能把失败当作安全重跑依据。
   特别是`check_wsl_authorization_live.py`没有`--apply`预览门禁，直接执行即开始真实流程；
   它仍被公共辅助库与回归引用，保留不等于适合当前线上重跑。
   恢复配置不等于没有发送或没有历史副作用。
+  旧`check_wsl_progressive_live.py`已退役：其旧测试群与处罚档位不适用于当前部署，
+  且无运行时或测试引用。替代脚本默认只预览，显式`--apply`才在固定测试群
+  1459282执行；1／3／10分钟均自然等待，窗口分段且每段不超过300秒。
+  到期回读延迟与未知结果单独记录；只读确认旧处罚结束后可用
+  `--resume-directory`沿用原账本续验排名，不重发处罚、不重置违规计数。
 - 私聊／页面：[check_wsl_private_invitations_live.py](check_wsl_private_invitations_live.py)、
   [check_wsl_ai_dialogue_live.py](check_wsl_ai_dialogue_live.py)、
   [check_wsl_migration_dialogue.py](check_wsl_migration_dialogue.py)、

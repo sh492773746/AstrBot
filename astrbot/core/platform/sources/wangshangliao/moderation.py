@@ -52,6 +52,7 @@ async def execute(
     expected_nim: str | None = None,
     blacklist_intent: BlacklistIntent | None = None,
     blacklist_fixture=None,
+    rule_fixture=None,
     submission_guard: Callable[[], None] | None = None,
 ) -> dict:
     """Execute a human-confirmed action once and retain ambiguous outcomes.
@@ -88,6 +89,25 @@ async def execute(
 
     async def managed_protected():
         if not is_managed_account(str(member)):
+            return False
+        if rule_fixture is not None:
+            from .test_rules import FloodFixture
+
+            if (
+                type(rule_fixture) is not FloodFixture
+                or rule_fixture.window.receiver.business is not client
+                or rule_fixture.window.receiver.config["id"] != instance
+                or str(rule_fixture.window.receiver.account) != account
+            ):
+                return True
+            rule_fixture.check(
+                rule_fixture.window.receiver,
+                str(group),
+                str(member),
+                operation,
+                action,
+                minutes,
+            )
             return False
         from .blacklist import protected_target
         from .test_blacklist import BlacklistFixture
@@ -197,13 +217,17 @@ async def execute(
             if str(m.get("userId")) == str(member)
         ]
         if (
-            (blacklist_action or blacklist_fixture is not None)
+            (
+                blacklist_action
+                or blacklist_fixture is not None
+                or rule_fixture is not None
+            )
             and not page.get("complete")
             or len(matches) != 1
             or str(member) == account
             or action != "cleanup"
             and await managed_protected()
-            or blacklist_action
+            or (blacklist_action or rule_fixture is not None)
             and str(matches[0].get("nimId")) != expected_nim
             or matches[0].get("groupRole") != "GROUP_ROLE_MEMBER"
             or not matches[0].get("nimId")
@@ -238,7 +262,7 @@ async def execute(
         if inspect.isawaitable(validation):
             await validation
     native_authorize = authorize
-    if blacklist_action or blacklist_fixture is not None:
+    if blacklist_action or blacklist_fixture is not None or rule_fixture is not None:
 
         async def native_authorize():
             # This callback also runs under BusinessClient's reentrant HTTP lock.

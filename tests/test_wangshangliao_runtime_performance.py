@@ -95,15 +95,15 @@ def test_ingress_window_ignores_reconnect_history_and_survives_restore():
     windows = FloodWindows(max_members=2)
     rows = []
     base = 1_790_000_000
-    for i in range(2):
-        stamp = base + i
+    for i in range(4):
+        stamp = base + i * 0.5
         payload = envelope("2", stamp, str(i))
         rows.append(("5", str(i), payload, stamp))
         assert not windows.observe("1", "5", str(i), payload, stamp)["category"]
     recovered = FloodWindows()
     recovered.restore("1", rows, now=base + 2)
     assert (
-        recovered.observe("1", "5", "2", envelope("2", base + 2), base + 2)["category"]
+        recovered.observe("1", "5", "4", envelope("2", base + 2), base + 2)["category"]
         == "message_flood"
     )
     assert not recovered.observe("1", "5", "old", envelope("2", base), base + 20)[

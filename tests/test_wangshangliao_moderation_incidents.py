@@ -19,9 +19,29 @@ from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 @pytest.mark.parametrize(
     "offsets,same,expected",
     [
-        ([0, 2, 3], False, True),
-        ([0, 2, 3.001], False, False),
-        ([0, 2, 4, 6, 8, 9, 9.5, 10], False, True),
+        ([0, 0.5, 1, 2, 3], False, True),
+        ([0, 0.5, 1, 2, 3.001], False, False),
+        (
+            [
+                0,
+                0.01,
+                0.02,
+                0.03,
+                3.3,
+                3.31,
+                3.32,
+                3.33,
+                6.6,
+                6.61,
+                6.62,
+                6.63,
+                9.98,
+                9.99,
+                10,
+            ],
+            False,
+            True,
+        ),
         ([0, 7, 15, 22, 30], True, True),
         ([0, 7, 15, 22, 30.001], True, False),
     ],
@@ -49,7 +69,7 @@ def test_flood_thresholds_keep_both_native_and_local_time_windows(
         assert evidence["messages"][-1] == str(len(offsets) - 1)
 
 
-def test_three_message_threshold_does_not_mix_accounts_groups_or_senders():
+def test_five_message_threshold_does_not_mix_accounts_groups_or_senders():
     window = FloodWindows()
     for account, group, sender in [
         ("1", "5", "2"),

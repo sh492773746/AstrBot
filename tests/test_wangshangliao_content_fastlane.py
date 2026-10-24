@@ -11,8 +11,9 @@ import pytest
 from astrbot.builtin_stars.wangshangliao_moderation import content_rules, policy
 from astrbot.builtin_stars.wangshangliao_moderation.flood import FloodRuntime
 from astrbot.core.pipeline.rate_limit_check.stage import RateLimitStage
-from tests.test_wangshangliao_flood import bot as bot
-from tests.test_wangshangliao_flood import ingest
+from tests.test_wangshangliao_flood import fresh_bot, ingest
+
+bot = fresh_bot
 
 
 def runtime_for(bot, **kwargs):

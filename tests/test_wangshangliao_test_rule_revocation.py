@@ -23,6 +23,22 @@ from tests.test_wangshangliao_three_rule_ingress import (
 )
 
 
+def seed_warning_grace(bot):
+    """Start at the mute boundary only for native sanction authorization tests."""
+    from astrbot.core.platform.sources.wangshangliao.progression_store import (
+        ProgressionStore,
+    )
+    from astrbot.core.platform.sources.wangshangliao.storage import instance_dir
+
+    store = ProgressionStore(instance_dir(bot.config["id"]) / "moderation.sqlite3")
+    store.initialize()
+    with store.connect() as db:
+        db.executemany(
+            "INSERT INTO progressive_warnings VALUES(?,?,?,?,?)",
+            [(bot.account, GROUP, SENDER, f"prior-{i}", "accepted") for i in range(3)],
+        )
+
+
 @pytest_asyncio.fixture(params=["flood", "content"])
 async def automatic_case(three_rule_ingress, request, tmp_path):
     """Reach each real automatic-mute caller with isolated native evidence.
@@ -42,7 +58,8 @@ async def automatic_case(three_rule_ingress, request, tmp_path):
     assert instance_dir(bot.config["id"]).is_relative_to(tmp_path)
     assessment = None
     if request.param == "flood":
-        for n in range(3):
+        seed_warning_grace(bot)
+        for n in range(5):
             mid = str(100 + n)
             payload = await ingest(harness, mid, MARKER + "repeat")
         assert payload["_ingress_flood"]["category"] == "message_flood"
@@ -158,7 +175,7 @@ async def test_automatic_mute_keeps_original_guard_after_upstream_lock(
         assert len(mutes) == 1
         if case.assessment:
             assert [call[1] for call in bot.calls if call[0] == "recall"] == [
-                str(100 + n) for n in range(3)
+                str(100 + n) for n in range(5)
             ]
     else:
         assert mutes == []
@@ -172,13 +189,14 @@ async def test_automatic_mute_keeps_original_guard_after_upstream_lock(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "count,same", [(3, True), (3, False)], ids=["3-repeats", "3-in-5"]
+    "count,same", [(5, True), (5, False)], ids=["5-repeats", "5-in-3"]
 )
 async def test_replacement_window_cannot_accumulate_or_recall_prior_window(
     three_rule_ingress, count, same
 ):
     harness = three_rule_ingress
     bot, original_window = harness.receiver, harness.window
+    seed_warning_grace(bot)
     old_messages = [str(100 + n) for n in range(count // 2)]
     for n, mid in enumerate(old_messages):
         payload = await ingest(
@@ -210,7 +228,7 @@ async def test_replacement_window_cannot_accumulate_or_recall_prior_window(
             assert bot.calls == []
     assert evidence["messages"] == current_messages
     assert await handle(harness, mid, payload)
-    assert bot.calls == [("mute", SENDER, 5)] + [
+    assert bot.calls == [("mute", SENDER, 1)] + [
         ("recall", message, harness.sender.nim_account) for message in current_messages
     ]
     assert original_window.accepted.keys() == {
@@ -220,18 +238,19 @@ async def test_replacement_window_cannot_accumulate_or_recall_prior_window(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "count,same", [(3, True), (3, False)], ids=["3-repeats", "3-in-5"]
+    "count,same", [(5, True), (5, False)], ids=["5-repeats", "5-in-3"]
 )
 async def test_complete_replacement_bursts_get_independent_mute_receipts(
     three_rule_ingress, monkeypatch, count, same
 ):
     harness = three_rule_ingress
     bot = harness.receiver
+    seed_warning_grace(bot)
     now = time.time()
     monkeypatch.setattr(time, "time", lambda: now)
     generations = []
     all_recalls = []
-    for batch, minutes in enumerate((5, 15)):
+    for batch, minutes in enumerate((1, 3)):
         if batch:
             bot.test_window = harness.Window(
                 bot, harness.sender, [GROUP], ["group_rules"], [MARKER], 60, 10

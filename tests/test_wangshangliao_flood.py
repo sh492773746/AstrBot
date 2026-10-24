@@ -31,7 +31,7 @@ from tests.fixtures.wsl_actions import bind_action_port
 
 
 @pytest_asyncio.fixture
-async def bot(tmp_path, monkeypatch):
+async def fresh_bot(tmp_path, monkeypatch):
     for module in (automatic, content_rules):
         monkeypatch.setattr(module, "instance_dir", lambda _: tmp_path)
     ledger = Ledger(tmp_path / "messages.sqlite3")
@@ -102,6 +102,23 @@ async def bot(tmp_path, monkeypatch):
         yield adapter
     finally:
         await ledger.close()
+
+
+@pytest.fixture
+def bot(fresh_bot, tmp_path):
+    """Reach the mute boundary without contaminating first-warning fixtures."""
+    from astrbot.core.platform.sources.wangshangliao.progression_store import (
+        ProgressionStore,
+    )
+
+    store = ProgressionStore(tmp_path / "moderation.sqlite3")
+    store.initialize()
+    with store.connect() as db:
+        db.executemany(
+            "INSERT INTO progressive_warnings VALUES('1','5','2',?,'accepted')",
+            [(f"prior-warning-{n}",) for n in range(3)],
+        )
+    return fresh_bot
 
 
 async def ingest(
@@ -352,6 +369,8 @@ async def test_queued_retired_media_assessment_cannot_trigger_punishment(bot, ki
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["image", "video", "forward"])
 async def test_media_with_confirmed_ad_text_still_uses_normal_ad_rule(bot, kind):
+    with sqlite3.connect(bot.ledger.path.with_name("moderation.sqlite3")) as db:
+        db.execute("DELETE FROM progressive_warnings")
     bot.config.update(
         _open_groups={
             "5": {"advertising": True, "flood": False, "keywords": ["fixture-ad"]}
@@ -388,7 +407,7 @@ async def test_flood_worker_does_not_punish_single_media(bot, kind):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["image", "video", "forward"])
 async def test_flood_worker_still_punishes_a_real_media_burst(bot, kind):
-    for n in range(3):
+    for n in range(5):
         await ingest(bot, str(800 + n), "", kind=kind)
     runtime = FloodRuntime(
         SimpleNamespace(
@@ -399,16 +418,16 @@ async def test_flood_worker_still_punishes_a_real_media_burst(bot, kind):
     try:
         await runtime.step()
         await asyncio.gather(*runtime.workers.values())
-        assert bot.calls == [("mute", "2", 5)] + [
-            ("recall", str(800 + n), "22") for n in range(3)
+        assert bot.calls == [("mute", "2", 1)] + [
+            ("recall", str(800 + n), "22") for n in range(5)
         ]
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("count,same", [(3, False), (3, True)])
-async def test_mute_first_then_recall_entire_burst_without_warning_grace(
+@pytest.mark.parametrize("count,same", [(5, False), (5, True)])
+async def test_mute_first_then_recall_entire_burst_after_warning_grace(
     bot, count, same
 ):
     for n in range(count):
@@ -417,7 +436,7 @@ async def test_mute_first_then_recall_entire_burst_without_warning_grace(
         if n < count - 1:
             assert not await handle(bot, mid, envelope)
     assert await handle(bot, mid, envelope)
-    assert bot.calls == [("mute", "2", 5)] + [
+    assert bot.calls == [("mute", "2", 1)] + [
         ("recall", str(100 + n), "22") for n in range(count)
     ]
     assert len(bot.calls) == count + 1
@@ -426,17 +445,17 @@ async def test_mute_first_then_recall_entire_burst_without_warning_grace(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mixed", [False, True])
 async def test_images_and_mixed_messages_mute_first_then_recall_all(bot, mixed):
-    for n in range(3):
+    for n in range(5):
         image = not mixed or n % 2 == 0
         mid = str(900 + n)
         envelope = await ingest(
             bot, mid, "" if image else f"text-{n}", kind="image" if image else None
         )
-        if n < 2:
+        if n < 4:
             assert not await handle(bot, mid, envelope)
     assert await handle(bot, mid, envelope)
-    assert bot.calls == [("mute", "2", 5)] + [
-        ("recall", str(900 + n), "22") for n in range(3)
+    assert bot.calls == [("mute", "2", 1)] + [
+        ("recall", str(900 + n), "22") for n in range(5)
     ]
 
 
@@ -465,7 +484,7 @@ async def test_integrated_flood_uses_frozen_group_revision_not_account_revision(
     assert envelope["_ingress_flood"]["revision"] == "1/5/9/1"
     assert bot.config["_business_revision"] == "1:1"
     assert await handle(bot, "104", envelope)
-    assert bot.calls == [("mute", "2", 5)] + [
+    assert bot.calls == [("mute", "2", 1)] + [
         ("recall", str(100 + n), "22") for n in range(5)
     ]
 
@@ -484,7 +503,7 @@ async def test_burst_dedup_additional_message_and_reload_never_remute(bot):
     bot.settings.flood_windows.restore("1", rows)
     extra = await ingest(bot, "105", "repeat")
     await handle(bot, "105", extra)
-    assert [call for call in bot.calls if call[0] == "mute"] == [("mute", "2", 5)]
+    assert [call for call in bot.calls if call[0] == "mute"] == [("mute", "2", 1)]
     assert [call[1] for call in bot.calls if call[0] == "recall"] == [
         str(100 + n) for n in range(6)
     ]
@@ -557,7 +576,7 @@ async def test_unknown_mute_still_recalls_and_never_resends_mute(bot):
 
 @pytest.mark.asyncio
 async def test_departure_after_mute_is_audited_as_unsubmitted_not_unknown(bot):
-    for n in range(3):
+    for n in range(5):
         envelope = await ingest(bot, str(100 + n), str(n))
     original = bot.execute_moderation.side_effect
 
@@ -567,15 +586,15 @@ async def test_departure_after_mute_is_audited_as_unsubmitted_not_unknown(bot):
         return result
 
     bot.execute_moderation.side_effect = remove_after_mute
-    await handle(bot, "102", envelope)
-    assert bot.calls == [("mute", "2", 5)]
+    await handle(bot, "104", envelope)
+    assert bot.calls == [("mute", "2", 1)]
     bot.nim.request.assert_not_awaited()
     with bot._review_store.connect() as db:
         assert (
             db.execute(
                 "SELECT COUNT(*) FROM flood_recalls WHERE status='rejected'"
             ).fetchone()[0]
-            == 3
+            == 5
         )
         assert (
             db.execute(
@@ -583,24 +602,47 @@ async def test_departure_after_mute_is_audited_as_unsubmitted_not_unknown(bot):
                 "WHERE action='recall' AND status='rejected' AND submitted=0 "
                 "AND error='action_automation_changed'"
             ).fetchone()[0]
-            == 3
+            == 5
         )
 
 
 @pytest.mark.asyncio
-async def test_separate_bursts_escalate_only_once_each_and_cap_at_sixty(
-    bot, monkeypatch
-):
+async def test_separate_bursts_escalate_only_once_each_and_cap_at_ten(bot, monkeypatch):
     now = time.time()
-    for burst, minutes in enumerate((5, 15, 60, 60)):
+    for burst, minutes in enumerate((1, 3, 10)):
         monkeypatch.setattr(time, "time", lambda: now + burst * 31)
         for n in range(5):
             mid = str(100 + burst * 10 + n)
             envelope = await ingest(bot, mid, "repeat")
         await handle(bot, mid, envelope)
         assert [c[2] for c in bot.calls if c[0] == "mute"][-1] == minutes
-    assert len([c for c in bot.calls if c[0] == "mute"]) == 4
-    assert len([c for c in bot.calls if c[0] == "recall"]) == 20
+    assert len([c for c in bot.calls if c[0] == "mute"]) == 3
+    assert len([c for c in bot.calls if c[0] == "recall"]) == 15
+
+
+@pytest.mark.asyncio
+async def test_fresh_flood_cycles_warn_three_times_and_count_whole_burst_once(
+    bot, monkeypatch
+):
+    with sqlite3.connect(bot.ledger.path.with_name("moderation.sqlite3")) as db:
+        db.execute("DELETE FROM progressive_warnings")
+    clock = time.time()
+    monkeypatch.setattr(time, "time", lambda: clock)
+    for burst in range(7):
+        for n in range(5):
+            mid = str(1000 + burst * 10 + n)
+            envelope = await ingest(bot, mid, f"unique-{mid}")
+        assert await handle(bot, mid, envelope)
+        await handle(bot, mid, envelope)
+        expected = [1, 3, 10][: max(0, min(3, burst - 2))]
+        assert [c[2] for c in bot.calls if c[0] == "mute"] == expected
+        clock += 61 if burst == 3 else 181 if burst == 4 else 601 if burst == 5 else 31
+    assert len([c for c in bot.calls if c[0] == "recall"]) == 35
+    with sqlite3.connect(bot.ledger.path.with_name("moderation.sqlite3")) as db:
+        assert db.execute("SELECT warnings FROM moderation_cycles").fetchone() == (1,)
+        assert db.execute("SELECT COUNT(*) FROM progressive_warnings").fetchone() == (
+            4,
+        )
 
 
 @pytest.mark.asyncio
@@ -622,7 +664,7 @@ async def test_main_event_gate_stops_after_complete_flood_sanction(bot):
     )
     await Main._moderate(SimpleNamespace(), event)
     event.stop_event.assert_called_once()
-    assert bot.calls == [("mute", "2", 5)] + [
+    assert bot.calls == [("mute", "2", 1)] + [
         ("recall", str(100 + n), "22") for n in range(5)
     ]
 
@@ -643,7 +685,7 @@ async def test_fast_flood_does_not_wait_for_an_earlier_model_and_keeps_idempoten
             await runtime.step()
             await asyncio.gather(*runtime.workers.values())
         assert not model_task.done()
-        assert bot.calls == [("mute", "2", 5)] + [
+        assert bot.calls == [("mute", "2", 1)] + [
             ("recall", str(100 + n), "22") for n in range(5)
         ]
         await handle(bot, "104", envelope)
@@ -653,7 +695,7 @@ async def test_fast_flood_does_not_wait_for_an_earlier_model_and_keeps_idempoten
             for call in bot.diagnostics.emit.call_args_list
             if call.args[0] == "flood_response"
         ]
-        assert len(timing) == 3
+        assert len(timing) == 1
         assert timing[0].args[1] == "completed"
         assert timing[0].kwargs["duration_ms"] >= 0
     finally:
@@ -919,7 +961,7 @@ async def test_fast_flood_rechecks_chat_admin_role_after_awaits(bot, when):
     try:
         await runtime.step()
         await asyncio.gather(*runtime.workers.values())
-        assert bot.calls == ([] if when == "directory" else [("mute", "2", 5)])
+        assert bot.calls == ([] if when == "directory" else [("mute", "2", 1)])
     finally:
         await runtime.close()
 
@@ -939,7 +981,7 @@ async def test_fast_flood_backlog_stays_bounded_without_losing_the_last_trigger(
             assert sum(len(queue) for queue in runtime.pending.values()) <= 2
             assert len(runtime.workers) <= 1
             await asyncio.gather(*runtime.workers.values())
-        assert [call for call in bot.calls if call[0] == "mute"] == [("mute", "2", 5)]
+        assert [call for call in bot.calls if call[0] == "mute"] == [("mute", "2", 1)]
         assert [call[1] for call in bot.calls if call[0] == "recall"] == [
             str(100 + n) for n in range(9)
         ]
@@ -1002,7 +1044,7 @@ async def test_revocation_after_mute_stops_all_recalls(bot, change):
 
     bot.execute_moderation.side_effect = revoke
     await handle(bot, "104", envelope)
-    assert bot.calls == [("mute", "2", 5)]
+    assert bot.calls == [("mute", "2", 1)]
     with bot._review_store.connect() as db:
         assert db.execute(
             "SELECT account,mute_status FROM flood_batches"

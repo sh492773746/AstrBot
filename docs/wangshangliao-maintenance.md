@@ -4,6 +4,64 @@
 [当前架构与权限](zh/platform/wangshangliao-architecture-permissions.md)。
 适用于公共合并模式；操作前核对当前账号、群和有效配置，不能沿用旧AI管理工具流程。
 
+## 2026-10-24 三账号真实验收结果
+
+仅测试群1459282，既有三个账号及中性文案。3秒4条不处罚；
+3秒5条、10秒15条、30秒5条同文分别触发一批违规，整批撤回、每批只计一次，
+第1／2／3次警告及后续1／3／10分钟禁言均有实际收件和平台回执。
+1、3分钟自然到期读回通过。10分钟到期后3秒首查仍在名单，原失败记录保留；
+稍后只读确认自然移除，期间没有解禁或续封调用，不能声明秒级到期准确。
+
+沿用原处罚账本续验而不重放处罚或重置历史：下一批恢复为第1次警告，
+撤回文字不计入自动授予，一条有效文字经结算获得自动白名单，
+随后5条刷屏内容未处罚。独立观察账号逐条收件，不启用其群业务。
+测试规则、原生角色、账号启停和窗口恢复；正式群及财务等保护摘要不变。
+无新增手机客户端观察。此处不将10分钟首查失败或跳过的测试算作通过。
+
+全量旺商聊专项8233通过、55条件跳过、2条既有弃用警告；
+前端203项通过，49篇教程在390／1440px无缺图、溢出或脚本异常；
+名单页面在320／390／1440px检查自动来源及手动名单共存。
+退役旧递进实测脚本，保留原始失败审计和必要受控验收工具。
+GitHub推送、云端CI及合并另以远端回执核对，不以本地通过冒称云端全绿。
+
+English: fixed-group native trials verified all thresholds, warnings, accepted
+mute durations, cycle reset and ranking exemptions. The ten-minute expiry list
+was initially late and later confirmed clear without any release or renewal;
+the original failed check remains evidence. Neither exact-deadline nor phone
+acceptance is claimed. Temporary state and protected business data were restored.
+
+## 2026-10-24 刷屏循环、每日自动白名单与受控验收
+
+刷屏阈值更新为3秒5条、10秒15条、30秒5条相同文字。
+同一连续刷屏批次只累计一次违规，命中消息分别撤回；每轮前三次撤回警告，
+之后依次禁言1、3、10分钟，最终10分钟处罚自然结束后重新累计。
+处罚回执未知不重试、不提前重置；循环状态跨重启保留。
+
+每日按北京时间统计有效文字发言，提供`发言排行榜`、`发言排行`及原`排名`入口。
+前三十名每30秒刷新为独立自动发言白名单，午夜重新计算；最近30秒发言暂不参与授予，
+已撤回或撤回结果未知的消息不计数。保留排行防刷统计：每人每30秒最多计一条，
+五分钟内相同文字不重复计数；纯图片、表情、视频和命令不计文字排行。
+手动白名单不被覆盖；黑名单优先，主动移除后当天不自动加回。
+短期授权最长90秒，刷新故障时到期失效，不将旧排行永久写入手动名单。
+
+固定三账号验收入口为`scripts/check_wsl_flood_cycle_live.py`。
+默认只预览，`--apply`仅操作测试群1459282；每段窗口不超过300秒。
+窗口绑定完整原生成员目录、原账号连接及当前群规则，不放宽普通机器人保护。
+被动收件观察仅接受预登记的中性消息，不启用观察账号的群业务，不改变正式群规则。
+自然等待1／3／10分钟处罚到期，不用提前解禁冒充循环验证。
+失败收尾逐项尝试关窗、恢复旧格式规则、撤回临时群管及恢复账号启停；
+其中一项失败不能阻断其他恢复。未知发送／处罚不会重试，原始失败证据保留。
+
+此前离线专项1686通过、2项条件跳过及页面320／390／1440px检查，
+不代替本轮真实处罚、手机客户端显示或极限容量验收。
+
+English: thresholds are5/3s,15/10s and5 identical texts/30s. Each cycle has
+three recall warnings followed by1/3/10-minute mutes; only expiry of the final
+accepted mute reopens warning grace. Daily settled-text top30 grants expire
+independently of manual whitelists. The fixed-group rehearsal uses predeclared
+neutral native messages and a passive independent receiver, not production
+permission exemptions. Cleanup attempts each restoration independently.
+
 ## 2026-10-24 群内黑名单立即禁言与排队修复
 
 本轮新要求取代下方旧“群内加入不立即处罚”说明：本群已授权的原生群主／管理员，

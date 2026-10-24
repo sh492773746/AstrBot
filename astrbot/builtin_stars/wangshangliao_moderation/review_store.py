@@ -46,9 +46,13 @@ class ReviewStore:
                             last_seen REAL,mute_status TEXT);
                         CREATE INDEX IF NOT EXISTS flood_member_recent
                             ON flood_batches(account,group_id,sender,peer,revision,last_seen DESC);
+                        CREATE INDEX IF NOT EXISTS flood_group_recent
+                            ON flood_batches(account,group_id,last_seen DESC);
                         CREATE TABLE IF NOT EXISTS flood_recalls(
                             account TEXT,group_id TEXT,message TEXT,batch TEXT,status TEXT,
                             PRIMARY KEY(account,group_id,message));
+                        CREATE INDEX IF NOT EXISTS flood_recall_batch
+                            ON flood_recalls(batch);
                         CREATE TABLE IF NOT EXISTS moderation_action_audit(
                             operation TEXT PRIMARY KEY,account TEXT,group_id TEXT,
                             member TEXT,message TEXT,action TEXT,status TEXT,

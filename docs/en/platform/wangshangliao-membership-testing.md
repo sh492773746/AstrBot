@@ -4,6 +4,39 @@ Synchronized October 20, 2026 (Beijing time). Tool capabilities, dated observati
 and outstanding acceptance are separate. Later checks do not rewrite the original
 October 15, 16 or 19 evidence.
 
+## Native Mention Acceptance And Failed-Send Cleanup (October 24, 2026)
+
+Only group1459282 and the three existing adapters participated. A real native
+administrator sent a structured mention plus `黑名单`; one completed `command`
+intent enrolled the test target and submitted41,760 minutes/29 days, accepted by
+the platform and independently present in its current muted-member list. Verification
+took approximately2.7 seconds. No blacklist kick occurred. The test entry was removed
+through normal preview/confirmation, then separately unmuted and checked. Temporary
+native roles, sending admission, windows and the two accounts' disabled states were
+restored. This proves this native-mention path, not a newly tested reply path,
+phone display or future actual expiry.
+
+The previous sender relied on stale member mapping. The dedicated fixture now
+refreshes the sender's complete directory before constructing the actual mention;
+this run observed a mapping change. Public API acceptance and production target
+protection were not broadened. Fixed `test_blacklist` operations now include `send`
+and a separate `abort`. Abort requires a closed window, restored verified membership,
+no target mute, no new native sanction intent and no unresolved fixture send/work.
+It persists `outcome=aborted, passed=false`, performs no native cleanup mutation,
+and can reconcile an expired window or plugin reload. Unrelated historical unknown
+AI sends remain unchanged and are never retried.
+
+Plugin reload preserved PID613188. The first final protection assertion did fail:
+starting an existing adapter synchronized a previously departed, non-enabled group's
+metadata (audit1172), changing present to0 and incrementing epoch/version. Reversing
+only that audited transition in memory exactly reconstructs the original tenants
+digest; all other protected rule, finance and blacklist digests match. The real
+departure was retained, not reverted. Preserve both the failed raw assertion and
+the later reconciliation; do not claim identical raw snapshots.
+Final targeted backend regression:343 passed across four files, with one existing
+audioop deprecation warning; documentation generator:5 passed. Do not add these
+overlapping counts to earlier historical runs.
+
 ## Blacklist Verification Levels (October 23, 2026)
 
 The owner reports code loaded after the **20:02:56 Beijing-time full restart,

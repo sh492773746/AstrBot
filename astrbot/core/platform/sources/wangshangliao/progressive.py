@@ -33,7 +33,16 @@ def authorize(adapter, group, member, peer, message=""):
         raise ProtocolError("progressive_not_authorized")
 
 
-async def enforce(adapter, group, member, message, *, execution_check=None):
+async def enforce(
+    adapter,
+    group,
+    member,
+    message,
+    *,
+    execution_check=None,
+    operation=None,
+    recall_after_mute=False,
+):
     """Attempt both actions once; never treat a partial outcome as full success."""
     account = adapter.account
     test_path = advertising_path(adapter, group, member, message)
@@ -71,14 +80,14 @@ async def enforce(adapter, group, member, message, *, execution_check=None):
     )
     async with locks.setdefault(slot, asyncio.Lock()):
         await check()
-        operation = (
+        operation = operation or (
             "progressive/"
             + hashlib.sha256(
                 json.dumps([account, group, member, message]).encode()
             ).hexdigest()
         )
         warnings, previous = await asyncio.to_thread(
-            store.reserve, operation, account, group, member, message
+            store.reserve, operation, account, group, member, message, peer
         )
         if previous is not None:
             adapter.diagnostics.emit(
@@ -94,6 +103,12 @@ async def enforce(adapter, group, member, message, *, execution_check=None):
         try:
             # Database contention can outlive a grant or account change.
             await check()
+            if warnings >= 3 and recall_after_mute:
+                recall_status = "none"
+                result = await mute_and_escalate(
+                    adapter, operation, group, member, message, execution_check=check
+                )
+                return {**result, "recall_status": recall_status}
             try:
                 recall_status = "unknown"
                 receipt = await adapter.execute_action(
@@ -118,13 +133,24 @@ async def enforce(adapter, group, member, message, *, execution_check=None):
             # Recall failure must not silently skip muting; revoked authority must.
             await check()
             if warnings < 3:
-                await asyncio.to_thread(
-                    store.warning, account, group, member, message, recall_status
-                )
+                if warnings >= 0:
+                    await asyncio.to_thread(
+                        store.warning,
+                        account,
+                        group,
+                        member,
+                        message,
+                        recall_status,
+                        peer,
+                    )
                 result = {
                     "status": recall_status,
                     "action": "recall",
-                    "warning_number": warnings + 1,
+                    **(
+                        {"warning_number": warnings + 1}
+                        if warnings >= 0
+                        else {"cycle_wait": True}
+                    ),
                 }
                 return {**result, "recall_status": recall_status}
             result = await mute_and_escalate(
@@ -132,7 +158,9 @@ async def enforce(adapter, group, member, message, *, execution_check=None):
             )
             return {**result, "recall_status": recall_status}
         finally:
-            await asyncio.to_thread(store.finish, operation, recall_status, result)
+            await asyncio.to_thread(
+                store.finish, operation, recall_status, result, peer
+            )
             for action, status in (
                 ("recall", recall_status),
                 (result.get("action", "mute"), result.get("status", "unknown")),

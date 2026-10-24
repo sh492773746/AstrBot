@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Check, LoaderCircle, RefreshCw, Search, UserMinus, X } from "@lucide/vue";
 
-type Member = { id: string; name: string; conflict?: boolean };
+type Member = { id: string; name: string; conflict?: boolean; source?: "daily_top30"; count?: number };
 type Mode = "add" | "remove";
 type Preview = { token: string; mode: Mode; member: Member };
 type Operation = "read" | "search" | "preview" | "commit";
@@ -169,6 +169,7 @@ onBeforeUnmount(() => { generation++; });
     <ul v-if="loaded && members.length" class="members" aria-label="已加入白名单的成员">
       <li v-for="member in members" :key="member.id">
         <div class="identity"><strong>{{ member.name || '已离群成员' }}</strong><small>UID {{ member.id }}</small>
+          <small v-if="member.source === 'daily_top30'">今日前30名 · {{ member.count }} 条有效发言</small>
           <small v-if="member.conflict" class="warning">同时在黑名单</small>
         </div>
         <button type="button" class="icon-button" title="移出白名单"
@@ -206,7 +207,7 @@ onBeforeUnmount(() => { generation++; });
       <h4>确认{{ preview.mode === 'add' ? '加入' : '移出' }}白名单</h4>
       <p>{{ preview.member.name || '已离群成员' }} · UID {{ preview.member.id }}</p>
       <p class="muted">机器人 {{ account }} · 群 {{ group }} · 不自动解除已有禁言</p>
-      <p>{{ preview.mode === 'add' ? '加入后豁免自动处罚，不会解除已有禁言。' : '移除后不再豁免自动处罚，不会解除已有禁言。' }}</p>
+      <p>{{ preview.mode === 'add' ? '加入后豁免自动处罚，不会解除已有禁言。' : '移除后不再豁免自动处罚，今日不会自动加回；不会解除已有禁言。' }}</p>
       <div class="actions">
         <button type="button" :disabled="locked" @click="execute('commit')"><Check :size="16" />确认保存</button>
         <button type="button" :disabled="locked" @click="clearSearch"><X :size="16" />取消</button>

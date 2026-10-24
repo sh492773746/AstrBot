@@ -1,4 +1,4 @@
-"""Regression coverage for the three-message, three-second flood threshold."""
+"""Regression coverage for the five-message, three-second flood threshold."""
 
 import pytest
 
@@ -8,8 +8,10 @@ from astrbot.builtin_stars.wangshangliao_moderation.flood import FloodWindows
 @pytest.mark.parametrize(
     ("received_offsets", "sent_offsets", "expected_rapid", "expected_category"),
     [
-        ((0, 1, 2), (0, 1, 2), 3, "message_flood"),
-        ((0, 1.5, 3), (0, 1.5, 3), 3, "message_flood"),
+        ((0, 1, 2), (0, 1, 2), 3, ""),
+        ((0, 1.5, 3), (0, 1.5, 3), 3, ""),
+        ((0, 0.5, 1, 2, 3), (0, 0.5, 1, 2, 3), 5, "message_flood"),
+        ((0, 0.5, 1, 2, 3.001), (0, 0.5, 1, 2, 3.001), 4, ""),
         ((0, 2, 4), (0, 2, 4), 2, ""),
         ((0, 2.5, 5), (0, 2.5, 5), 2, ""),
         ((0, 1.5, 3.001), (0, 1.5, 3.001), 2, ""),
@@ -40,13 +42,15 @@ def test_rapid_flood_requires_both_three_second_windows(
     assert evidence["live"] is True
     assert evidence["rapid"] == expected_rapid
     assert evidence["category"] == expected_category
-    assert evidence["messages"] == (["0", "1", "2"] if expected_category else [])
+    assert evidence["messages"] == (
+        [str(n) for n in range(len(received_offsets))] if expected_category else []
+    )
 
 
 @pytest.mark.parametrize(
     ("offsets", "repeated", "expected_count", "expected_repeated"),
     [
-        (tuple(index * 1.4 for index in range(8)), False, 8, 1),
+        (tuple(index * 0.7 for index in range(15)), False, 15, 1),
         ((0, 6, 12, 18, 24), True, 2, 5),
     ],
 )

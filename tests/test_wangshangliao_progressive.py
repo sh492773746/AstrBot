@@ -151,10 +151,9 @@ async def test_three_recalls_then_progressive_mutes_without_kick(bot):
         if mid < 3:
             bot.execute_moderation.assert_not_awaited()
     assert [c.kwargs["minutes"] for c in bot.execute_moderation.await_args_list] == [
-        5,
-        15,
-        60,
-        60,
+        1,
+        3,
+        10,
     ]
     assert bot.recall_violation.await_count == 7
     await policy.handle(bot, "5", "0", payload())
@@ -191,12 +190,12 @@ def test_flood_thresholds_dedup_identity_and_freshness(bot):
         }
         return content_rules.flood_category(bot, "5", mid, envelope)
 
-    for n in range(2):
+    for n in range(4):
         assert not observe(str(n), payload("重复"))
-    assert observe("2", payload("重复")) == "message_flood"
+    assert observe("4", payload("重复")) == "message_flood"
     # Processing is now pure: native inbox dedup prevents a second action,
     # while reading the same persisted evidence returns the same decision.
-    assert observe("2", payload("重复")) == "message_flood"
+    assert observe("4", payload("重复")) == "message_flood"
     assert not observe("other", {**payload("重复"), "sender": "3"})
     assert not observe("old", {**payload("重复"), "recall_route": {"time": 0}})
     for n in (5, 6):
@@ -230,7 +229,7 @@ async def test_after_warnings_mutes_and_recalls_cap_without_legacy_kick(bot, tex
         assert await policy.handle(bot, "5", mid, payload(text))
     calls = bot.execute_moderation.await_args_list
     assert [c.args[1] for c in calls] == ["mute", "mute", "mute"]
-    assert [c.kwargs["minutes"] for c in calls[:3]] == [5, 15, 60]
+    assert [c.kwargs["minutes"] for c in calls[:3]] == [1, 3, 10]
     assert bot.recall_violation.await_count == 3
     assert await policy.handle(bot, "5", "3", payload(text))
     assert bot.execute_moderation.await_count == 3
@@ -239,13 +238,11 @@ async def test_after_warnings_mutes_and_recalls_cap_without_legacy_kick(bot, tex
         "mute",
         "mute",
         "mute",
-        "mute",
     ]
     assert [c.kwargs["minutes"] for c in bot.execute_moderation.await_args_list] == [
-        5,
-        15,
-        60,
-        60,
+        1,
+        3,
+        10,
     ]
     assert bot.recall_violation.await_count == 4
     bot.send_text.assert_not_awaited()
@@ -273,23 +270,22 @@ async def test_semantic_violation_without_keyword_uses_same_progression(bot):
             },
         )
     assert [c.kwargs["minutes"] for c in bot.execute_moderation.await_args_list] == [
-        5,
-        15,
+        1,
+        3,
     ]
     assert bot.recall_violation.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_no_kick_opt_in_caps_at_sixty_minutes_and_restart_preserves_count(bot):
+async def test_no_kick_opt_in_caps_at_ten_minutes_and_restart_preserves_count(bot):
     bot.config["moderation"]["auto_kick"] = {}
     for mid in ("1", "2", "3", "4"):
         await progressive.enforce(bot, "5", "2", mid)
         bot = SimpleNamespace(**vars(bot))
     assert [c.kwargs["minutes"] for c in bot.execute_moderation.await_args_list] == [
-        5,
-        15,
-        60,
-        60,
+        1,
+        3,
+        10,
     ]
     assert all(c.args[1] == "mute" for c in bot.execute_moderation.await_args_list)
 
@@ -300,8 +296,8 @@ async def test_manual_only_caps_mutes_even_with_stale_auto_kick_enabled(bot):
     for mid in ("1", "2", "3", "4", "5"):
         await progressive.enforce(bot, "5", "2", mid)
     calls = bot.execute_moderation.await_args_list
-    assert [c.args[1] for c in calls] == ["mute"] * 5
-    assert [c.kwargs["minutes"] for c in calls] == [5, 15, 60, 60, 60]
+    assert [c.args[1] for c in calls] == ["mute"] * 3
+    assert [c.kwargs["minutes"] for c in calls] == [1, 3, 10]
     assert bot.recall_violation.await_count == 5
     with pytest.raises(ProtocolError, match="automatic_kick_not_authorized"):
         automatic.authorize_kick(bot, "automatic-kick/old", "5", "2")
@@ -326,7 +322,7 @@ async def test_recall_failure_does_not_skip_mute_or_claim_full_success(bot, reca
     result = await progressive.enforce(bot, "5", "2", "1")
     assert result["status"] == "accepted"
     assert result["recall_status"] == ("unknown" if recall == "exception" else recall)
-    assert bot.execute_moderation.await_args.kwargs["minutes"] == 5
+    assert bot.execute_moderation.await_args.kwargs["minutes"] == 1
     with closing(automatic.database(bot)) as db:
         row = db.execute(
             "SELECT recall_status,result FROM progressive_actions"
@@ -373,7 +369,7 @@ async def test_failed_mutes_never_increment_or_skip_recall(bot, failure):
     assert bot.recall_violation.await_count == 2
     if failure == "rejected":
         assert result["mute_count"] == 1
-        assert bot.execute_moderation.await_args.kwargs["minutes"] == 5
+        assert bot.execute_moderation.await_args.kwargs["minutes"] == 1
     else:
         assert result["status"] == "unknown"
         assert bot.execute_moderation.await_count == 1

@@ -275,7 +275,7 @@ IM 连接会保留当前令牌接口返回的静态、动态或回调认证类�
 | `semantic.context_limit` | 默认20，整数1至50条；仍受近期同群窗口限制 |
 | `auto_kick` / `card_auto` | 群ID到布尔值，缺省false；逐群独立开关 |
 | `card_suffix` | 群ID到后缀文本，缺省空；最多128字节，不含换行/控制字符 |
-| `progressive_mute` | 默认false以兼容旧配置；实例级，开启须同时启用撤回，按5/15/60分钟递进 |
+| `progressive_mute` | 默认false以兼容旧配置；实例级，开启须同时启用撤回，每轮三次警告后按1/3/10分钟禁言，10分钟结束后重开一轮 |
 | `manual_kick_only` | 实例级限制；当前接收机器人为true，拒绝AI及自动踢出，不能由AI配置工具修改；与任一true的 `auto_kick` 不兼容 |
 | `content_rules_since` | 业务规则生效时间；后端维护，不通过聊天任意修改 |
 

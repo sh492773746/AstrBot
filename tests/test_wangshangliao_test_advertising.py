@@ -126,9 +126,7 @@ def records(path, table):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("nickname", ["Member", None])
-async def test_real_observer_three_warnings_then_five_fifteen_sixty_without_reset(
-    control, nickname
-):
+async def test_real_observer_three_warnings_then_one_three_ten(control, nickname):
     lab, bot = control, control.receiver
     if nickname:
         next(row for row in lab.roster if row["userId"] == SENDER)["userNick"] = (
@@ -149,12 +147,12 @@ async def test_real_observer_three_warnings_then_five_fifteen_sixty_without_rese
         assert await lab.policy.handle(bot, GROUP, mid, payload)
         if index < 3:
             bot.execute_moderation.assert_not_awaited()
-    assert [c[2] for c in bot.calls if c[0] == "mute"] == [5, 15, 60]
+    assert [c[2] for c in bot.calls if c[0] == "mute"] == [1, 3, 10]
     assert len([c for c in bot.calls if c[0] == "recall"]) == 6
     assert bot.send_text.await_count == 3
     assert [call.args[2] for call in bot.send_text.await_args_list] == [
         (f"@{nickname} " if nickname else "") + f"第{i}次广告违规，消息已撤回。"
-        "前三次撤回并警告，第4次起将禁言，请勿继续发布广告。"
+        "每轮前三次警告，之后依次禁言1、3、10分钟；10分钟处罚结束后重新累计。"
         for i in (1, 2, 3)
     ]
     for call in bot.send_text.await_args_list:

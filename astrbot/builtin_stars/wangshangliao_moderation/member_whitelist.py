@@ -210,6 +210,7 @@ class MemberWhitelist:
             group,
             include_names=True,
             include_conflicts=operation == "read",
+            include_automatic=True,
         )
         guard()
         eligible = {
@@ -235,6 +236,11 @@ class MemberWhitelist:
                 {
                     "id": uid,
                     "name": name,
+                    **(
+                        {"source": entry["source"], "count": entry["count"]}
+                        if entry.get("source") == "daily_top30"
+                        else {}
+                    ),
                     **({"conflict": True} if entry.get("conflict") else {}),
                 }
             )
@@ -441,6 +447,11 @@ class MemberWhitelist:
         if operation in {"read", "search"}:
             lines = [
                 f"{n}. {row['name']} · UID {row['id']}"
+                + (
+                    f" · 今日前30名（{row['count']}条）"
+                    if row.get("source") == "daily_top30"
+                    else ""
+                )
                 for n, row in enumerate(result["members"], 1)
             ]
             if operation == "read":
@@ -450,6 +461,7 @@ class MemberWhitelist:
                     + (
                         "\n添加或移除：发送「添加白名单 名称」或「移除白名单 名称」，搜索后选择并确认。"
                         "\n仅豁免本群自动禁言、撤回；不授予管理权限，不会自动解除已有禁言。"
+                        "\n今日有效发言前30名自动进入，撤回消息不计数；移出后今日不自动加回。"
                     )
                 )
             return "【本群成员搜索结果】\n" + (

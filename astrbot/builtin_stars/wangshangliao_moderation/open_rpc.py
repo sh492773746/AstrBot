@@ -76,6 +76,7 @@ class OpenCall(BaseModel):
         "test_guides",
         "test_lottery",
         "test_advertising",
+        "test_flood",
         "test_blacklist",
         "test_group_ai",
     ]
@@ -455,6 +456,10 @@ class OpenRPC:
             from .test_advertising import begin_advertising
 
             return await begin_advertising(service, call.actor, payload)
+        if call.action == "test_flood":
+            from .test_flood import control_flood
+
+            return await control_flood(service, call.actor, payload)
         if call.action == "test_group_ai":
             from .test_group_ai import control_group_ai
 

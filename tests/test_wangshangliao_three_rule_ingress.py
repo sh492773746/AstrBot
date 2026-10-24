@@ -320,13 +320,25 @@ async def handle(harness, mid, payload, *, group=GROUP):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "count,same", [(3, True), (3, False)], ids=["3-repeats", "3-in-5"]
+    "count,same", [(5, True), (5, False)], ids=["5-repeats", "5-in-3"]
 )
 async def test_valid_window_mutes_before_recalling_every_ingress_message(
-    three_rule_ingress, count, same
+    three_rule_ingress, count, same, monkeypatch, tmp_path
 ):
     harness = three_rule_ingress
     bot, window = harness.receiver, harness.window
+    from astrbot.core.platform.sources.wangshangliao import automatic
+    from astrbot.core.platform.sources.wangshangliao.progression_store import (
+        ProgressionStore,
+    )
+
+    monkeypatch.setattr(automatic, "instance_dir", lambda _: tmp_path)
+    ProgressionStore(tmp_path / "moderation.sqlite3").initialize()
+    with automatic.database(bot) as db:
+        db.executemany(
+            "INSERT INTO progressive_warnings VALUES(?,?,?,?,?)",
+            [(RECEIVER, GROUP, SENDER, f"prior-{n}", "accepted") for n in range(3)],
+        )
     assert window.active()
     assert window.accepted == {}
     messages = [str(100 + n) for n in range(count)]
@@ -356,7 +368,7 @@ async def test_valid_window_mutes_before_recalling_every_ingress_message(
     assert evidence["category"] == "message_flood"
     assert evidence["messages"] == messages
     assert await handle(harness, mid, payload)
-    assert bot.calls == [("mute", SENDER, 5)] + [
+    assert bot.calls == [("mute", SENDER, 1)] + [
         ("recall", message, harness.sender.nim_account) for message in messages
     ]
     assert bot.execute_moderation.await_count == 1

@@ -1024,11 +1024,11 @@ onBeforeUnmount(() => {
             <h2>{{ t("规则兜底", "Rule fallback") }}</h2>
             <div class="switch-row">
               <span>{{ t("刷屏阈值", "Flood thresholds") }}</span>
-              <span>{{ t("3秒3条 / 10秒8条 / 30秒同文5条", "3 messages / 3s; 8 / 10s; 5 identical / 30s") }}</span>
+              <span>{{ t("3秒5条 / 10秒15条 / 30秒同文5条", "5 messages / 3s; 15 / 10s; 5 identical / 30s") }}</span>
             </div>
             <div class="switch-row">
               <label for="progressive-mute">{{
-                t("先撤回3次，再撤回＋递进禁言（5分钟 / 15分钟 / 1小时）", "Recall 3 times, then recall + progressive mute (5 / 15 / 60 minutes)")
+                t("每轮警告3次，再禁言1 / 3 / 10分钟；10分钟后重新累计", "3 warnings, then 1 / 3 / 10 minute mutes; restart after the final mute")
               }}</label>
               <input
                 id="progressive-mute"

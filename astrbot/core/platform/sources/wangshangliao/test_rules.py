@@ -23,6 +23,48 @@ class AdvertisingFixture:
     authorize: Callable[[], None]
 
 
+@dataclass(frozen=True)
+class FloodFixture:
+    """Bind one fixed-group rehearsal to the original volatile admission window."""
+
+    window: TestWindow
+    operation: str
+    path: Path
+    authorize: Callable[[], None]
+    ranking: bool = False
+
+    def check(self, adapter, group, member, operation, action, minutes=1):
+        """Reauthorize only admitted mutes and the fixed cleanup unmute."""
+        self.authorize()
+        receiver = adapter.adapter if isinstance(adapter, GroupAdapter) else adapter
+        message = rule_message(adapter, group, member, operation)
+        if (
+            receiver is not self.window.receiver
+            or (group, member) != ("1459282", "23691273")
+            or not (
+                action == "mute"
+                and minutes in {1, 3, 10}
+                and message
+                or action == "unmute"
+                and operation == self.operation + "/unmute"
+            )
+        ):
+            raise ProtocolError("test_flood_action")
+
+
+def flood_fixture(adapter, group):
+    """Return an authorized fixed-group fixture, never an arbitrary capability."""
+    receiver = adapter.adapter if isinstance(adapter, GroupAdapter) else adapter
+    window = getattr(receiver, "test_window", None)
+    fixture = getattr(window, "_flood_fixture", None)
+    if fixture is None or group != "1459282":
+        return None
+    if type(fixture) is not FloodFixture or fixture.window is not window:
+        raise ProtocolError("test_flood_scope")
+    fixture.authorize()
+    return fixture
+
+
 def advertising_path(adapter, group, member, message):
     """Resolve only a dashboard-bound test ledger, never a caller-selected path.
 
@@ -38,6 +80,11 @@ def advertising_path(adapter, group, member, message):
     Raises:
         ProtocolError: If a bound fixture loses its original window or authority.
     """
+    controlled = flood_fixture(adapter, group)
+    if controlled is not None:
+        if member != "23691273" or not rule_target(adapter, group, member, message):
+            raise ProtocolError("test_flood_scope")
+        return controlled.path
     receiver = adapter.adapter if isinstance(adapter, GroupAdapter) else adapter
     window = getattr(receiver, "test_window", None)
     fixture = getattr(window, "_advertising_fixture", None)
@@ -121,6 +168,26 @@ def rule_message(adapter, group, member, operation):
                 json.dumps([receiver.account, group, member, message]).encode()
             ).hexdigest()
         )
-        if operation == expected and rule_target(receiver, group, member, message):
+        from .group_scope import group_revision
+
+        flood = (
+            "flood/"
+            + hashlib.sha256(
+                json.dumps(
+                    [
+                        receiver.account,
+                        group,
+                        member,
+                        receiver.members.get(group, {}).get(member, ""),
+                        group_revision(adapter.config, group),
+                        message,
+                    ],
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+        )
+        if operation in {expected, flood} and rule_target(
+            receiver, group, member, message
+        ):
             return message
     return ""

@@ -166,9 +166,12 @@ async def ingest_burst(bot, count=5):
 async def test_flood_mute_exception_does_not_abandon_reserved_recalls(
     bot, monkeypatch, failure
 ):
+    for index in range(3):
+        await progressive.enforce(bot, "5", "2", f"prior-warning-{index}")
+    bot.execute_action.reset_mock()
     mid, payload = await ingest_burst(bot)
     mute = AsyncMock(side_effect=failure("offline synthetic failure"))
-    monkeypatch.setattr(automatic, "mute_and_escalate", mute)
+    monkeypatch.setattr(progressive, "mute_and_escalate", mute)
     assert await policy.handle(
         bot,
         "5",
@@ -210,13 +213,16 @@ async def test_flood_mute_exception_does_not_abandon_reserved_recalls(
 async def test_flood_does_not_continue_after_revocation_or_cancellation(
     bot, monkeypatch, failure
 ):
+    for index in range(3):
+        await progressive.enforce(bot, "5", "2", f"prior-warning-{index}")
+    bot.execute_action.reset_mock()
     mid, payload = await ingest_burst(bot)
 
     async def revoke(*args, **kwargs):
         bot.config["_business_active"] = False
         raise failure("synthetic revocation")
 
-    monkeypatch.setattr(automatic, "mute_and_escalate", revoke)
+    monkeypatch.setattr(progressive, "mute_and_escalate", revoke)
     operation = policy.handle(
         bot,
         "5",
@@ -591,11 +597,11 @@ async def test_progression_counts_only_accepted_mute_receipts(bot, receipt):
     requests = [call.args[0] for call in bot.execute_action.await_args_list]
     assert first["mute_count"] == (1 if receipt in {"accepted", "verified"} else 0)
     assert [request.minutes for request in requests] == (
-        [5, 15]
+        [1, 3]
         if receipt in {"accepted", "verified"}
-        else [5, 5]
+        else [1, 1]
         if receipt == "rejected"
-        else [5]
+        else [1]
     )
     assert second["status"] == receipt
 

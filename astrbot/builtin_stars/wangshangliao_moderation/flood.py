@@ -93,13 +93,13 @@ class FloodWindows:
         count, repeated = len(recent), len(matching)
         messages = list(
             dict.fromkeys(
-                (recent if count >= 8 else rapid if len(rapid) >= 3 else [])
+                (recent if count >= 15 else rapid if len(rapid) >= 5 else [])
                 + (matching if repeated >= 5 else [])
             )
         )
         evidence = {
             "category": "message_flood"
-            if len(rapid) >= 3 or count >= 8 or repeated >= 5
+            if len(rapid) >= 5 or count >= 15 or repeated >= 5
             else "",
             "received_at": received_at,
             "live": True,
@@ -460,7 +460,7 @@ class FloodRuntime:
 
 
 async def enforce(adapter, group, mid, payload, *, store, guard):
-    """Mute once, then recall only authenticated messages belonging to this burst.
+    """Count one violation per burst and recall its authenticated messages.
 
     Args:
         adapter: Authenticated native adapter with its original inbox.
@@ -477,6 +477,9 @@ async def enforce(adapter, group, mid, payload, *, store, guard):
     from astrbot.core.platform.sources.wangshangliao.automatic import mute_and_escalate
     from astrbot.core.platform.sources.wangshangliao.event import is_managed_account
     from astrbot.core.platform.sources.wangshangliao.group_scope import group_revision
+    from astrbot.core.platform.sources.wangshangliao.progressive import (
+        enforce as progress,
+    )
     from astrbot.core.platform.sources.wangshangliao.test_rules import rule_target
     from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
@@ -573,15 +576,45 @@ async def enforce(adapter, group, mid, payload, *, store, guard):
             scope=payload.get("_test_rule_window", ""),
         )
         guard()
+        progression = {}
         if mute_status is None:
             mute_status = "unknown"
             try:
-                result = await mute_and_escalate(
-                    adapter, operation, group, sender, mid, execution_check=guard
+                if adapter.config["moderation"].get("progressive_mute"):
+                    progression = await progress(
+                        adapter,
+                        group,
+                        sender,
+                        mid,
+                        execution_check=guard,
+                        operation=operation,
+                        recall_after_mute=True,
+                    )
+                else:
+                    progression = {
+                        **await mute_and_escalate(
+                            adapter,
+                            operation,
+                            group,
+                            sender,
+                            mid,
+                            execution_check=guard,
+                        ),
+                        "recall_status": "none",
+                    }
+                mute_status = (
+                    progression.get("status", "unknown")
+                    if progression.get("action") == "mute"
+                    else "none"
                 )
-                mute_status = result.get("status", "unknown")
-                if mute_status not in {"accepted", "verified", "rejected"}:
+                if mute_status not in {"accepted", "verified", "rejected", "none"}:
                     mute_status = "unknown"
+                trigger_status = progression.get("recall_status", "unknown")
+                if trigger_status != "none":
+                    await asyncio.to_thread(
+                        store.finish_flood, operation, trigger_status, message=mid
+                    )
+                    pending = [message for message in pending if message != mid]
             except Exception:
                 adapter.diagnostics.emit(
                     "flood_mute", "failed_or_unknown", mid, failed=True
@@ -589,7 +622,11 @@ async def enforce(adapter, group, mid, payload, *, store, guard):
             finally:
                 await asyncio.to_thread(store.finish_flood, operation, mute_status)
         # Independent recalls still suppress spam when the mute receipt is uncertain.
-        outcomes = []
+        outcomes = (
+            [progression["recall_status"]]
+            if progression.get("recall_status") not in {None, "none"}
+            else []
+        )
         for message in pending:
             guard()
             recall_status = "unknown"
@@ -639,7 +676,7 @@ async def enforce(adapter, group, mid, payload, *, store, guard):
             mute_status,
             mid,
             action="mute",
-            failed=mute_status not in {"accepted", "verified"},
+            failed=mute_status not in {"accepted", "verified", "none"},
         )
         adapter.diagnostics.emit(
             "flood_result",
@@ -648,4 +685,10 @@ async def enforce(adapter, group, mid, payload, *, store, guard):
             action="recall",
             failed=recall_status not in {"accepted", "verified", "none"},
         )
-        return {"mute_status": mute_status, "recall_status": recall_status}
+        return {
+            **progression,
+            "action": "mute" if mute_status != "none" else "recall",
+            "status": mute_status if mute_status != "none" else recall_status,
+            "mute_status": mute_status,
+            "recall_status": recall_status,
+        }

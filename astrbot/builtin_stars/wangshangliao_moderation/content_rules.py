@@ -623,14 +623,7 @@ async def enforce(
             result = await enforce_flood(
                 adapter, group, str(mid), payload, store=store, guard=guard
             )
-            status = (
-                "muted"
-                if result.get("mute_status") in {"accepted", "verified"}
-                else result.get("mute_status", "review_only")
-            )
-            warning = result.get("recall_status", "none")
-            return True
-        if policy.get("progressive_mute"):
+        elif policy.get("progressive_mute"):
             from astrbot.core.platform.sources.wangshangliao.progressive import (
                 enforce as progressive_enforce,
             )
@@ -638,6 +631,9 @@ async def enforce(
             result = await progressive_enforce(
                 adapter, group, sender, str(mid), execution_check=guard
             )
+        else:
+            result = None
+        if result is not None:
             warning = result.get("recall_status", "unknown")
             # Notification failure must not erase an accepted original sanction.
             status = (
@@ -675,8 +671,10 @@ async def enforce(
                         member=int(sender),
                         expected_nim=str(member["nimId"]),
                         mention_name=nick,
-                        text=f"@{nick} 第{result['warning_number']}次广告违规，消息已撤回。"
-                        "前三次撤回并警告，第4次起将禁言，请勿继续发布广告。",
+                        text=f"@{nick} 第{result['warning_number']}次"
+                        + ("刷屏" if category == "message_flood" else "广告违规")
+                        + "，消息已撤回。每轮前三次警告，之后依次禁言1、3、10分钟；"
+                        "10分钟处罚结束后重新累计。",
                     ),
                     authorize=guard,
                 )
@@ -824,4 +822,12 @@ def flood_category(adapter, group, mid, payload):
 
     if evidence.get("revision") != group_revision(adapter.config, group):
         return ""
-    return "message_flood" if evidence.get("category") == "message_flood" else ""
+    threshold = any(
+        type(evidence.get(key)) is int and evidence[key] >= minimum
+        for key, minimum in (("rapid", 5), ("count", 15), ("repeated", 5))
+    )
+    return (
+        "message_flood"
+        if evidence.get("category") == "message_flood" and threshold
+        else ""
+    )

@@ -7232,7 +7232,8 @@ AI及自动规则不再踢群，后续违规只撤回＋最多60分钟禁言。�
 同日按用户要求，使用 `wangshangliao_0acde7ec`（账号31846829）向
 大海兼职群发送三条消息，仅打开180秒、3条入站的群命令/群规则测试窗口，
 不修改机器人配置、管理员或处罚计数。脚本为
-`scripts/check_wsl_progressive_live.py`。
+原`scripts/check_wsl_progressive_live.py`（2026-10-24退役）；
+当前固定三账号验收使用`scripts/check_wsl_flood_cycle_live.py`。
 
 | 场景 | 上游消息ID | 结果 |
 | --- | --- | --- |

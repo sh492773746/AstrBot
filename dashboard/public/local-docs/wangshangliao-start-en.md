@@ -1,6 +1,23 @@
 # Wangshangliao Beginner Guide
 
-## Current Starting Point (October 22, 2026)
+## Current Starting Point (October 24, 2026)
+
+Current flood thresholds are five messages in three seconds, fifteen in ten
+seconds, or five identical texts in thirty seconds. Each penalty cycle gives
+three recall warnings, then one-, three- and ten-minute mutes. Warning grace
+restarts only after the final ten-minute mute expires; unknown receipts do not
+reset the cycle or trigger retries. A continuous burst counts as one violation.
+`发言排行榜`, `发言排行` and `排名` show today's effective text ranking.
+The top30 receive separate automatic speech-whitelist grants, refreshed every
+30seconds and recalculated at Beijing midnight. Recalled or uncertain-recall
+messages do not count; the most recent30seconds are not yet eligible for grants.
+Existing limits of one counted text per member per30seconds and identical-text
+deduplication over five minutes remain. Media-only messages and commands are not
+counted. Manual grants remain intact; blacklist entries take priority. An explicit
+removal suppresses automatic readdition for the rest of that Beijing day.
+See the [maintenance record](../../wangshangliao-maintenance.md) for the
+October24 deployment and offline coverage. No new real-user penalty-cycle trial
+or official-phone acceptance is claimed.
 
 Configure features directly in the Wangshangliao plugin: **Group Management →
 Activation / Rules**, and **Activities & Finance → Player Lottery / Invitation
@@ -59,7 +76,7 @@ operator to check this group's grants. Never share the dashboard password.
 > keywords and ads are deterministic and require preview/confirmation. Legacy
 > menu9 mode/knowledge writes below are superseded.
 
-Updated October 22, 2026. This guide describes the integrated public mode using
+Updated October 24, 2026. This guide describes the integrated public mode using
 existing AstrBot accounts, not a separate public worker.
 [Index](../../wangshangliao.md) · [Command tree](wangshangliao-command-tree.md) ·
 [AI reading and topic index](../../wangshangliao-ai-index.md) ·
@@ -210,16 +227,31 @@ accounts or groups. Menu visibility never grants authority. See the
 | Schedules | `定时禁言 23:00 08:00` | Preview and `确认定时 TOKEN`; future boundaries only |
 | Lotteries | `抽奖设置`, `开启抽奖`, `立即开奖` | Group managers in either channel; ordinary members enroll themselves |
 
-Advertising recalls and warns three times, then escalates through 5/15/60-minute
-mutes without automatic removal. Ordinary images, stickers, videos and merged
+Advertising and flood violations share three warning recalls per cycle, then 1/3/10-minute
+mutes. Once the final ten-minute mute expires, the next violation starts three new warnings.
+Each continuous flood burst is one violation, even when several messages are recalled.
+
+Flood thresholds are five messages in three seconds, fifteen in ten seconds, or five
+identical texts in thirty seconds. Media count toward the rate thresholds.
+
+The Beijing-day top thirty valid text speakers receive separate, short-lived automatic
+speech exemptions, refreshed every thirty seconds after a thirty-second moderation
+settling period. Recalled or uncertain-recall messages do not count. Existing anti-farming
+limits remain: one counted message per member per thirty seconds, identical text deduplicated
+for five minutes. Falling below the top thirty or crossing midnight removes the automatic
+grant, never the manual whitelist. Explicit removal suppresses automatic re-entry for the day.
+Blacklist always takes precedence; no management role or automatic unmute is granted.
+
+There is no automatic removal. Ordinary images, stickers, videos and merged
 forwards are not recalled or muted solely for their media type.
 Supported authenticated media messages count toward flood thresholds; media is not
 downloaded or interpreted, and text, voice and file names are not guessed to be
 images or videos. Administrators and protected bots remain
 exempt; messages predating rule activation are not penalized.
 
-Flood rules detect three texts/supported media messages from one
-member in five seconds, eight in ten seconds, or five repeated texts in thirty seconds, mute first, then recall the matching
+Flood rules detect five texts/supported media messages from one
+member in three seconds, fifteen in ten seconds, or five repeated texts in thirty seconds.
+After warning grace, mute first, then recall the matching
 burst without waiting for AI. Accepted does not mean confirmed successful;
 uncertain operations must be reconciled, not blindly repeated.
 
@@ -424,7 +456,7 @@ quotas, group rules, manager grants or settlement registration. Guidance explain
 individual unmute as a scoped manager command, never an AI operation. Manual
 member mute and whole-group mute/unmute remain retired; automatic penalties,
 flood protection and daily mute/unmute schedules remain governed by settings.
-Flood protection triggers at three messages in five seconds, eight in ten seconds,
+Flood protection triggers at five messages in three seconds, fifteen in ten seconds,
 or five equal normalized texts in thirty seconds, separately for each sender,
 account and group. Both native and receive timestamps must satisfy the window.
 Since October 22, 2026, the audit view also distinguishes unsubmitted moderation

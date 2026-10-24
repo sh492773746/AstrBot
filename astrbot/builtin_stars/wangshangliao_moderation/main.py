@@ -17,6 +17,7 @@ from astrbot.core.provider.entities import ProviderRequest
 from astrbot.core.star.filter.command import GreedyStr
 
 from .activities import GroupActivities
+from .automatic_whitelist import AutomaticWhitelist
 from .cards import CardJobs
 from .cashback_runtime import CashbackRuntime
 from .commands import HELP, Commands
@@ -59,6 +60,8 @@ class Main(star.Star):
         self.schedules = GroupSchedules(context)
         self.activities = GroupActivities(context)
         self.commands = Commands(self.schedules, self.activities)
+        self.automatic_whitelist = AutomaticWhitelist(context, self.commands.rankings)
+        self.whitelist_poller = None
         self.group_management = GroupManagement(context)
         self.legacy_management = self.group_management
         self.commands.management = self.group_management
@@ -122,6 +125,7 @@ class Main(star.Star):
                 await self.open_service.refresh()
                 self.open_poller = asyncio.create_task(self.open_service.poll())
             self.flood_poller = asyncio.create_task(self.flood_runtime.run())
+            self.whitelist_poller = asyncio.create_task(self.automatic_whitelist.run())
             self.dashboard_page.register()
             self.dashboard_page.friend_auto.active = True
             self.friend_poller = asyncio.create_task(
@@ -139,6 +143,10 @@ class Main(star.Star):
     async def terminate(self):
         """Stop card processing before the plugin is unloaded."""
         self.dashboard_page.active = False
+        self.automatic_whitelist.active = False
+        if self.whitelist_poller:
+            self.whitelist_poller.cancel()
+            await asyncio.gather(self.whitelist_poller, return_exceptions=True)
         if self.open_service:
             from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
                 runtime,

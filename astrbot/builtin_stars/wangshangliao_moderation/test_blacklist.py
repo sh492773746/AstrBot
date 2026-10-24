@@ -1,4 +1,4 @@
-"""Dashboard binding for the fixed blacklist acceptance fixture; no mutations."""
+"""Dashboard binding for the separately authorized, fixed blacklist fixture."""
 
 import asyncio
 import copy
@@ -23,6 +23,176 @@ from astrbot.core.platform.sources.wangshangliao.test_window import TestWindow
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
 from .open_store import OpenError
+
+
+async def abort_blacklist(service, actor, operation):
+    """Close a failed, unsent test without claiming successful acceptance.
+
+    This read-only native recovery also works after expiry or plugin reload.
+    Only the private fixture ledger changes; no sanction is submitted or retried.
+
+    Args:
+        service: Current authenticated integrated service.
+        actor: Authenticated dashboard principal.
+        operation: Exact existing fixed-test operation.
+
+    Returns:
+        An explicit aborted disposition, never an acceptance result.
+
+    Raises:
+        OpenError: If authority, identity, quiescence or restoration is unproven.
+    """
+    adapters = service.adapters()
+    accounts = {str(a.account): a for a in adapters}
+    if (
+        len(adapters) != 3
+        or set(accounts) != {OWNER, RECEIVER, TARGET}
+        or len({a.config["id"] for a in adapters}) != 3
+        or len({str(a.nim_account) for a in adapters}) != 3
+    ):
+        raise OpenError("test_blacklist_accounts")
+    receiver = accounts[RECEIVER]
+    guards = [account_guard(a) for a in adapters]
+    settings = copy.deepcopy(service.settings)
+    installed = getattr(service, "_blacklist_fixture", None)
+    path = (
+        instance_dir(receiver.config["id"])
+        / "test-blacklist"
+        / operation
+        / "fixture.sqlite3"
+    )
+    peers = {uid: str(a.nim_account) for uid, a in accounts.items()}
+
+    def guard():
+        """Require closed execution windows and unchanged current authority."""
+        for check in guards:
+            check()
+        window = getattr(receiver, "test_window", None)
+        if (
+            not service.active
+            or not service.integrated
+            or service.settings != settings
+            or settings.get("paused") != 0
+            or getattr(service, "capacity_paused", False)
+            or any(not any(a is live for live in service.adapters()) for a in adapters)
+            or any(
+                a.connection_state != "online"
+                or a.stopping.is_set()
+                or a.config.get("enable") is not True
+                or a.config.get("_business_active") is not True
+                or str(a.nim_account) != peers[uid]
+                for uid, a in accounts.items()
+            )
+            or window is not None
+            and window.active()
+            or getattr(service, "_blacklist_fixture", None) is not installed
+            or installed is not None
+            and (
+                type(installed) is not BlacklistFixture
+                or installed.operation != operation
+                or installed._pending
+            )
+        ):
+            raise OpenError("test_blacklist_revoked")
+
+    guard()
+    if not path.is_file():
+        raise OpenError("test_blacklist_existing")
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+        baseline = db.execute("SELECT restored,native_start FROM fixture").fetchall()
+        steps = db.execute("SELECT step,state FROM attempts ORDER BY rowid").fetchall()
+        commands = (
+            db.execute("SELECT state FROM commands").fetchall()
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='commands'"
+            ).fetchone()
+            else []
+        )
+    if (
+        len(baseline) != 1
+        or baseline[0][0] != 0
+        or steps not in ([], [("leave", "verified"), ("invite/1", "verified")])
+        or commands not in ([], [("not_submitted",)])
+    ):
+        raise OpenError("test_blacklist_unresolved")
+    directory = await receiver.get_moderation_members(GROUP)
+    guard()
+    members = directory.get("groupMemberInfo", [])
+    rows = {str(row.get("userId")): row for row in members}
+    if (
+        directory.get("complete") is not True
+        or len(members) != 3
+        or set(rows) != set(accounts)
+        or any(str(rows[uid].get("nimId")) != peers[uid] for uid in accounts)
+        or rows[OWNER].get("groupRole") != "GROUP_ROLE_OWNER"
+        or rows[RECEIVER].get("groupRole")
+        not in {"GROUP_ROLE_ADMIN", "GROUP_ROLE_MEMBER"}
+        or rows[TARGET].get("groupRole") != "GROUP_ROLE_MEMBER"
+    ):
+        raise OpenError("test_blacklist_restoration_unproven")
+    muted = await muted_member_ids(receiver, GROUP, authorize=guard)
+    guard()
+    if TARGET in muted:
+        raise OpenError("test_blacklist_restoration_unproven")
+    # A closed window revokes the protected-target capability. Refuse to hide
+    # pending group work or unknown fixture sends. Unrelated historical operations
+    # remain untouched, not reclassified as outcomes of this acceptance test.
+    for adapter in adapters:
+        ledger = instance_dir(adapter.config["id"]) / "messages.sqlite3"
+        if not ledger.is_file():
+            raise OpenError("test_blacklist_unresolved")
+        with closing(sqlite3.connect(ledger.as_uri() + "?mode=ro", uri=True)) as db:
+            if (
+                db.execute(
+                    "SELECT 1 FROM inbox WHERE account=? AND team=? "
+                    "AND state IN ('pending','processing') LIMIT 1",
+                    (adapter.account, GROUP),
+                ).fetchone()
+                or db.execute(
+                    "SELECT 1 FROM outbox WHERE state IN ('unknown','sending') "
+                    "AND (instr(key,?)>0 OR key LIKE 'proactive/wsl-at-blacklist-%') LIMIT 1",
+                    (operation,),
+                ).fetchone()
+            ):
+                raise OpenError("test_blacklist_unresolved")
+    native = instance_dir(receiver.config["id"]) / "member_blacklist.sqlite3"
+    if native.exists():
+        with closing(sqlite3.connect(native.as_uri() + "?mode=ro", uri=True)) as db:
+            if (
+                db.execute(
+                    "SELECT 1 FROM blacklist_entries WHERE account=? AND group_id=? "
+                    "AND member=? AND status='active'",
+                    (RECEIVER, GROUP, TARGET),
+                ).fetchone()
+                or db.execute(
+                    "SELECT 1 FROM blacklist_intents WHERE account=? AND group_id=? "
+                    "AND member=? AND (rowid>? OR status='unknown')",
+                    (RECEIVER, GROUP, TARGET, baseline[0][1]),
+                ).fetchone()
+            ):
+                raise OpenError("test_blacklist_unresolved")
+    guard()
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("BEGIN IMMEDIATE")
+        if (
+            db.execute("SELECT restored,native_start FROM fixture").fetchall()
+            != baseline
+            or db.execute("SELECT step,state FROM attempts ORDER BY rowid").fetchall()
+            != steps
+        ):
+            raise OpenError("test_blacklist_unresolved")
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS closure("
+            "outcome TEXT NOT NULL,actor TEXT NOT NULL,created REAL NOT NULL)"
+        )
+        db.execute("INSERT INTO closure VALUES('aborted',?,?)", (actor, time.time()))
+        guard()
+        db.execute("UPDATE fixture SET restored=1 WHERE restored=0")
+    if installed is not None:
+        service._blacklist_fixture = None
+        if getattr(installed.window, "_blacklist_fixture", None) is installed:
+            installed.window._blacklist_fixture = None
+    return {"test_only": True, "restored": True, "outcome": "aborted", "passed": False}
 
 
 async def begin_blacklist(service, actor, payload):
@@ -302,7 +472,7 @@ async def control_blacklist(service, actor, payload):
     Args:
         service: Original integrated control plane.
         actor: Authenticated dashboard principal, never taken from payload.
-        payload: Begin, membership, unmute or restore with an exact operation.
+        payload: One fixed begin, membership, send, unmute, abort or restore step.
 
     Returns:
         Bounded fixed-test evidence without private provider material.
@@ -313,8 +483,12 @@ async def control_blacklist(service, actor, payload):
     if (
         not isinstance(actor, str)
         or not actor.startswith("dashboard/")
+        or not actor.removeprefix("dashboard/")
         or type(payload) is not dict
-        or payload.get("operation") not in {"begin", "membership", "unmute", "restore"}
+        or payload.get("operation")
+        not in {"begin", "membership", "send", "unmute", "abort", "restore"}
+        or type(payload.get("operation_id")) is not str
+        or not re.fullmatch(r"WSL_TEST_BLACKLIST_[0-9a-f]{32}", payload["operation_id"])
         or set(payload)
         != (
             {"operation", "operation_id", "step"}
@@ -324,6 +498,8 @@ async def control_blacklist(service, actor, payload):
     ):
         raise OpenError("test_blacklist_arguments")
     operation = payload["operation"]
+    if operation == "abort":
+        return await abort_blacklist(service, actor, payload["operation_id"])
     if operation == "begin":
         return await begin_blacklist(
             service, actor, {"operation_id": payload["operation_id"]}
@@ -339,6 +515,58 @@ async def control_blacklist(service, actor, payload):
         from scripts.wsl_test_blacklist import BlacklistMembershipTest
 
         return await BlacklistMembershipTest(fixture).change(payload["step"])
+    if operation == "send":
+        from astrbot.api.event import MessageChain
+        from astrbot.api.message_components import At, Plain
+        from astrbot.core.platform.message_session import MessageSession
+        from astrbot.core.platform.message_type import MessageType
+
+        owner = next(a for a in service.adapters() if str(a.account) == OWNER)
+        previous_peer = getattr(owner, "members", {}).get(GROUP, {}).get(TARGET)
+        directory = await owner.get_moderation_members(GROUP)
+        fixture.check()
+        fixture.roster(directory)
+        row = next(
+            row for row in directory["groupMemberInfo"] if row["userId"] == TARGET
+        )
+        name = row.get("groupMemberNick") or row.get("userNick") or TARGET
+        key = fixture.operation + "/command"
+        with closing(sqlite3.connect(fixture.path)) as db, db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS commands("
+                "operation TEXT PRIMARY KEY,state TEXT NOT NULL)"
+            )
+            if db.execute("SELECT 1 FROM commands").fetchone():
+                raise OpenError("test_blacklist_unresolved")
+            db.execute("INSERT INTO commands VALUES(?,'unknown')", (key,))
+        try:
+            receipt = await owner.send_by_session(
+                MessageSession(owner.config["id"], MessageType.GROUP_MESSAGE, GROUP),
+                MessageChain([At(qq=TARGET, name=name), Plain("黑名单")]),
+                operation_id=key,
+            )
+        except BaseException:
+            # Only a proven absence of an outbox intent is safe to abort. A
+            # transport timeout/cancellation remains unknown and is never retried.
+            saved = await owner.ledger.receipt("proactive/" + key)
+            if saved is None:
+                with closing(sqlite3.connect(fixture.path)) as db, db:
+                    db.execute(
+                        "UPDATE commands SET state='not_submitted' WHERE operation=?",
+                        (key,),
+                    )
+            raise
+        with closing(sqlite3.connect(fixture.path)) as db, db:
+            db.execute(
+                "UPDATE commands SET state=? WHERE operation=?",
+                (receipt.get("status", "unknown"), key),
+            )
+        return {
+            "test_only": True,
+            "sender_mapping_changed": previous_peer
+            != getattr(owner, "members", {}).get(GROUP, {}).get(TARGET),
+            **receipt,
+        }
     if operation == "unmute":
         from astrbot.core.platform.sources.wangshangliao.moderation import execute
 

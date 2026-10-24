@@ -427,7 +427,7 @@ Docker 构建需启用项目的 <code>INSTALL_WSL</code> 构建参数。依赖�
 </tr>
 <tr>
 <td><code>progressive_mute</code></td>
-<td>默认false以兼容旧配置；实例级，开启须同时启用撤回，按5/15/60分钟递进</td>
+<td>默认false以兼容旧配置；实例级，开启须同时启用撤回，每轮三次警告后按1/3/10分钟禁言，10分钟结束后重开一轮</td>
 </tr>
 <tr>
 <td><code>manual_kick_only</code></td>

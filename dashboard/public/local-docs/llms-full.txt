@@ -24,7 +24,7 @@ Published: wangshangliao-ai-index.html
 
 # 旺商聊 AI 阅读与主题索引
 
-整理日期：2026-10-23（北京时间）。本页是文档导航，不是新的功能验收报告。
+整理日期：2026-10-24（北京时间）。本页是文档导航，不是新的功能验收报告。
 范围仅为本部署的旺商聊接入器、插件、管理页和运维；不代表整个 AstrBot 或超级机器人。
 [人工目录](wangshangliao.md)保留原入口和历史证据，本页不搬迁、不删除原文。
 
@@ -41,6 +41,25 @@ Published: wangshangliao-ai-index.html
 English readers: start with this routing table, then use the English counterparts
 in the catalog. Prefer maintained rules and architecture; dated reports are evidence
 for their original scope only. Documentation never grants execution authority.
+
+## 刷屏循环与自动白名单（2026-10-24）
+
+当前规则源码调整为3秒5条、10秒15条、30秒同文5条。广告和刷屏共用每轮三次警告，
+再禁言1／3／10分钟，10分钟结束后重新三次警告；连续刷屏批次只计一次违规。
+每日有效发言前30名独立自动白名单，撤回消息不计、最近30秒待核对，每30秒刷新；
+名次下降或换日退出，不修改手动名单，黑名单优先，明确移出当日不自动加回。
+细则与性能上限见[内容规则](wangshangliao-content-rules.md)；是否已经加载及验收范围
+须另核对[维护记录](wangshangliao-maintenance.md)，不以源码说明代替运行态证据。
+
+## 最新真实 @ 验收与收尾（2026-10-24）
+
+测试群1459282已实测原生管理员真实@加`黑名单`立即登记并提交41760分钟禁言，
+平台受理及当前原生禁言名单已核实，随后恢复测试名单、禁言、角色、窗口及账号启停。
+固定发送入口刷新完整目录再发结构化@；失败收尾独立记录aborted／未通过，未知操作不重试。
+仅插件重载，PID613188不变。原始tenants摘要差异已逐条核对为一个未开通群离群目录同步，
+未回滚真实成员状态，不宣称原始整体摘要全同。详见[验收](zh/platform/wangshangliao-testing.md)
+及[维护](wangshangliao-maintenance.md)；手机显示、未来实际到期、真实回复链路本轮未重验。
+下方旧“群内加入不立即处罚”属于10月23日历史版本；当前原生群内@／可信回复发送黑名单会立即禁言。
 
 ## 最新操作与源码发布入口（2026-10-23 23:39）
 
@@ -2374,7 +2393,7 @@ IM 连接会保留当前令牌接口返回的静态、动态或回调认证类�
 | `semantic.context_limit` | 默认20，整数1至50条；仍受近期同群窗口限制 |
 | `auto_kick` / `card_auto` | 群ID到布尔值，缺省false；逐群独立开关 |
 | `card_suffix` | 群ID到后缀文本，缺省空；最多128字节，不含换行/控制字符 |
-| `progressive_mute` | 默认false以兼容旧配置；实例级，开启须同时启用撤回，按5/15/60分钟递进 |
+| `progressive_mute` | 默认false以兼容旧配置；实例级，开启须同时启用撤回，每轮三次警告后按1/3/10分钟禁言，10分钟结束后重开一轮 |
 | `manual_kick_only` | 实例级限制；当前接收机器人为true，拒绝AI及自动踢出，不能由AI配置工具修改；与任一true的 `auto_kick` 不兼容 |
 | `content_rules_since` | 业务规则生效时间；后端维护，不通过聊天任意修改 |
 
@@ -3425,12 +3444,12 @@ Published: wangshangliao-start.html
 | 定时 | `定时禁言 23:00 08:00` | 先预览、`确认定时 确认码`；只执行未来边界 |
 | 抽奖 | `抽奖设置`、`开启抽奖`、`立即开奖` | 本群管理可在群内／私聊固定命令操作；普通成员自行报名 |
 
-广告前三次撤回警告，后续按5／15／60分钟递进禁言，不自动踢人。
+广告和刷屏每轮前三次撤回警告，后续按1／3／10分钟禁言，10分钟结束后重新三次警告，不自动踢人。
 普通图片、表情、视频及合并聊天记录不因消息类型直接撤回或禁言。
 媒体仅按已支持的真实入站计入刷屏条数；不下载、识别媒体内容，
 不将普通文字、语音或文件名当作图片／视频。
 不追罚规则加载前的消息；管理员及受保护机器人豁免不变。
-刷屏阈值为同一成员5秒3条、10秒8条文字或已支持媒体，或30秒5条重复文字；
+刷屏阈值为同一成员3秒5条、10秒15条文字或已支持媒体，或30秒5条重复文字；
 先禁言，再撤回对应整批消息，不等待AI，不识别图片／视频中的广告内容。
 「已受理」不等于「成功」，结果不明不要重复提交；日志需核对平台回执。
 2026-10-22起，处罚记录及原消息撤回列增加脱敏失败原因和“未提交”标记；
@@ -3685,7 +3704,24 @@ Published: wangshangliao-start-en.html
 
 # Wangshangliao Beginner Guide
 
-## Current Starting Point (October 22, 2026)
+## Current Starting Point (October 24, 2026)
+
+Current flood thresholds are five messages in three seconds, fifteen in ten
+seconds, or five identical texts in thirty seconds. Each penalty cycle gives
+three recall warnings, then one-, three- and ten-minute mutes. Warning grace
+restarts only after the final ten-minute mute expires; unknown receipts do not
+reset the cycle or trigger retries. A continuous burst counts as one violation.
+`发言排行榜`, `发言排行` and `排名` show today's effective text ranking.
+The top30 receive separate automatic speech-whitelist grants, refreshed every
+30seconds and recalculated at Beijing midnight. Recalled or uncertain-recall
+messages do not count; the most recent30seconds are not yet eligible for grants.
+Existing limits of one counted text per member per30seconds and identical-text
+deduplication over five minutes remain. Media-only messages and commands are not
+counted. Manual grants remain intact; blacklist entries take priority. An explicit
+removal suppresses automatic readdition for the rest of that Beijing day.
+See the [maintenance record](../../wangshangliao-maintenance.md) for the
+October24 deployment and offline coverage. No new real-user penalty-cycle trial
+or official-phone acceptance is claimed.
 
 Configure features directly in the Wangshangliao plugin: **Group Management →
 Activation / Rules**, and **Activities & Finance → Player Lottery / Invitation
@@ -3744,7 +3780,7 @@ operator to check this group's grants. Never share the dashboard password.
 > keywords and ads are deterministic and require preview/confirmation. Legacy
 > menu9 mode/knowledge writes below are superseded.
 
-Updated October 22, 2026. This guide describes the integrated public mode using
+Updated October 24, 2026. This guide describes the integrated public mode using
 existing AstrBot accounts, not a separate public worker.
 [Index](../../wangshangliao.md) · [Command tree](wangshangliao-command-tree.md) ·
 [AI reading and topic index](../../wangshangliao-ai-index.md) ·
@@ -3895,16 +3931,31 @@ accounts or groups. Menu visibility never grants authority. See the
 | Schedules | `定时禁言 23:00 08:00` | Preview and `确认定时 TOKEN`; future boundaries only |
 | Lotteries | `抽奖设置`, `开启抽奖`, `立即开奖` | Group managers in either channel; ordinary members enroll themselves |
 
-Advertising recalls and warns three times, then escalates through 5/15/60-minute
-mutes without automatic removal. Ordinary images, stickers, videos and merged
+Advertising and flood violations share three warning recalls per cycle, then 1/3/10-minute
+mutes. Once the final ten-minute mute expires, the next violation starts three new warnings.
+Each continuous flood burst is one violation, even when several messages are recalled.
+
+Flood thresholds are five messages in three seconds, fifteen in ten seconds, or five
+identical texts in thirty seconds. Media count toward the rate thresholds.
+
+The Beijing-day top thirty valid text speakers receive separate, short-lived automatic
+speech exemptions, refreshed every thirty seconds after a thirty-second moderation
+settling period. Recalled or uncertain-recall messages do not count. Existing anti-farming
+limits remain: one counted message per member per thirty seconds, identical text deduplicated
+for five minutes. Falling below the top thirty or crossing midnight removes the automatic
+grant, never the manual whitelist. Explicit removal suppresses automatic re-entry for the day.
+Blacklist always takes precedence; no management role or automatic unmute is granted.
+
+There is no automatic removal. Ordinary images, stickers, videos and merged
 forwards are not recalled or muted solely for their media type.
 Supported authenticated media messages count toward flood thresholds; media is not
 downloaded or interpreted, and text, voice and file names are not guessed to be
 images or videos. Administrators and protected bots remain
 exempt; messages predating rule activation are not penalized.
 
-Flood rules detect three texts/supported media messages from one
-member in five seconds, eight in ten seconds, or five repeated texts in thirty seconds, mute first, then recall the matching
+Flood rules detect five texts/supported media messages from one
+member in three seconds, fifteen in ten seconds, or five repeated texts in thirty seconds.
+After warning grace, mute first, then recall the matching
 burst without waiting for AI. Accepted does not mean confirmed successful;
 uncertain operations must be reconciled, not blindly repeated.
 
@@ -4109,7 +4160,7 @@ quotas, group rules, manager grants or settlement registration. Guidance explain
 individual unmute as a scoped manager command, never an AI operation. Manual
 member mute and whole-group mute/unmute remain retired; automatic penalties,
 flood protection and daily mute/unmute schedules remain governed by settings.
-Flood protection triggers at three messages in five seconds, eight in ten seconds,
+Flood protection triggers at five messages in three seconds, fifteen in ten seconds,
 or five equal normalized texts in thirty seconds, separately for each sender,
 account and group. Both native and receive timestamps must satisfy the window.
 Since October 22, 2026, the audit view also distinguishes unsubmitted moderation
@@ -4649,7 +4700,10 @@ Pro为50 USDT／30天、每天5000次。付费费用上限为后台登记实收�
 邀请统计先建立当前成员基线，再依据官方业务邀请归属确认后续成员；活动积分不自动付款，
 不把原生入群操作者直接当邀请人，不对重复入群重复计奖。排名只统计本地可信文字记录：
 北京时间当日、每页20人，同成员30秒内最多计一条、同文五分钟内不重复计入，
-排除已记录的处罚文字；不是平台完整发言量。
+排除已记录的处罚文字及被撤回消息；不是平台完整发言量。
+`排名`／`发言排行榜`支持翻页。当天实时前30名自动获得独立的发言白名单，
+每30秒刷新，最近30秒发言待核对；名次下降或换日自动退出，不影响手动白名单。
+管理员明确移出后今日不自动加回；黑名单优先，不授管理权、不自动解禁。
 
 当前插件页使用两级导航，旧页签的对应位置如下：
 
@@ -5217,7 +5271,11 @@ against official business attribution, not merely the native join operator.
 Activity points never transfer money or pay repeatedly for rejoining.
 Rankings use retained, trusted text for the Beijing day, twenty members per page:
 at most one count per member per thirty seconds, no repeated text within five
-minutes, excluding recorded sanctioned messages. They are not complete platform totals.
+minutes, excluding recorded sanctioned or recalled messages. They are not complete platform totals.
+`排名` and `发言排行榜` also accept a page number. Today's top thirty receive separate
+automatic speech exemptions, refreshed every thirty seconds with a thirty-second settling delay.
+Dropping rank or midnight removes automatic grants, never manual ones. Explicit removal
+suppresses automatic re-entry for the day; blacklist wins and existing mutes stay in place.
 
 The plugin now uses two-level navigation:
 
@@ -9319,6 +9377,19 @@ Published: wangshangliao-membership-testing.html
 同步日期：2026-10-20（北京时间）。本页区分工具能力、各轮原始证据与当前缺项；
 10月15／16／19日的结论只对应当时执行，不因后续补验改写。
 
+## 2026-10-24 真实 @ 立即禁言及中止收尾
+
+本轮仅测试群1459282，真实@加`黑名单`已验证登记及41760分钟禁言，约2.7秒核实，
+测试名单、禁言、临时权限、窗口及账号启停已恢复。后续群内真实@／可核实回复发送
+`黑名单`会立即提交本群设置时长；下方10月23日“加入不立即处罚”是旧版本历史。
+本轮没有另测真实回复、手机显示或未来实际到期。
+
+固定验收夹具新增`send`，发送前刷新发送账号的完整成员映射，构造真实结构化@；
+失败后关闭窗口，经只读核对使用`abort`，持久标记中止而非通过，不额外解禁未被禁言的目标。
+未知成员操作、当前测试未知发送及处罚意图仍阻断，不自动重试。
+原始摘要差异与已核实的未开通群目录离群变更单列审计，未回滚真实成员状态。
+详见[本轮逐项证据与边界](wangshangliao-testing.md)。
+
 ## 黑名单代码加载与配置验证（2026-10-23，真实重入未测）
 
 北京时间2026-10-23 20:02:56完整重启已加载，在线配置流程通过，本轮真实新重入／禁言未测。
@@ -9720,6 +9791,39 @@ Published: wangshangliao-membership-testing-en.html
 Synchronized October 20, 2026 (Beijing time). Tool capabilities, dated observations
 and outstanding acceptance are separate. Later checks do not rewrite the original
 October 15, 16 or 19 evidence.
+
+## Native Mention Acceptance And Failed-Send Cleanup (October 24, 2026)
+
+Only group1459282 and the three existing adapters participated. A real native
+administrator sent a structured mention plus `黑名单`; one completed `command`
+intent enrolled the test target and submitted41,760 minutes/29 days, accepted by
+the platform and independently present in its current muted-member list. Verification
+took approximately2.7 seconds. No blacklist kick occurred. The test entry was removed
+through normal preview/confirmation, then separately unmuted and checked. Temporary
+native roles, sending admission, windows and the two accounts' disabled states were
+restored. This proves this native-mention path, not a newly tested reply path,
+phone display or future actual expiry.
+
+The previous sender relied on stale member mapping. The dedicated fixture now
+refreshes the sender's complete directory before constructing the actual mention;
+this run observed a mapping change. Public API acceptance and production target
+protection were not broadened. Fixed `test_blacklist` operations now include `send`
+and a separate `abort`. Abort requires a closed window, restored verified membership,
+no target mute, no new native sanction intent and no unresolved fixture send/work.
+It persists `outcome=aborted, passed=false`, performs no native cleanup mutation,
+and can reconcile an expired window or plugin reload. Unrelated historical unknown
+AI sends remain unchanged and are never retried.
+
+Plugin reload preserved PID613188. The first final protection assertion did fail:
+starting an existing adapter synchronized a previously departed, non-enabled group's
+metadata (audit1172), changing present to0 and incrementing epoch/version. Reversing
+only that audited transition in memory exactly reconstructs the original tenants
+digest; all other protected rule, finance and blacklist digests match. The real
+departure was retained, not reverted. Preserve both the failed raw assertion and
+the later reconciliation; do not claim identical raw snapshots.
+Final targeted backend regression:343 passed across four files, with one existing
+audioop deprecation warning; documentation generator:5 passed. Do not add these
+overlapping counts to earlier historical runs.
 
 ## Blacklist Verification Levels (October 23, 2026)
 
@@ -10693,8 +10797,10 @@ with the owner.
 不自动解除已有禁言，也不改变其他管理员的手动处罚。变更独立审计，既有记录和重启均保留。
 白名单不覆盖上文独立黑名单重入规则；黑名单移除和解除禁言分别处理。
 
-- 广告：前三次撤回并警告，后续按5／15／60分钟递进禁言；不自动踢人。
-- 刷屏：同一成员5秒3条、10秒8条文字或图片，或30秒5条重复文字；先禁言，再撤回对应整批消息，不识别图片／视频广告内容。
+- 广告与刷屏：每轮前三次成功撤回警告，之后按1／3／10分钟禁言；10分钟结束后重新三次警告，不自动踢人。
+- 刷屏：同一成员3秒5条、10秒15条文字或媒体，或30秒5条重复文字；一个持续批次只计一次违规，撤回对应整批消息，不识别图片／视频广告内容。
+- 今日有效发言前30名自动白名单：北京时间，每30秒刷新，发言留30秒核对期；被撤回消息不计数。沿用30秒内最多一条、同文5分钟去重的防刷榜规则。
+- 自动白名单按接收机器人和群隔离、精确绑定原生身份，名次下降或换日退出；不改手动名单，不授管理权限、不自动解禁，黑名单优先。管理员明确移出后当日不自动加回，后台标明“今日前30名”。
 - 广告和刷屏使用独立于AI等待的执行链；证据丢失时停止受影响自动处罚。
 - 权限不足或明确未提交记失败；实际发出且结果无法确认才记结果不明。
 - 不自动重放未知处罚；关闭广告后旧广告处罚不得因刷屏仍开着而继续。
@@ -11135,13 +11241,63 @@ Published: wangshangliao-testing.html
 
 # 旺商聊测试与验收
 
-同步日期：2026-10-23（北京时间）。[文档目录](../../wangshangliao.md) ·
+同步日期：2026-10-24（北京时间）。[文档目录](../../wangshangliao.md) ·
 [架构权限](wangshangliao-architecture-permissions.md) ·
 [按日期逐项证据](wangshangliao-acceptance-20261015.md) ·
 [问题补齐](wangshangliao-remediation-20261015.md)。
 
 本页说明当前方法，不将历史结果当作本次复测。离线回归、合成浏览器、真实平台回执、
 官方手机客户端观察和供应商账单分别留证。按日期报告保留原结果，不为消除缺项改写证据。
+
+## 2026-10-24：刷屏循环与每日前三十名白名单
+
+本轮完整重启于北京时间15:46:27完成，PID613188→3482878。
+离线相关回归1686项通过、2项跳过，文档生成器5项通过；统计不与其他历史轮次累加。
+新阈值为3秒5条、10秒15条、30秒5条相同文字；
+连续批次只记一次违规，三次撤回警告后依次禁言1、3、10分钟，最后10分钟结束再开新轮。
+覆盖两轮完整推进、重复投递、重启恢复、真实身份改变、未知回执挂起，
+以及最终回执成功但循环记账中断后的只读恢复，不重发原生处罚。
+
+自动白名单覆盖北京时间日界、精确机器人／群／UID／原生身份、前三十名及并列稳定排序，
+撤回及未知撤回消息排除、最近30秒暂缓授予、每30秒刷新、90秒过期失效。
+验证手动名单保留、手动移除当天不自动加回、黑名单优先，以及切群、暂停、
+映射改变、停用和撤权时不发布旧授权。排行保留每30秒一条、同文五分钟去重的防刷统计，
+不把图片／表情／视频或命令计入有效文字数。
+
+320／390／1440px合成页面无横向溢出和页面异常，自动来源与有效条数可见；
+页面构建及已部署新页面读取通过。当前保留账本的三正式群排行计算约35—91毫秒，
+仅为当前数据量测量，不能当作完整消息链路或极限容量压测。
+在线确认汇赢1417872、鼎峰1459534、真龙1516387各有30条有效自动授权，
+后台读取和精确身份豁免均通过，暂停群无自动授权。
+正式群业务规则、手动名单、黑名单、AI、财务及账号启停保护摘要未变，
+pending／processing队列为空；另两测试账号未启用。
+**未用真实成员试罚，未完成本轮真实处罚全周期或新的手机客户端观察。**
+加载与恢复边界见[维护记录](../../wangshangliao-maintenance.md)。
+
+## 2026-10-24：真实 @ 黑名单禁言联测与失败收尾
+
+仅测试群1459282、三个既有接入账号参与；正式群未试罚。本轮原生管理员真实@
+测试目标并发送`黑名单`，已登记名单、产生一条`command`来源的已完成禁言意图，
+平台受理41760分钟（29天），最新原生禁言成员查询确认命中；从发送到核实约2.7秒。
+未踢人，随后经正式预览／确认移除测试名单，单独解禁并核实，恢复临时群管权限、
+发送授权、测试窗口及两个账号原停用状态。这里只证明本轮真实@链路，
+不冒称本轮真实回复链路、手机显示或未来实际到期也已验收。
+
+原失败入口依赖旧发送方成员缓存；本轮发送前刷新完整目录，实际观测到身份映射变化，
+再经原接入器发送结构化@，不猜昵称、不使用纯文字假@，也不放宽公共发送API或生产保护。
+专用`test_blacklist`入口增加固定`send`及独立`abort`步骤：未知结果不重试；
+关闭测试窗口后，只有成员恢复、目标未禁言、当前测试无原生处罚意图、无未知在途收发、
+成员操作为空或完整核实时才允许中止。中止持久记录`outcome=aborted, passed=false`，
+不为“补收尾”额外禁言／解禁，不将失败写成通过；支持原窗口过期及插件重载后的核对。
+既往无关AI发送的unknown原样保留，不能借本轮清理重试或抹除。
+
+插件热重载后主进程PID613188不变。最终原始tenants整体摘要有差异：
+临时启用既有账号时，完整目录同步核实一个未开通群的离群状态，
+对应审计1172，present置0、epoch/version各加1。仅在内存逆向重建这一条可精确匹配原摘要，
+其余群配置、规则、财务和黑名单摘要相符；未把已核实离群伪造回“在群”或整库回滚。
+保留首轮保护断言失败记录与后续核对，不宣称所有原始摘要全同。
+最终本轮四个定向后端文件合计343项回归通过（1条既有audioop弃用警告），
+文档生成器5项通过；两项统计不与其他历史轮次累加。
 
 ## 黑名单直接禁言：代码已加载／在线配置通过／真实重入未测（2026-10-23）
 
@@ -11775,6 +11931,21 @@ AI只能解释，不能执行或代确认；本次文档更新不执行生产操
 生产群`1516387`当前已启用；下文带日期的生产补验、保留样本及旧暂停记录均为历史证据，
 不能把“两个正式群关闭”继续当作当前状态，也不据此推断其他群已启用。
 
+## 今日发言排行与自动白名单
+
+2026-10-24起，`排名`（或`发言排行榜`）读取北京时间当天有效文字发言。
+每日实时前30名自动豁免本机器人在本群的普通自动撤回、禁言；不授管理权、不解除已有禁言。
+后台白名单标明“今日前30名”及有效条数，与手动白名单区分。
+
+- 排名沿用防刷榜限制：同成员30秒内最多一条，同文5分钟内不重复计数；机器人、命令和纯表情／媒体不计文字榜。
+- 原生撤回通知、机器人已受理撤回、刷屏整批撤回均不计入；撤回未知或发送中也不用于获取自动豁免。
+- 自动计算排除最近30秒待核对消息，每30秒刷新一次；原生撤回在下一次刷新扣减，不追溯补罚过去发言。
+- 名次掉出前30或北京时间换日自动退出；手动名单不受影响。管理员明确移出后，当天不自动加回。
+- 名单按接收机器人、群、UID与原生身份隔离。黑名单立即优先，不会被自动白名单覆盖。
+- 仅由后台定时任务异步读取有索引的当天账本，不在单条消息处理路径扫描全天历史。
+  每次最多100000条；超限或读取失败停止续期，自动授权最长90秒且不过当日零点，不展示伪造的完整榜。
+- 自动记录独立保存在`automatic_exemptions.sqlite3`；手动白名单、黑名单及其审计不合并改写。
+
 ## 普通审核仅手动踢出
 
 公共合并模式运行视图强制 `moderation.manual_kick_only=true`；这不是对所有实例
@@ -11782,7 +11953,9 @@ AI只能解释，不能执行或代确认；本次文档更新不执行生产操
 AI不能修改此限制，也不能重新开启 `auto_kick`，旧自动踢出请求在执行器再次拒绝。
 手动确认仍需原管理员、同一对话、新消息、有效确认码及完整动作授权。
 
-递进审核先成功撤回三次，不禁言；之后撤回并依次禁言5、15、60分钟，后续每次最多60分钟。
+2026-10-24规则调整：广告与刷屏共用每轮三次成功撤回警告；之后撤回并依次禁言1、3、10分钟。
+10分钟禁言结束后，下一次违规重新从第一次警告开始。进行中的最后10分钟不消耗下一轮警告。
+账号、群、成员及原生身份隔离；次数与到期点跨重启保留。失败或未知不升级、不重置。
 原踢出关键词在递进模式仅参与违规判断，不再升级踢人；旧关键词模式不执行踢出词规则。
 自动递进执行器不再保留其他实例的自动踢出分支；旧 `auto_kick=true` 配置和
 已持久化的自动踢出意图均不能重新启用它。历史记录保留，不删除或重置。
@@ -11840,15 +12013,15 @@ AI不能修改此限制，也不能重新开启 `auto_kick`，旧自动踢出请
 | 场景 | 撤回／计次 | 禁言 |
 | --- | --- | --- |
 | 普通高置信广告，尚未满三次成功撤回 | 撤回受理后计一次警告；失败、未知不计 | 不禁言 |
-| 普通高置信广告，已有三次成功撤回 | 本条原消息单独撤回并记账 | 重新核权后按5／15／60分钟递进；撤回失败不自动跳过禁言 |
-| 命中同成员刷屏阈值 | 仅撤回本批可信证据中的消息，不清扫其他发言 | 不走广告前三次宽限；同一持续批次只禁言一次 |
+| 普通高置信广告，已有三次成功撤回 | 本条原消息单独撤回并记账 | 重新核权后按1／3／10分钟递进；撤回失败不自动跳过禁言 |
+| 命中同成员刷屏阈值 | 仅撤回本批可信证据中的消息，不清扫其他发言；一个持续批次只算一次违规 | 共用三次警告及1／3／10分钟循环；同一持续批次只禁言一次 |
 | 普通图片、表情包、视频、合并聊天记录，未命中刷屏或独立文字广告证据 | 不因类型自动撤回；广告审核开启也不禁止普通媒体 | 不禁言，不计违规次数 |
 | 本次禁言失败或回执未知 | 仍可在权限有效时独立撤回；两项结果不混为成功 | 失败不升级；已有未知禁言时冻结后续自动禁言，不能盲目重发 |
 | 管理员或本人撤回的原生通知 | 单独归属；通知本身不作为机器人成功回执，不增加自动警告次数 | 人工撤回／禁言不增加自动处罚次数 |
 | 拆分广告的旧证据已撤回，或撤回回执未知／发送中 | 关联读取时不再使用该条拼接普通号码；当前号码已处于该状态时不作新的关联处罚 | 不因这组失效证据触发禁言 |
 | 历史消息、身份不明、权限撤销、受保护目标 | 不自动处罚；其他群／成员不能拼接证据 | 不自动禁言，不因重启额外授权或补罚 |
 
-当前刷屏阈值为3秒3条、10秒8条，或30秒同文5条。成员、账号、群及规则版本分别隔离。
+当前刷屏阈值为3秒5条、10秒15条，或30秒同文5条。成员、账号、群及规则版本分别隔离。
 图片、视频与合并聊天记录按可信入站消息参与刷屏条数统计，不因单条媒体自动处罚；
 是否开启广告审核不改变这一边界，独立的刷屏规则仍有效。
 不识别图片／二维码内容，不把文字“图片”“视频”、文件后缀、普通引用或语音猜成媒体违规。
@@ -11864,10 +12037,10 @@ AI不能修改此限制，也不能重新开启 `auto_kick`，旧自动踢出请
 
 | 本轮已受理的自动禁言 | 本次处理 |
 | --- | --- |
-| 第一次 | 撤回原消息，并禁言5分钟 |
-| 第二次 | 撤回原消息，并禁言15分钟 |
-| 第三次 | 撤回原消息，并禁言60分钟，不踢出 |
-| 第四次禁言及之后 | 撤回原消息，并禁言60分钟；旧自动踢出配置不能改变此上限 |
+| 第一次 | 撤回原消息，并禁言1分钟 |
+| 第二次 | 撤回原消息，并禁言3分钟 |
+| 第三次 | 撤回原消息，并禁言10分钟，不踢出 |
+| 10分钟结束后的下一次违规 | 重新开始本轮三次撤回警告，再按1／3／10分钟循环 |
 
 时长由执行器固定控制，不允许模型任意指定。公共模式由逐群运行视图强制使用递进；
 旧实例级开关的默认关闭仅用于兼容，不代表公共群默认关闭；
@@ -11890,8 +12063,9 @@ AI关闭或故障时采用规范化后的字面匹配兜底，明显举报、引
 
 次数沿用现有持久化自动禁言账本，开启新模式不清零既有受理记录；
 人工禁言不计数，失败不升级，未知自动禁言冻结后续自动禁言；自动踢出始终禁用。
-前三次成功撤回的警告账本与自动禁言受理账本相互独立，不是每天或禁言到期自动清零；
-手动解禁也不清除它们。自动禁言档位只按相同账号、群、成员及NIM映射的未关闭受理记录计算。
+前三次成功撤回的警告账本与自动禁言受理账本相互独立，历史审计不删除。
+换日、1／3分钟处罚到期或手动解禁不重置本轮；只有最终10分钟已受理处罚到期，
+才关闭本轮受理计数并重新开始三次警告。自动禁言档位只按相同账号、群、成员及NIM映射的未关闭受理记录计算。
 重复消息不重复执行。群主、平台管理员及已接入机器人继续免自动处罚。
 递进模式不使用旧模式的每群处罚冷却，不会因此跳过下一条有效违规。
 插件页「处罚记录」分别展示禁言时长和原消息撤回结果。
@@ -11948,11 +12122,12 @@ AI关闭或故障时采用规范化后的字面匹配兜底，明显举报、引
 权限、身份或角色变化继续中止动作。管理页现有处罚／撤回列显示失败原因和未提交状态，
 原生撤回来源与机器人本地回执分别保留，不把其他管理员的撤回记成机器人成功。
 
-刷屏不经过普通内容违规的前三次撤回宽限：5秒内3条、10秒内8条，或30秒内5条相同规范化
-文本命中后，先尝试禁言，再撤回本次刷屏证据中的全部消息。速率刷屏撤回对应5秒／10秒窗口，
+当前刷屏经过每轮三次撤回警告：3秒内5条、10秒内15条，或30秒内5条相同规范化
+文本命中后，撤回本次刷屏证据中的全部消息。警告耗尽后先尝试禁言，再独立逐条撤回。
+速率刷屏撤回对应3秒／10秒窗口，
 重复文本刷屏只撤回对应同文消息，多种同时命中取并集，不清扫成员其他正常或历史发言。
-递进开启时，独立刷屏批次使用已有5／15／60分钟受理计数；未开启递进则沿用1分钟。
-原生图片也进入速率计数：同成员五秒内三条、十秒内八条图片，或图片与文字合计达到对应条数，
+递进开启时，独立刷屏批次与广告共用三次警告及1／3／10分钟循环。
+原生图片也进入速率计数：同成员三秒内五条、十秒内十五条图片，或图片与文字合计达到对应条数，
 均可触发同一整批处理。图片正文为空，不算相同文字，图片不会触发五条同文规则；
 这不包含OCR、二维码识别、图片内容广告审核或相同图片指纹检测。
 只将上游时间在本地接收前10秒至后2秒内的新消息计入刷屏窗口，并同时约束上游与接收时间。
@@ -12041,7 +12216,7 @@ AI关闭或故障时采用规范化后的字面匹配兜底，明显举报、引
 回归使用原生`Ledger.ingest`、`observe_recall`和`reserve/finish`链路，不再仅依赖人工构造的
 `recalled`消息状态；这属于离线回归，不代表本轮已对真实成员执行处罚验收。
 关联不依赖防刷屏开关，不改变刷屏检测的独立窗口，不追罚窗口内的旧消息。
-分类后仍须当前成员、原生权限、运行状态和广告开关检查，沿用前三次成功撤回警告及5／15／60分钟递进。
+分类后仍须当前成员、原生权限、运行状态和广告开关检查，沿用每轮三次成功撤回警告及1／3／10分钟循环。
 
 ### 本群管理员录入与修改
 
@@ -12290,6 +12465,64 @@ Published: wangshangliao-maintenance.html
 更新：2026-10-24（北京时间）。[文档目录](wangshangliao.md)；
 [当前架构与权限](zh/platform/wangshangliao-architecture-permissions.md)。
 适用于公共合并模式；操作前核对当前账号、群和有效配置，不能沿用旧AI管理工具流程。
+
+## 2026-10-24 三账号真实验收结果
+
+仅测试群1459282，既有三个账号及中性文案。3秒4条不处罚；
+3秒5条、10秒15条、30秒5条同文分别触发一批违规，整批撤回、每批只计一次，
+第1／2／3次警告及后续1／3／10分钟禁言均有实际收件和平台回执。
+1、3分钟自然到期读回通过。10分钟到期后3秒首查仍在名单，原失败记录保留；
+稍后只读确认自然移除，期间没有解禁或续封调用，不能声明秒级到期准确。
+
+沿用原处罚账本续验而不重放处罚或重置历史：下一批恢复为第1次警告，
+撤回文字不计入自动授予，一条有效文字经结算获得自动白名单，
+随后5条刷屏内容未处罚。独立观察账号逐条收件，不启用其群业务。
+测试规则、原生角色、账号启停和窗口恢复；正式群及财务等保护摘要不变。
+无新增手机客户端观察。此处不将10分钟首查失败或跳过的测试算作通过。
+
+全量旺商聊专项8233通过、55条件跳过、2条既有弃用警告；
+前端203项通过，49篇教程在390／1440px无缺图、溢出或脚本异常；
+名单页面在320／390／1440px检查自动来源及手动名单共存。
+退役旧递进实测脚本，保留原始失败审计和必要受控验收工具。
+GitHub推送、云端CI及合并另以远端回执核对，不以本地通过冒称云端全绿。
+
+English: fixed-group native trials verified all thresholds, warnings, accepted
+mute durations, cycle reset and ranking exemptions. The ten-minute expiry list
+was initially late and later confirmed clear without any release or renewal;
+the original failed check remains evidence. Neither exact-deadline nor phone
+acceptance is claimed. Temporary state and protected business data were restored.
+
+## 2026-10-24 刷屏循环、每日自动白名单与受控验收
+
+刷屏阈值更新为3秒5条、10秒15条、30秒5条相同文字。
+同一连续刷屏批次只累计一次违规，命中消息分别撤回；每轮前三次撤回警告，
+之后依次禁言1、3、10分钟，最终10分钟处罚自然结束后重新累计。
+处罚回执未知不重试、不提前重置；循环状态跨重启保留。
+
+每日按北京时间统计有效文字发言，提供`发言排行榜`、`发言排行`及原`排名`入口。
+前三十名每30秒刷新为独立自动发言白名单，午夜重新计算；最近30秒发言暂不参与授予，
+已撤回或撤回结果未知的消息不计数。保留排行防刷统计：每人每30秒最多计一条，
+五分钟内相同文字不重复计数；纯图片、表情、视频和命令不计文字排行。
+手动白名单不被覆盖；黑名单优先，主动移除后当天不自动加回。
+短期授权最长90秒，刷新故障时到期失效，不将旧排行永久写入手动名单。
+
+固定三账号验收入口为`scripts/check_wsl_flood_cycle_live.py`。
+默认只预览，`--apply`仅操作测试群1459282；每段窗口不超过300秒。
+窗口绑定完整原生成员目录、原账号连接及当前群规则，不放宽普通机器人保护。
+被动收件观察仅接受预登记的中性消息，不启用观察账号的群业务，不改变正式群规则。
+自然等待1／3／10分钟处罚到期，不用提前解禁冒充循环验证。
+失败收尾逐项尝试关窗、恢复旧格式规则、撤回临时群管及恢复账号启停；
+其中一项失败不能阻断其他恢复。未知发送／处罚不会重试，原始失败证据保留。
+
+此前离线专项1686通过、2项条件跳过及页面320／390／1440px检查，
+不代替本轮真实处罚、手机客户端显示或极限容量验收。
+
+English: thresholds are5/3s,15/10s and5 identical texts/30s. Each cycle has
+three recall warnings followed by1/3/10-minute mutes; only expiry of the final
+accepted mute reopens warning grace. Daily settled-text top30 grants expire
+independently of manual whitelists. The fixed-group rehearsal uses predeclared
+neutral native messages and a passive independent receiver, not production
+permission exemptions. Cleanup attempts each restoration independently.
 
 ## 2026-10-24 群内黑名单立即禁言与排队修复
 
@@ -14456,13 +14689,18 @@ October19; the prior long-card unknown remains recorded and is never replayed.
 
 - 接收／权限／活动：[check_wsl_integrated_live.py](check_wsl_integrated_live.py)、
   [check_wsl_authorization_live.py](check_wsl_authorization_live.py)、
-  [check_wsl_progressive_live.py](check_wsl_progressive_live.py)、
+  [check_wsl_flood_cycle_live.py](check_wsl_flood_cycle_live.py)、
   [check_wsl_flood_live.py](check_wsl_flood_live.py)、
   [check_wsl_workflows_live.py](check_wsl_workflows_live.py)、`check_wsl_tree_menu_live.py`。
   其中真实消息、禁言、公告和活动脚本可能修改测试状态，不能把失败当作安全重跑依据。
   特别是`check_wsl_authorization_live.py`没有`--apply`预览门禁，直接执行即开始真实流程；
   它仍被公共辅助库与回归引用，保留不等于适合当前线上重跑。
   恢复配置不等于没有发送或没有历史副作用。
+  旧`check_wsl_progressive_live.py`已退役：其旧测试群与处罚档位不适用于当前部署，
+  且无运行时或测试引用。替代脚本默认只预览，显式`--apply`才在固定测试群
+  1459282执行；1／3／10分钟均自然等待，窗口分段且每段不超过300秒。
+  到期回读延迟与未知结果单独记录；只读确认旧处罚结束后可用
+  `--resume-directory`沿用原账本续验排名，不重发处罚、不重置违规计数。
 - 私聊／页面：[check_wsl_private_invitations_live.py](check_wsl_private_invitations_live.py)、
   [check_wsl_ai_dialogue_live.py](check_wsl_ai_dialogue_live.py)、
   [check_wsl_migration_dialogue.py](check_wsl_migration_dialogue.py)、
