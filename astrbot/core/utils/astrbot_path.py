@@ -54,7 +54,7 @@ def resolve_path_within(
         parent, name = os.path.split(candidate)
         if name in {"", ".", ".."}:
             raise ValueError("Invalid directory entry")
-        candidate = os.path.join(os.path.realpath(parent), name)
+        candidate = os.path.normpath(os.path.join(os.path.realpath(parent), name))
     else:
         candidate = os.path.realpath(candidate)
     if candidate == root:
