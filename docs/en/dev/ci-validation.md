@@ -32,6 +32,9 @@ Permission tests verify the private-mode calls on every OS and actual POSIX
 mode bits on Unix; this does not assert that Windows ACLs equal Unix modes.
 Native permission refresh tests use a fixed clock to ensure a sequential
 forced read cannot be mistaken for a concurrent coalesced read.
+The dashboard finance-window lock regression rejects recursive acquisition
+directly and exercises an injected shared-lock failure. It does not infer a
+deadlock from the time taken to initialize SQLite on a hosted runner.
 
 CodeQL findings are fixed in application code, not hidden by query exclusions,
 alert dismissal or weaker branch policies. Path access must use a normalized,
