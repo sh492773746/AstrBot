@@ -2292,6 +2292,149 @@ async def test_ensure_plugin_requirements_does_not_mask_install_error_when_clean
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["loaded", "failed", "failed_install"])
+@pytest.mark.parametrize("destination", ["internal", "external", "missing"])
+async def test_uninstall_symlink_removes_only_selected_entry(
+    plugin_manager_pm, monkeypatch, require_symlink, operation, destination
+):
+    store = Path(plugin_manager_pm.plugin_store_path)
+    target = (
+        store / "other_plugin"
+        if destination == "internal"
+        else require_symlink / "other_plugin"
+    )
+    if destination != "missing":
+        target.mkdir()
+        (target / "keep.txt").write_text("keep", encoding="utf-8")
+    link = store / TEST_PLUGIN_DIR
+    link.symlink_to(target, target_is_directory=True)
+    config = store.parent / "config"
+    config.mkdir()
+    monkeypatch.setattr(plugin_manager_pm, "plugin_config_path", str(config))
+    monkeypatch.setattr(plugin_manager_pm, "_terminate_plugin", AsyncMock())
+    monkeypatch.setattr(plugin_manager_pm, "_unbind_plugin", AsyncMock())
+    if operation == "loaded":
+        plugin = MockStar()
+        plugin.module_path = "data.plugins.helloworld.main"
+        plugin.plugin_id = None
+        cast(Any, plugin_manager_pm.context).stars.append(plugin)
+        await plugin_manager_pm.uninstall_plugin(TEST_PLUGIN_NAME)
+    elif operation == "failed":
+        plugin_manager_pm.failed_plugin_dict[TEST_PLUGIN_DIR] = {
+            "name": TEST_PLUGIN_NAME
+        }
+        await plugin_manager_pm.uninstall_failed_plugin(TEST_PLUGIN_DIR)
+    else:
+        await plugin_manager_pm._cleanup_failed_plugin_install(
+            TEST_PLUGIN_DIR, str(link)
+        )
+    assert not os.path.lexists(link)
+    if destination != "missing":
+        assert (target / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["loaded", "failed", "failed_install"])
+async def test_uninstall_rejects_escape_before_unloading(
+    plugin_manager_pm, monkeypatch, operation
+):
+    store = Path(plugin_manager_pm.plugin_store_path)
+    outside = store.parent / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep", encoding="utf-8")
+    terminated, unbound = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(plugin_manager_pm, "_terminate_plugin", terminated)
+    monkeypatch.setattr(plugin_manager_pm, "_unbind_plugin", unbound)
+    plugin = MockStar()
+    plugin.root_dir_name = "../outside"
+    plugin.module_path = "data.plugins.helloworld.main"
+    plugin.plugin_id = None
+    cast(Any, plugin_manager_pm.context).stars.append(plugin)
+    plugin_manager_pm.failed_plugin_dict["../outside"] = {"name": TEST_PLUGIN_NAME}
+    with pytest.raises(ValueError):
+        if operation == "loaded":
+            await plugin_manager_pm.uninstall_plugin(TEST_PLUGIN_NAME)
+        elif operation == "failed":
+            await plugin_manager_pm.uninstall_failed_plugin("../outside")
+        else:
+            await plugin_manager_pm._cleanup_failed_plugin_install(
+                "../outside", str(outside)
+            )
+    terminated.assert_not_awaited()
+    unbound.assert_not_awaited()
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_config", [False, True])
+@pytest.mark.parametrize("delete_data", [False, True])
+async def test_optional_cleanup_preserves_targets_and_unselected_paths(
+    plugin_manager_pm, monkeypatch, require_symlink, delete_config, delete_data
+):
+    data = Path(plugin_manager_pm.plugin_store_path).parent
+    config = data / "config"
+    config.mkdir()
+    target_file = require_symlink / "preserved.json"
+    target_file.write_text("keep", encoding="utf-8")
+    config_link = config / f"{TEST_PLUGIN_DIR}_config.json"
+    config_link.symlink_to(target_file)
+    target_dir = require_symlink / "preserved-data"
+    target_dir.mkdir()
+    (target_dir / "keep.txt").write_text("keep", encoding="utf-8")
+    data_links = []
+    for name in ("plugin_data", "plugins_data"):
+        parent = data / name
+        parent.mkdir()
+        link = parent / TEST_PLUGIN_DIR
+        link.symlink_to(target_dir, target_is_directory=True)
+        data_links.append(link)
+    monkeypatch.setattr(plugin_manager_pm, "plugin_config_path", str(config))
+    checks = []
+    original = star_manager_module.resolve_path_within
+
+    def checked_path(base, *args, **kwargs):
+        checks.append(Path(base))
+        return original(base, *args, **kwargs)
+
+    monkeypatch.setattr(star_manager_module, "resolve_path_within", checked_path)
+    await plugin_manager_pm._cleanup_plugin_optional_artifacts(
+        root_dir_name=TEST_PLUGIN_DIR,
+        plugin_label=TEST_PLUGIN_NAME,
+        delete_config=delete_config,
+        delete_data=delete_data,
+    )
+    expected = ({config} if delete_config else set()) | (
+        {link.parent for link in data_links} if delete_data else set()
+    )
+    assert set(checks) == expected
+    assert os.path.lexists(config_link) is not delete_config
+    assert all(os.path.lexists(link) is not delete_data for link in data_links)
+    assert target_file.read_text(encoding="utf-8") == "keep"
+    assert (target_dir / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.asyncio
+async def test_failed_install_cleanup_rejects_resolved_alias_target(
+    plugin_manager_pm, monkeypatch, require_symlink
+):
+    store = Path(plugin_manager_pm.plugin_store_path)
+    target = store / "other_plugin"
+    target.mkdir()
+    (target / "keep.txt").write_text("keep", encoding="utf-8")
+    link = store / TEST_PLUGIN_DIR
+    link.symlink_to(target, target_is_directory=True)
+    monkeypatch.setattr(
+        plugin_manager_pm, "plugin_config_path", str(store.parent / "config")
+    )
+    with pytest.raises(ValueError):
+        await plugin_manager_pm._cleanup_failed_plugin_install(
+            TEST_PLUGIN_DIR, str(target)
+        )
+    assert link.is_symlink()
+    assert (target / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.asyncio
 async def test_cleanup_plugin_optional_artifacts_clears_kv_when_plugin_id_present(
     plugin_manager_pm: PluginManager, monkeypatch
 ):

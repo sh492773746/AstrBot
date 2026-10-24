@@ -16,7 +16,12 @@ from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
 
 
 @pytest_asyncio.fixture
-async def metrics_model():
+async def metrics_headers_gate():
+    return SimpleNamespace(received=asyncio.Event(), release=asyncio.Event())
+
+
+@pytest_asyncio.fixture
+async def metrics_model(metrics_headers_gate):
     payload = {
         "choices": [{"message": {"content": "local response"}}],
         "usage": {
@@ -30,7 +35,8 @@ async def metrics_model():
     async def respond(request):
         body = await request.json()
         if body.get("delay_headers"):
-            await asyncio.sleep(0.1)
+            metrics_headers_gate.received.set()
+            await metrics_headers_gate.release.wait()
         return web.json_response(payload)
 
     app = web.Application()
@@ -43,6 +49,7 @@ async def metrics_model():
     try:
         yield url + "/chat/completions", payload
     finally:
+        metrics_headers_gate.release.set()
         await runner.cleanup()
 
 
@@ -142,7 +149,7 @@ async def test_http_failure_after_headers_records_error_without_estimated_usage(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("before_headers", [False, True])
 async def test_timeout_trace_identifies_phase_without_private_exception_text(
-    monkeypatch, metrics_model, before_headers
+    monkeypatch, metrics_model, metrics_headers_gate, before_headers
 ):
     writer, span = AsyncMock(), Mock()
     monkeypatch.setattr(
@@ -155,13 +162,24 @@ async def test_timeout_trace_identifies_phase_without_private_exception_text(
         ) as (trace, _):
             async with aiohttp.ClientSession(
                 trace_configs=[trace],
-                timeout=aiohttp.ClientTimeout(total=0.03 if before_headers else 2),
+                timeout=aiohttp.ClientTimeout(total=None),
             ) as http:
-                async with http.post(
-                    url, json={"delay_headers": before_headers}
-                ) as response:
-                    await response.read()
-                    raise TimeoutError("private credentials must not appear")
+                if before_headers:
+                    pending = asyncio.create_task(
+                        http.post(url, json={"delay_headers": True})
+                    )
+                    try:
+                        await metrics_headers_gate.received.wait()
+                        assert not pending.done()
+                        await asyncio.wait_for(pending, timeout=0)
+                    finally:
+                        metrics_headers_gate.release.set()
+                        pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
+                else:
+                    async with http.post(url, json={}) as response:
+                        await response.read()
+                        raise TimeoutError("private credentials must not appear")
     result = span.record.call_args.kwargs
     assert span.record.call_args.args == ("wsl_model_result",)
     assert result["error_type"] == "TimeoutError"

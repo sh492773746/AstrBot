@@ -774,12 +774,22 @@ async def test_test_control_secondary_code_error_does_not_seed_or_grant(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("inject_reentry", [False, True])
 async def test_dashboard_test_window_does_not_reenter_control_lock(
-    sandbox_control, monkeypatch
+    sandbox_control, monkeypatch, inject_reentry
 ):
     from astrbot.builtin_stars.wangshangliao_moderation import dashboard
 
+    class ReentryGuard(asyncio.Lock):
+        async def acquire(self):
+            assert not self.locked(), "dashboard reentered the control lock"
+            return await super().acquire()
+
     control = sandbox_control
+    assert control.rpc.finance_test_lock is not control.rpc.lock
+    control.rpc.lock = ReentryGuard()
+    if inject_reentry:
+        control.rpc.finance_test_lock = control.rpc.lock
     control.owner.rpc = control.rpc
     page = object.__new__(dashboard.DashboardPage)
     page.authorize = AsyncMock()
@@ -800,7 +810,14 @@ async def test_dashboard_test_window_does_not_reenter_control_lock(
         ),
     )
     before = ledger_dump(control.domain.store)
-    await asyncio.wait_for(page.open_service(), timeout=5)
+    if inject_reentry:
+        with pytest.raises(AssertionError, match="reentered the control lock"):
+            await page.open_service()
+        assert not control.rpc.lock.locked()
+        control.owner.roster.assert_not_awaited()
+        assert ledger_dump(control.domain.store) == before
+        return
+    await page.open_service()
     assert not control.rpc.lock.locked()
     assert control.owner.finance_chat.test_until > time.time()
     control.owner.roster.assert_awaited_once()

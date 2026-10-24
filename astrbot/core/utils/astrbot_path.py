@@ -21,7 +21,11 @@ from astrbot.core.utils.runtime_env import is_packaged_desktop_runtime
 
 
 def resolve_path_within(
-    base: str | Path, relative: str | Path, *, allow_root: bool = False
+    base: str | Path,
+    relative: str | Path,
+    *,
+    allow_root: bool = False,
+    preserve_leaf: bool = False,
 ) -> Path:
     """Resolve a relative path without allowing traversal or symlink escape.
 
@@ -29,6 +33,8 @@ def resolve_path_within(
         base: Trusted directory containing the requested resource.
         relative: Untrusted relative resource path.
         allow_root: Whether the resource may be the base directory itself.
+        preserve_leaf: Resolve only the parent for deletion, keeping a final
+            symlink as a directory entry instead of following its target.
 
     Returns:
         A normalized path contained by the trusted directory.
@@ -43,7 +49,14 @@ def resolve_path_within(
     if requested.is_absolute():
         raise ValueError("Absolute paths are not allowed")
     root = os.path.realpath(base)
-    candidate = os.path.realpath(os.path.join(root, raw))
+    candidate = os.path.join(root, raw)
+    if preserve_leaf:
+        parent, name = os.path.split(candidate)
+        if name in {"", ".", ".."}:
+            raise ValueError("Invalid directory entry")
+        candidate = os.path.normpath(os.path.join(os.path.realpath(parent), name))
+    else:
+        candidate = os.path.realpath(candidate)
     if candidate == root:
         if allow_root:
             return Path(root)
