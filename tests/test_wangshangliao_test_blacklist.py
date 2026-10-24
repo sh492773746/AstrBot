@@ -2,12 +2,14 @@
 
 import asyncio
 import copy
+import os
 import socket
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict, replace
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -363,8 +365,12 @@ async def test_begin_binds_only_original_window_without_business_or_window_edits
         copy.deepcopy(lab.tenant),
         dict(lab.receiver.test_window.__dict__),
     )
-    result = await lab.begin()
+    with patch.object(
+        Path, "chmod", autospec=True, side_effect=Path.chmod
+    ) as chmod:
+        result = await lab.begin()
     fixture = lab.service._blacklist_fixture
+    chmod.assert_any_call(fixture.path, 0o600)
     assert result == {
         "test_only": True,
         "operation_id": OPERATION,
@@ -378,7 +384,8 @@ async def test_begin_binds_only_original_window_without_business_or_window_edits
         getattr(fixture.window, key) == value for key, value in before[2].items()
     )
     assert not (fixture.path.parents[2] / "member_blacklist.sqlite3").exists()
-    assert fixture.path.stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert fixture.path.stat().st_mode & 0o777 == 0o600
     assert (await lab.begin())["replayed"]
     lab.upstream.assert_not_awaited()
 

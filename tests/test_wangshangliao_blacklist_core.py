@@ -310,13 +310,19 @@ def test_duration_change_and_aba_restore_cannot_reauthorize_reserved_work(store)
     authorize(fresh)
 
 
-def test_delayed_old_join_never_inherits_a_new_duration(store):
+def test_delayed_old_join_never_inherits_a_new_duration(store, monkeypatch):
+    clock = [time.time()]
+    monkeypatch.setattr(blacklist, "time", SimpleNamespace(time=lambda: clock[0]))
     store.configure("1", "5", 1, "9", lambda: None)
-    joined_at = time.time()
+    joined_at = clock[0]
+    clock[0] += 1
     store.configure("1", "5", 41760, "9", lambda: None)
     assert store.reserve("1", "5", "2", "22", "101", joined_at, lambda: None) is None
     # Ignoring old evidence creates no unknown intent and doesn't block a new join.
-    current = reserve(BlacklistStore("bot"), "102")
+    clock[0] += 1
+    current = BlacklistStore("bot").reserve(
+        "1", "5", "2", "22", "102", clock[0], lambda: None
+    )
     assert current.minutes == 41760
     authorize(current)
 
