@@ -20,13 +20,23 @@ jobs:
       PYTHONUTF8: "1"
       ASTRBOT_CI_TEST_TIMEOUT_SECONDS: "2400"
       ASTRBOT_CI_SHARD_INDEX: ${{ matrix.shard }}
-      ASTRBOT_CI_SHARD_COUNT: "4"
+      ASTRBOT_CI_SHARD_COUNT: ${{ matrix.os == 'windows-latest' && '8' || '4' }}
     strategy:
       fail-fast: false
       matrix:
         # Keep macOS coverage without depending on the constrained arm64 pool.
         os: [ubuntu-latest, windows-latest, macos-15-intel]
         shard: [0, 1, 2, 3]
+        # Durable filesystem tests need smaller batches on Windows.
+        include:
+          - os: windows-latest
+            shard: 4
+          - os: windows-latest
+            shard: 5
+          - os: windows-latest
+            shard: 6
+          - os: windows-latest
+            shard: 7
 
     defaults:
       run:
