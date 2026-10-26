@@ -111,6 +111,40 @@ def fixture(tmp_path):
     return plugin, event, provider, store
 
 
+def test_provider_fingerprint_is_stable_and_order_independent(tmp_path):
+    _, _, provider, _ = fixture(tmp_path)
+    provider.request_headers = {"X-Route": "primary", "X-Region": "test"}
+    fingerprint = provider_fingerprint(provider)
+    provider.request_headers = {"X-Region": "test", "X-Route": "primary"}
+    assert provider_fingerprint(provider) == fingerprint
+    assert len(fingerprint) == 64
+    assert int(fingerprint, 16) >= 0
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("chosen_api_key", "replacement-key"),
+        ("api_base", "https://replacement.invalid"),
+        ("request_headers", {"Authorization": "synthetic-header"}),
+        ("get_model", lambda: "replacement-model"),
+    ],
+)
+def test_provider_fingerprint_binds_source_configuration(tmp_path, field, value):
+    _, _, provider, _ = fixture(tmp_path)
+    fingerprint = provider_fingerprint(provider)
+    setattr(provider, field, value)
+    assert provider_fingerprint(provider) != fingerprint
+
+
+@pytest.mark.parametrize("credential", [None, "", "  ", 1])
+def test_provider_fingerprint_rejects_missing_credential(tmp_path, credential):
+    _, _, provider, _ = fixture(tmp_path)
+    provider.chosen_api_key = credential
+    with pytest.raises(AIRequestDenied, match="ai_assistant_unavailable"):
+        provider_fingerprint(provider)
+
+
 def test_usage_cached_thoughts_explicit_zero():
     assert gemini_usage(response()) == {
         "ordinary": 80,

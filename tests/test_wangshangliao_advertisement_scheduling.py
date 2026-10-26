@@ -352,6 +352,36 @@ async def test_three_due_groups_are_serialized_and_spaced_without_dropping(
 
 
 @pytest.mark.asyncio
+async def test_account_spacing_rechecks_deadline_after_early_timer_wakeup(
+    rules, monkeypatch
+):
+    clock = [0.0]
+    starts = []
+    waits = []
+
+    async def sleep(delay):
+        waits.append(delay)
+        clock[0] += min(delay, 0.5)
+
+    async def send(*args):
+        starts.append(clock[0])
+        return "accepted"
+
+    monkeypatch.setattr(rule_replies, "ACCOUNT_AD_GAP_SECONDS", 3)
+    monkeypatch.setattr(
+        rule_replies, "time", SimpleNamespace(monotonic=lambda: clock[0])
+    )
+    monkeypatch.setattr(
+        rule_replies, "asyncio", SimpleNamespace(Lock=asyncio.Lock, sleep=sleep)
+    )
+    monkeypatch.setattr(rules, "_send_ad", send)
+    await rules.send_ad(None, {"account": "99"})
+    await rules.send_ad(None, {"account": "99"})
+    assert starts == [0, rule_replies.ACCOUNT_AD_GAP_SECONDS]
+    assert len(waits) > 1
+
+
+@pytest.mark.asyncio
 async def test_different_receiving_accounts_do_not_block_each_other(rules, monkeypatch):
     monkeypatch.setattr(rule_replies, "ACCOUNT_AD_GAP_SECONDS", 1)
     entered = asyncio.Event()

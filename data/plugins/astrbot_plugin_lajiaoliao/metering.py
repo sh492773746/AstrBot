@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 from contextlib import asynccontextmanager
 
@@ -13,19 +14,34 @@ from astrbot.core.provider.event_guard import AIRequestDenied, generation_meter
 
 
 def provider_fingerprint(provider):
-    """Identify the actual private billing source, including credential changes."""
+    """Authenticate billing configuration without publishing a credential digest.
+
+    Args:
+        provider: Native Gemini provider with its selected API credential.
+
+    Returns:
+        A deterministic, domain-separated HMAC-SHA256 billing identifier.
+
+    Raises:
+        AIRequestDenied: If the provider has no usable signing credential.
+    """
     config = provider.provider_config
+    credential = getattr(provider, "chosen_api_key", None)
+    if not isinstance(credential, str) or not credential.strip():
+        raise AIRequestDenied("ai_assistant_unavailable")
     material = {
         "type": config.get("type"),
         "id": config.get("id"),
         "model": provider.get_model(),
         "base": getattr(provider, "api_base", config.get("api_base")),
-        "key": getattr(provider, "chosen_api_key", ""),
         "proxy": config.get("proxy"),
         "headers": getattr(provider, "request_headers", {}),
     }
-    return hashlib.sha256(
-        json.dumps(material, sort_keys=True, default=str).encode()
+    return hmac.new(
+        credential.encode(),
+        b"lajiaoliao/provider-fingerprint/v2\0"
+        + json.dumps(material, sort_keys=True, default=str).encode(),
+        hashlib.sha256,
     ).hexdigest()
 
 

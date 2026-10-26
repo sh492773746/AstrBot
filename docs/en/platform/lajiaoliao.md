@@ -27,6 +27,13 @@ private evidence, not files distributed in the public source or runtime package.
 Publishing source does not enable accounts, change group settings or restart
 production.
 
+Billing-source fingerprints now use a domain-separated HMAC signed with the
+selected provider API key, rather than a plain digest containing credentials.
+Empty credentials are rejected. Existing rate snapshots with the old fingerprint
+fail closed; an authorized billing operator must review the source and explicitly
+configure matching rates and subscriptions before resuming billed calls. This
+source publication does not rewrite existing rates, balances or billing history.
+
 ## Group AI and Delegated Private Management
 
 The group management page's automation settings provide independent group AI and

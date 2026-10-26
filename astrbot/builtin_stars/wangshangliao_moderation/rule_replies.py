@@ -927,9 +927,11 @@ class RuleReplies:
         """Serialize account campaigns without holding the native message lock."""
         account = cursor["account"]
         async with self.ad_locks.setdefault(account, asyncio.Lock()):
-            await asyncio.sleep(
-                max(0, self.ad_ready_at.get(account, 0) - time.monotonic())
-            )
+            while True:
+                remaining = self.ad_ready_at.get(account, 0) - time.monotonic()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(remaining)
             try:
                 governance = getattr(self.service, "governance", None)
                 if governance is None or adapter is None:
@@ -1021,7 +1023,12 @@ class RuleReplies:
             ):
                 state = "unknown"
                 if image_ids:
-                    await asyncio.sleep(IMAGE_TEXT_GAP_SECONDS)
+                    ready_at = time.monotonic() + IMAGE_TEXT_GAP_SECONDS
+                    while True:
+                        remaining = ready_at - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        await asyncio.sleep(remaining)
                 state = await adapter.send_reply_text(
                     group,
                     operation,

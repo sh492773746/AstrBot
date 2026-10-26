@@ -9,7 +9,9 @@ import json
 import os
 import sys
 from asyncio import Queue
+from copy import copy
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -141,21 +143,55 @@ def wsl_command_classifier(monkeypatch):
 
 @pytest.fixture(scope="module")
 def preserve_plugin_imports():
-    """Restore collected plugin classes after full-lifecycle integration tests."""
+    """Restore imports and registrations after full-lifecycle integration tests."""
+    from astrbot.core.platform import register
+    from astrbot.core.star.star import star_map, star_registry
+    from astrbot.core.star.star_handler import star_handlers_registry
+
     prefixes = ("data.plugins", "astrbot.builtin_stars")
     original = {
-        name: module for name, module in sys.modules.items()
+        name: module
+        for name, module in sys.modules.items()
         if name.startswith(prefixes)
     }
+    module_refs = {
+        name: {
+            key: value
+            for key, value in vars(module).items()
+            if isinstance(value, ModuleType) and value.__name__.startswith(prefixes)
+        }
+        for name, module in original.items()
+    }
+    stars = dict(star_map)
+    metadata = list(star_registry)
+    handlers = [copy(handler) for handler in star_handlers_registry]
+    platforms = dict(register.platform_cls_map)
+    platform_metadata = list(register.platform_registry)
     yield
     for name in list(sys.modules):
         if name.startswith(prefixes) and name not in original:
             sys.modules.pop(name, None)
     sys.modules.update(original)
     for name, module in original.items():
+        # Removed modules can still survive as attributes on their old package.
+        for key, value in list(vars(module).items()):
+            if isinstance(value, ModuleType) and value.__name__.startswith(prefixes):
+                if key not in module_refs[name]:
+                    delattr(module, key)
+        for key, value in module_refs[name].items():
+            setattr(module, key, value)
         parent, _, child = name.rpartition(".")
         if parent in sys.modules:
             setattr(sys.modules[parent], child, module)
+    star_map.clear()
+    star_map.update(stars)
+    star_registry[:] = metadata
+    star_handlers_registry.clear()
+    for handler in handlers:
+        star_handlers_registry.append(handler)
+    register.platform_cls_map.clear()
+    register.platform_cls_map.update(platforms)
+    register.platform_registry[:] = platform_metadata
 
 
 # ============================================================
