@@ -20,13 +20,23 @@ jobs:
       PYTHONUTF8: "1"
       ASTRBOT_CI_TEST_TIMEOUT_SECONDS: "2400"
       ASTRBOT_CI_SHARD_INDEX: ${{ matrix.shard }}
-      ASTRBOT_CI_SHARD_COUNT: "4"
+      ASTRBOT_CI_SHARD_COUNT: ${{ matrix.os == 'windows-latest' && '8' || '4' }}
     strategy:
       fail-fast: false
       matrix:
         # Keep macOS coverage without depending on the constrained arm64 pool.
         os: [ubuntu-latest, windows-latest, macos-15-intel]
         shard: [0, 1, 2, 3]
+        # Durable filesystem tests need smaller batches on Windows.
+        include:
+          - os: windows-latest
+            shard: 4
+          - os: windows-latest
+            shard: 5
+          - os: windows-latest
+            shard: 6
+          - os: windows-latest
+            shard: 7
 
     defaults:
       run:
@@ -55,6 +65,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
+
+      - name: Set up Go for the managed protocol worker
+        if: runner.os != 'Windows'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: services/lajiaoliao-bridge/go.mod
+          cache-dependency-path: services/lajiaoliao-bridge/go.sum
+
+      - name: Build the offline LajiaoLiao test worker
+        if: runner.os != 'Windows'
+        run: python services/lajiaoliao-bridge/build_plugin.py --worker-only
 
       - name: Enable and verify Linux sandbox execution
         if: runner.os == 'Linux'

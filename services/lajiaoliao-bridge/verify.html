@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>官方人机验证</title></head>
+<body style="margin:0;background:transparent">
+  <div id="captcha"></div><button id="trigger" type="button" hidden>验证</button>
+  <script>
+    'use strict';
+    const requestID = location.hash.slice(1);
+    const parentURL = new URL(location.origin);
+    parentURL.hostname = location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+    const send = (type, value = '') => parent.postMessage({source:'lajiao-aliyun-captcha',requestID,type,value}, parentURL.origin);
+    let started = false;
+    async function start(config) {
+      let failure = 'verification_config_failed';
+      try {
+        if (!config.required || !config.prefix || !config.region || !config.scene_id) throw new Error('invalid configuration');
+        window.AliyunCaptchaConfig = {region:config.region, prefix:config.prefix};
+        failure = 'verification_sdk_failed';
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          const timeout = setTimeout(() => reject(new Error('script timeout')), 20000);
+          script.src = 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js';
+          script.onload = () => { clearTimeout(timeout); resolve(); };
+          script.onerror = () => { clearTimeout(timeout); reject(new Error('script load failed')); };
+          document.head.append(script);
+        });
+        failure = 'verification_init_failed';
+        window.initAliyunCaptcha({
+          SceneId:config.scene_id,mode:'popup',element:'#captcha',button:'#trigger',
+          slideStyle:{width:Math.min(360,Math.max(200,innerWidth-32)),height:40},language:'cn',
+          success:value=>send('success',String(value||'')),fail:()=>send('retry'),onClose:()=>send('cancelled'),
+          getInstance:instance=>setTimeout(()=>{
+            try {
+              if(instance && typeof instance.show==='function')instance.show();
+              else document.getElementById('trigger').click();
+            } catch (_) { send('failed','verification_init_failed'); }
+          },120)
+        });
+      } catch (_) { send('failed',failure); }
+    }
+    if (/^[a-f0-9-]{36}$/.test(requestID) && parent !== window) {
+      window.addEventListener('message', event => {
+        const data = event.data;
+        if (started || event.source !== parent || event.origin !== parentURL.origin ||
+            data?.source !== 'lajiao-login' || data.requestID !== requestID || data.type !== 'configure') return;
+        started = true;
+        start(data.config);
+      });
+      send('ready');
+    }
+  </script>
+</body>
+</html>

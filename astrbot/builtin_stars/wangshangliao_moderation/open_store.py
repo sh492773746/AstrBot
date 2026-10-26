@@ -16,7 +16,7 @@ class OpenError(ValueError):
 
 
 DEFAULT_RULES = {"advertising": True, "flood": True, "keywords": []}
-DEFAULT_GROUP_TEMPLATE_VERSION = 1
+DEFAULT_GROUP_TEMPLATE_VERSION = 2
 DEFAULT_GROUP_RULES = {
     "advertising": True,
     "flood": True,
@@ -42,6 +42,9 @@ DEFAULT_GROUP_RULES = {
         "收fc",
         "免费P图上分",
         "直播打狗中",
+        "的来",
+        "私我",
+        "大秀",
     ],
     "custom_rules": [
         {"name": "收款截图招揽", "terms": ["收款", "截图", "加我"], "enabled": True},
@@ -146,6 +149,8 @@ class OpenStore:
                 CREATE TABLE IF NOT EXISTS actor_bindings(
                     account TEXT,uid TEXT,peer TEXT,checked REAL,conflicted INTEGER DEFAULT 0,
                     PRIMARY KEY(account,uid));
+                CREATE INDEX IF NOT EXISTS actor_bindings_peer
+                    ON actor_bindings(account,peer);
                 CREATE TABLE IF NOT EXISTS account_labels(
                     account TEXT PRIMARY KEY,peer TEXT,nickname TEXT,checked REAL);
                 CREATE TABLE IF NOT EXISTS guidance_trials(
@@ -201,9 +206,11 @@ class OpenStore:
             for uid, member in rows.items():
                 peer = str(member["nimId"])
                 conflict = db.execute(
-                    "SELECT 1 FROM actor_bindings WHERE account=? AND "
-                    "((uid=? AND peer<>?) OR (peer=? AND uid<>?))",
-                    (account, uid, peer, peer, uid),
+                    "SELECT 1 FROM actor_bindings WHERE account=? AND uid=? AND peer<>? "
+                    "UNION ALL "
+                    "SELECT 1 FROM actor_bindings WHERE account=? AND peer=? AND uid<>? "
+                    "LIMIT 1",
+                    (account, uid, peer, account, peer, uid),
                 ).fetchone()
                 if conflict:
                     db.execute(
@@ -1185,10 +1192,9 @@ class OpenStore:
                 )
             except ValueError as exc:
                 raise OpenError(str(exc)) from None
-            if (
-                "custom_rules" in json.loads(row["rules"])
-                and isinstance(rules, dict)
-                and "custom_rules" not in rules
+            if isinstance(rules, dict) and any(
+                field in json.loads(row["rules"]) and field not in rules
+                for field in ("custom_rules", "video_whitelist_only")
             ):
                 raise OpenError("tenant_rules_refresh")
             if (
@@ -1197,9 +1203,12 @@ class OpenStore:
                 not in (
                     set(DEFAULT_RULES),
                     set(DEFAULT_RULES) | {"custom_rules"},
+                    set(DEFAULT_RULES) | {"video_whitelist_only"},
+                    set(DEFAULT_RULES) | {"custom_rules", "video_whitelist_only"},
                 )
                 or type(rules["advertising"]) is not bool
                 or type(rules["flood"]) is not bool
+                or type(rules.get("video_whitelist_only", False)) is not bool
                 or not isinstance(rules["keywords"], list)
                 or len(rules["keywords"]) > 50
                 or any(
@@ -1263,6 +1272,39 @@ class OpenStore:
                     group,
                 ),
             )
+            rebound = False
+            # Preserve current consent across settings edits, but never carry
+            # a native creator's consent past removal of that creator.
+            if (
+                not row["paused"]
+                and paused in (None, False)
+                and row["active"]
+                and row["present"]
+                and row["admission"] in {"legacy", "verified"}
+                and row["native_role"] in {"GROUP_ROLE_OWNER", "GROUP_ROLE_ADMIN"}
+                and row["cleanup_epoch"] <= row["cleanup_done"]
+                and db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='business_rules'"
+                ).fetchone()
+            ):
+                business = db.execute(
+                    "SELECT owner FROM business_rules WHERE account=? AND group_id=? "
+                    "AND tenant_version=? AND epoch=?",
+                    (account, group, version, row["epoch"]),
+                ).fetchone()
+                if business and (
+                    not business["owner"]
+                    or business["owner"] in old_managers
+                    and business["owner"] in managers
+                ):
+                    rebound = bool(
+                        db.execute(
+                            "UPDATE business_rules SET tenant_version=? "
+                            "WHERE account=? AND group_id=? AND tenant_version=? AND epoch=?",
+                            (version + 1, account, group, version, row["epoch"]),
+                        ).rowcount
+                    )
             self.log(
                 db,
                 actor,
@@ -1271,6 +1313,7 @@ class OpenStore:
                 "tenant_changed",
                 {
                     "version": version + 1,
+                    "business_rules_rebound": rebound,
                     "before": {
                         "rules": json.loads(row["rules"]),
                         "managers": old_managers,
@@ -1411,6 +1454,7 @@ class OpenStore:
                 raise OpenError("confirmation_invalid")
             self.management_guard(db, row, actor)
             users = json.loads(row["managers"])
+            old_users = list(users)
             target = json.loads(cap["target"])
             uid = target["uid"]
             if actor not in users or actor not in current_members:
@@ -1444,13 +1488,40 @@ class OpenStore:
                 "UPDATE tenants SET managers=?,version=version+1 WHERE account=? AND group_id=?",
                 (json.dumps(users), account, group),
             )
+            rebound = False
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_rules'"
+            ).fetchone():
+                business = db.execute(
+                    "SELECT owner FROM business_rules WHERE account=? AND group_id=? "
+                    "AND tenant_version=? AND epoch=?",
+                    (account, group, row["version"], row["epoch"]),
+                ).fetchone()
+                if business and (
+                    not business["owner"]
+                    or business["owner"] in old_users
+                    and business["owner"] in users
+                ):
+                    rebound = bool(
+                        db.execute(
+                            "UPDATE business_rules SET tenant_version=? "
+                            "WHERE account=? AND group_id=? AND tenant_version=? AND epoch=?",
+                            (
+                                row["version"] + 1,
+                                account,
+                                group,
+                                row["version"],
+                                row["epoch"],
+                            ),
+                        ).rowcount
+                    )
             self.log(
                 db,
                 actor,
                 account,
                 group,
                 "manager_" + cap["operation"],
-                {"target": uid},
+                {"target": uid, "business_rules_rebound": rebound},
             )
 
     def management_guard(self, db, row, actor, *, control=False):

@@ -169,7 +169,7 @@ onBeforeUnmount(() => { generation++; });
     <ul v-if="loaded && members.length" class="members" aria-label="已加入白名单的成员">
       <li v-for="member in members" :key="member.id">
         <div class="identity"><strong>{{ member.name || '已离群成员' }}</strong><small>UID {{ member.id }}</small>
-          <small v-if="member.source === 'daily_top30'">今日前30名 · {{ member.count }} 条有效发言</small>
+          <small v-if="member.source === 'daily_top30'">昨日前30名 · 昨日 {{ member.count }} 条有效发言</small>
           <small v-if="member.conflict" class="warning">同时在黑名单</small>
         </div>
         <button type="button" class="icon-button" title="移出白名单"

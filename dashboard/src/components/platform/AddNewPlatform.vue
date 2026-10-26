@@ -285,6 +285,11 @@
                     v-else-if="selectedPlatformConfig?.type === 'wangshangliao'"
                     v-model="selectedPlatformConfig"
                   />
+                  <LajiaoLiaoLogin
+                    v-else-if="selectedPlatformConfig?.type === 'lajiaoliao'"
+                    v-model="selectedPlatformConfig"
+                    :configured-ids="(config_data.platform || []).map(item => item.id)"
+                  />
                   <div
                     v-else-if="isWeixinOcPlatform"
                     class="registration-inline mt-4"
@@ -849,6 +854,7 @@ import AstrBotConfig from "@/components/shared/AstrBotConfig.vue";
 import AstrBotCoreConfigWrapper from "@/components/config/AstrBotCoreConfigWrapper.vue";
 import ConfigProfileDrawer from "@/components/config/ConfigProfileDrawer.vue";
 import WangshangliaoLogin from "./WangshangliaoLogin.vue";
+import LajiaoLiaoLogin from "./LajiaoLiaoLogin.vue";
 import PlatformRegistrationAction from "@/components/platform/PlatformRegistrationAction.vue";
 import UmoDisplay from "@/components/shared/UmoDisplay.vue";
 
@@ -856,6 +862,7 @@ export default {
   name: "AddNewPlatform",
   components: {
     WangshangliaoLogin,
+    LajiaoLiaoLogin,
     AstrBotConfig,
     AstrBotCoreConfigWrapper,
     ConfigProfileDrawer,
@@ -960,7 +967,7 @@ export default {
     },
     canSave() {
       if (
-        this.selectedPlatformConfig?.type === "wangshangliao" &&
+        ["wangshangliao", "lajiaoliao"].includes(this.selectedPlatformConfig?.type) &&
         !this.selectedPlatformConfig?.session_ref
       )
         return false;
@@ -1213,6 +1220,7 @@ export default {
   },
   methods: {
     getPlatformIcon(platformType) {
+      if (platformType === "lajiaoliao") return getPlatformIcon(platformType);
       // Check for plugin-provided logo_token first
       const template = this.platformTemplates?.[platformType];
       if (template && template.logo_token) {

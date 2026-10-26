@@ -108,7 +108,7 @@ class MemberWhitelist:
         Args:
             adapter: Existing authenticated collector.
             group: Server-selected current group, never a member-provided scope.
-            operation: Fixed read, search, preview or commit operation.
+            operation: Read, search, preview, commit, or native mention-only direct.
             actor: Verified caller audit identity.
             session: Exact authenticated conversation or dashboard principal.
             event: Native event, absent only for the authenticated dashboard.
@@ -246,6 +246,48 @@ class MemberWhitelist:
             )
         if operation == "read":
             return {"version": version, "members": visible}
+        if operation == "direct":
+            mentions = (
+                (event.get_extra("wangshangliao_payload") or {}).get("mentions", [])
+                if event is not None
+                else []
+            )
+            if (
+                event is None
+                or event.is_private_chat()
+                or not isinstance(mentions, list)
+                or not any(str(peer) != str(adapter.nim_account) for peer in mentions)
+            ):
+                raise OpenError("member_whitelist_target")
+            mode = "add"
+            try:
+                uid, peer = await service.member_blacklist.target(event, members)
+            except OpenError:
+                raise OpenError("member_whitelist_target") from None
+            live = eligible.get(uid)
+            if not live or str(live["nimId"]) != peer:
+                raise OpenError("member_whitelist_target")
+            candidate = {"id": uid, "peer": peer, "name": member_name(live)}
+            guard()
+            entry = entries.get(uid)
+            if entry and entry["peer"] == peer and not entry.get("source"):
+                return {"saved": False, "already": True, "member": candidate["name"]}
+            await asyncio.to_thread(
+                set_exemption,
+                adapter.config["id"],
+                account,
+                group,
+                uid,
+                peer,
+                enabled=True,
+                actor="server/" + actor,
+                reason="Native administrator mention speech exemption",
+                name=candidate["name"],
+                guard=guard,
+                expected_version=version,
+            )
+            self.cancel(event)
+            return {"saved": True, "mode": "add", "member": candidate["name"]}
         now = time.monotonic()
         self.pending = {
             key: row for key, row in self.pending.items() if row["expires"] > now
@@ -411,17 +453,48 @@ class MemberWhitelist:
         """
         action, _, argument = command.partition(" ")
         session = self.service.navigation.key(event)
+        if action == "添加白名单":
+            self.cancel(event)
+            return "添加已简化：请到目标群，用客户端真正@一名成员并发送「白名单」，直接加入，无需搜索或确认。"
+        if action == "白名单" and argument and event.is_private_chat():
+            return "请到目标群，用客户端真正@一名成员并发送「白名单」，即可直接加入。"
         group = self.service.navigation.stamp(event)[3]
         if not group:
             return "请先发送「群列表」「选择群 序号」，再搜索该群成员。"
         options = {}
         operation = "read"
-        if action in {"添加白名单", "移除白名单"}:
+        payload = event.get_extra("wangshangliao_payload") or {}
+        if action == "白名单" and (
+            argument
+            or isinstance(payload.get("mentions"), list)
+            and any(
+                str(peer) != str(event.platform.nim_account)
+                for peer in payload["mentions"]
+            )
+        ):
+            if event.is_private_chat():
+                return (
+                    "请到目标群，用客户端真正@一名成员并发送「白名单」，即可直接加入。"
+                )
+            result = await self.run(
+                event.platform,
+                group,
+                "direct",
+                actor=event.actor_identity.principal,
+                session=session,
+                event=event,
+            )
+            return (
+                f"{result['member']}已在本群发言白名单，无需重复加入。"
+                if result.get("already")
+                else f"已加入本群发言白名单：{result['member']}。已有禁言不会自动解除。"
+            )
+        if action == "移除白名单":
             if not argument:
                 return "请输入「" + action + " 对方名称」，从本群搜索结果中选择。"
             operation = "search"
             options = {
-                "mode": "add" if action == "添加白名单" else "remove",
+                "mode": "remove",
                 "query": argument,
             }
         elif action == "选择白名单":
@@ -448,7 +521,7 @@ class MemberWhitelist:
             lines = [
                 f"{n}. {row['name']} · UID {row['id']}"
                 + (
-                    f" · 今日前30名（{row['count']}条）"
+                    f" · 昨日前30名（昨日{row['count']}条）"
                     if row.get("source") == "daily_top30"
                     else ""
                 )
@@ -459,9 +532,11 @@ class MemberWhitelist:
                     "【本群发言白名单】\n"
                     + ("\n".join(lines) or "暂无本群成员。")
                     + (
-                        "\n添加或移除：发送「添加白名单 名称」或「移除白名单 名称」，搜索后选择并确认。"
+                        "\n添加：群内真正@一名成员＋「白名单」，直接加入，无需搜索或确认。"
+                        "\n移除：发送「移除白名单 名称」，搜索后选择并确认。"
                         "\n仅豁免本群自动禁言、撤回；不授予管理权限，不会自动解除已有禁言。"
-                        "\n今日有效发言前30名自动进入，撤回消息不计数；移出后今日不自动加回。"
+                        "\n昨日前30名且昨日有效发言超过100条自动进入，撤回消息不计数；"
+                        "移出后今日不自动加回。"
                     )
                 )
             return "【本群成员搜索结果】\n" + (

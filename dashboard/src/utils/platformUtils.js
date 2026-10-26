@@ -14,6 +14,8 @@ import mattermostIcon from '@/assets/images/platform_logos/mattermost.svg?no-inl
 export function getPlatformIcon(name) {
   if (name === 'wangshangliao') {
     return new URL('@/assets/images/platform_logos/wangshangliao.png', import.meta.url).href
+  } else if (name === 'lajiaoliao') {
+    return new URL('@/assets/images/platform_logos/lajiaoliao.ico', import.meta.url).href
   } else if (name === 'webchat') {
     return '/favicon.svg'
   } else if (name === 'aiocqhttp') {
@@ -123,6 +125,7 @@ export function getPlatformDisplayName(platformId) {
     satori: 'satori (Satori)',
     line: 'line (LINE)',
     matrix: 'matrix (Matrix)',
+    lajiaoliao: '辣椒聊',
   };
   return displayNameMap[platformId] || platformId;
 }

@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "display_name": "辣椒聊群管",
+    "desc": "群白名单与私聊权限管理；账号在创建机器人时登录"
+  },
+  "pages": {
+    "management": {"title": "群聊管理"}
+  }
+}

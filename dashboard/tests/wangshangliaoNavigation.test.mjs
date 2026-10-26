@@ -83,7 +83,7 @@ test("every current feature has one category and only its subtabs are shown", as
   const s = state();
   assert.equal(s.sections.length, 5);
   assert.equal(s.tab, "open");
-  assert.deepEqual(s.sectionTabs.map(x => x.id), ["open", "rules", "permissions", "friend-approval"]);
+  assert.deepEqual(s.sectionTabs.map(x => x.id), ["open", "rules", "permissions", "friend-approval", "speech-activity"]);
   const inventory = s.sections.flatMap(x => x.tabs)
     .filter(id => s.tabs.some(tab => tab.id === id));
   assert.equal(new Set(inventory).size, s.tabs.length);
@@ -242,4 +242,37 @@ test("administrator profile saves its own version and never posts a customer or 
   } });
   assert.equal(state().privateProfile.persona_id, "customer");
   assert.equal(state().defaultGroupProfile.persona_id, "group");
+});
+
+test("video-only policy saves in the selected group without changing managers or pause", async t => {
+  const calls = [];
+  const status = { mode: "integrated", settings: {}, admins: [], providers: [], groups: [
+    { account: "1", group_id: "5", version: 7, active: 1, present: 1, paused: 1,
+      managers: ["2"], rules: { advertising: false, flood: false, keywords: ["keep"] } },
+    { account: "1", group_id: "6", version: 3, active: 1, present: 1, paused: 0,
+      managers: ["2"], rules: { advertising: true, flood: true, keywords: [] } },
+  ] };
+  const state = mount(t, OpenService, { view: "rules", bridge: {
+    async apiPost(endpoint, request) {
+      calls.push(structuredClone(request));
+      if (request.action === "status") return structuredClone(status);
+      if (request.action === "tenant_members") return { members: [
+        { id: "2", name: "Manager", role: "GROUP_ROLE_ADMIN" },
+      ] };
+      if (request.action === "tenant") return { saved: true };
+      throw new Error("Unexpected write");
+    },
+  } });
+  await new Promise(resolve => setImmediate(resolve));
+  state().selected = "1/5";
+  await state().choose();
+  state().tenant.rules.video_whitelist_only = true;
+  await state().saveTenant();
+  const writes = calls.filter(c => c.action === "tenant");
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].payload, {
+    account: "1", group_id: "5", version: 7, paused: true, managers: ["2"],
+    rules: { advertising: false, flood: false, keywords: ["keep"], video_whitelist_only: true },
+  });
+  assert.equal(status.groups[1].rules.video_whitelist_only, undefined);
 });

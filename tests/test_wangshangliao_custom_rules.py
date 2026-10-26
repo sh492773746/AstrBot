@@ -53,6 +53,7 @@ def test_default_template_is_bounded_literal_and_contains_no_business_authority(
         "http" not in term and not term.isdigit()
         for term in DEFAULT_GROUP_RULES["keywords"]
     )
+    assert {"的来", "私我", "大秀"} <= set(DEFAULT_GROUP_RULES["keywords"])
 
 
 @pytest.mark.parametrize(
@@ -457,6 +458,7 @@ async def test_dashboard_rule_validation_has_actionable_localized_errors(
             ),
         )
     )
+
     async def stream():
         yield b'{"action":"tenant","payload":{}}'
 

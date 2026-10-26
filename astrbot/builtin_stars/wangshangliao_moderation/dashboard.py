@@ -91,6 +91,8 @@ class DashboardPage:
             ("settings", self.settings, "GET"),
             ("settings", self.save, "POST"),
             ("audit", self.audit, "GET"),
+            ("speech-activity", self.speech_activity, "GET"),
+            ("speech-report", self.speech_report, "GET"),
             ("cashback-logs", self.cashback_logs, "GET"),
             ("cashier", self.cashier, "POST"),
             ("invitations", self.invitations, "GET"),
@@ -1281,6 +1283,141 @@ class DashboardPage:
         result = await asyncio.to_thread(self.business_settings.history, bot_id, before)
         await self.authorize()
         return ok(result)
+
+    async def speech_activity(self):
+        """Read scoped two-day speech statistics, never message bodies.
+
+        Returns:
+            Group totals, member choices and exact member statistics.
+
+        Raises:
+            ApiError: If authentication, scope or parameters are invalid.
+        """
+        service = await self.authorize()
+        bot_id = request.query.get("bot_id", "")
+        group = request.query.get("group_id", "")
+        member = request.query.get("member_id", "")
+        query = request.query.get("query", "").strip()
+        if len(query) > 64 or (
+            member
+            and (
+                not member.isascii()
+                or not member.isdigit()
+                or len(member) > 20
+                or int(member) <= 0
+            )
+        ):
+            raise ApiError("请输入64字以内的名称或有效成员UID", status_code=400)
+        try:
+            config = service.get_bot(bot_id)["bot"]
+        except ValueError:
+            raise ApiError("旺商聊实例不存在", status_code=404) from None
+        adapter = self._adapter(bot_id)
+        if (
+            adapter is None
+            or config.get("type") != "wangshangliao"
+            or not config.get("enable", True)
+            or group not in config.get("enabled_groups", [])
+        ):
+            raise ApiError("请选择已启用机器人的当前群", status_code=400)
+        guard = self._scope_guard(service, config, group, adapter)
+        guard()
+        names = {uid: uid for uid in getattr(adapter, "members", {}).get(group, {})}
+        snapshot = getattr(adapter, "member_snapshots", {}).get(group)
+        if (
+            isinstance(snapshot, tuple)
+            and len(snapshot) == 3
+            and snapshot[0] == str(adapter.account)
+            and isinstance(snapshot[2], dict)
+            and snapshot[2].get("complete") is True
+        ):
+            for row in snapshot[2].get("groupMemberInfo", []):
+                uid = str(row.get("userId", ""))
+                if uid in names:
+                    names[uid] = str(
+                        row.get("groupMemberNick")
+                        or row.get("userNick")
+                        or row.get("userName")
+                        or uid
+                    )[:128]
+        try:
+            result = await asyncio.to_thread(
+                self.plugin.speech_activity.read,
+                bot_id,
+                str(adapter.account),
+                group,
+                member=member,
+                query=query,
+                names=names,
+            )
+        except (sqlite3.Error, OSError):
+            raise ApiError(
+                "统计暂时不可读，请稍后刷新；不影响群消息处理。", status_code=503
+            ) from None
+        await self.authorize()
+        guard()
+        return ok(result)
+
+    async def speech_report(self):
+        """Read configured text-only member totals after guarding every group.
+
+        Returns:
+            A two-day member report, or an unconfigured-state response.
+
+        Raises:
+            ApiError: If the bot, definition or any configured scope is invalid.
+        """
+        service = await self.authorize()
+        bot_id = request.query.get("bot_id", "")
+        try:
+            config = service.get_bot(bot_id)["bot"]
+        except ValueError:
+            raise ApiError("旺商聊实例不存在", status_code=404) from None
+        adapter = self._adapter(bot_id)
+        if (
+            adapter is None
+            or config.get("type") != "wangshangliao"
+            or not config.get("enable", True)
+        ):
+            raise ApiError("请选择已启用的旺商聊机器人", status_code=400)
+        bot_guard = self._scope_guard(service, config, None, adapter)
+        bot_guard()
+        try:
+            definition = await asyncio.to_thread(
+                self.plugin.speech_activity.report_config, bot_id, str(adapter.account)
+            )
+            if definition is None:
+                await self.authorize()
+                bot_guard()
+                return ok({"configured": False})
+            guards = []
+            for group in definition["groups"]:
+                if group["id"] not in config.get("enabled_groups", []):
+                    raise ApiError(
+                        "汇报中的群已停用，请核对汇报范围；未显示不完整汇总。",
+                        status_code=409,
+                    )
+                guard = self._scope_guard(service, config, group["id"], adapter)
+                guard()
+                guards.append(guard)
+            result = await asyncio.to_thread(
+                self.plugin.speech_activity.report,
+                bot_id,
+                str(adapter.account),
+                definition,
+            )
+        except (sqlite3.Error, OSError):
+            raise ApiError(
+                "专门汇报暂时不可读，请稍后刷新。", status_code=503
+            ) from None
+        except (ValueError, TypeError, KeyError):
+            raise ApiError(
+                "汇报成员或群配置无效，请核对后重试。", status_code=400
+            ) from None
+        await self.authorize()
+        for guard in guards:
+            guard()
+        return ok({"configured": True, **result})
 
     async def audit(self):
         """Read bounded account/group-scoped audit rows without changing ledgers.

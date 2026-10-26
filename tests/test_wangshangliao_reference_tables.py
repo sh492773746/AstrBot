@@ -83,7 +83,7 @@ def test_public_service_commands_and_current_mode_are_complete():
     canonical = {name for row in REFERENCE["permissions"] for name in row["commands"]}
     assert OPEN_COMMANDS <= canonical | set(documented)
     assert REFERENCE["mode"] == "integrated"
-    assert REFERENCE["updated"] == "2026-10-24"
+    assert REFERENCE["updated"] == "2026-10-26"
     assert all(REFERENCE["scope"])
 
 

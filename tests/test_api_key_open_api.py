@@ -11,12 +11,13 @@ from werkzeug.datastructures import FileStorage
 from astrbot.core import LogBroker
 from astrbot.core.core_lifecycle import AstrBotCoreLifecycle
 from astrbot.core.db.sqlite import SQLiteDatabase
-from astrbot.core.utils.auth_password import (
-    hash_dashboard_password,
-    hash_md5_dashboard_password,
-)
+from astrbot.core.utils.auth_password import hash_dashboard_password
 from astrbot.dashboard.api import open_api as open_api_routes
 from astrbot.dashboard.asgi_runtime import FastAPIAppAdapter
+from astrbot.dashboard.password_state import (
+    set_password_change_required,
+    set_password_storage_upgraded,
+)
 from astrbot.dashboard.responses import ok
 from astrbot.dashboard.server import AstrBotDashboard
 
@@ -43,7 +44,7 @@ async def _create_api_key(
 
 
 @pytest_asyncio.fixture(scope="module")
-async def core_lifecycle_td(tmp_path_factory):
+async def core_lifecycle_td(tmp_path_factory, preserve_plugin_imports):
     tmp_db_path = tmp_path_factory.mktemp("data") / "test_data_api_key.db"
     db = SQLiteDatabase(str(tmp_db_path))
     log_broker = LogBroker()
@@ -60,8 +61,16 @@ async def core_lifecycle_td(tmp_path_factory):
         core_lifecycle.astrbot_config["dashboard"]["pbkdf2_password"] = (
             hash_dashboard_password(dashboard_password)
         )
-        core_lifecycle.astrbot_config["dashboard"]["password"] = (
-            hash_md5_dashboard_password(dashboard_password)
+        core_lifecycle.astrbot_config["dashboard"]["password"] = ""
+        await set_password_storage_upgraded(
+            core_lifecycle.db,
+            core_lifecycle.astrbot_config,
+            True,
+        )
+        await set_password_change_required(
+            core_lifecycle.db,
+            core_lifecycle.astrbot_config,
+            False,
         )
     object.__setattr__(
         core_lifecycle,
@@ -908,9 +917,7 @@ async def test_open_api_key_scope_normalization(
     )
     orphan_chat_admin_data = await orphan_chat_admin_res.get_json()
     assert orphan_chat_admin_data["status"] == "error"
-    assert orphan_chat_admin_data["message"] == (
-        "chat:admin requires the chat scope"
-    )
+    assert orphan_chat_admin_data["message"] == ("chat:admin requires the chat scope")
 
 
 @pytest.mark.asyncio

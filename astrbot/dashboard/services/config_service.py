@@ -26,6 +26,7 @@ from astrbot.core.config.default import (
 from astrbot.core.config.i18n_utils import ConfigMetadataI18n
 from astrbot.core.core_lifecycle import AstrBotCoreLifecycle
 from astrbot.core.db import BaseDatabase
+from astrbot.core.platform.instance_control import instance_lock, instance_revision
 from astrbot.core.platform.register import platform_cls_map, platform_registry
 from astrbot.core.provider.register import provider_registry
 from astrbot.core.star.star import star_registry
@@ -1027,9 +1028,16 @@ class ConfigDisplayService:
             if provider.default_config_tmpl:
                 provider_default_tmpl[provider.type] = provider.default_config_tmpl
 
+        public_config = dict(self.config)
+        public_config["platform"] = [
+            {**item, "_instance_revision": instance_revision(item)}
+            if item.get("type") == "lajiaoliao"
+            else item
+            for item in self.config.get("platform", [])
+        ]
         return {
             "metadata": metadata,
-            "config": self.config,
+            "config": public_config,
             "platform_i18n_translations": platform_i18n_translations,
         }
 
@@ -1454,7 +1462,10 @@ class BotConfigService:
 
                 bots.append(runtime.view(bot, public=True))
             else:
-                bots.append(copy.deepcopy(bot))
+                public = copy.deepcopy(bot)
+                if bot.get("type") == "lajiaoliao":
+                    public["_instance_revision"] = instance_revision(bot)
+                bots.append(public)
         return {"bots": bots}
 
     def get_bot(self, bot_id: str) -> dict:
@@ -1467,12 +1478,18 @@ class BotConfigService:
             )
 
             return {"bot": runtime.view(bot, public=True)}
-        return {"bot": copy.deepcopy(bot)}
+        public = copy.deepcopy(bot)
+        if bot.get("type") == "lajiaoliao":
+            public["_instance_revision"] = instance_revision(bot)
+        return {"bot": public}
 
     def get_bot_stats(self) -> dict:
         return self.core_lifecycle.platform_manager.get_all_stats()
 
     async def create_bot(self, config: dict, owner: str = "") -> None:
+        from astrbot.core.platform.message_policy import validate_message_policy
+
+        validate_message_policy(config)
         bot_id = config.get("id")
         if not bot_id:
             raise ValueError("Bot config must have an 'id' field")
@@ -1501,20 +1518,64 @@ class BotConfigService:
         if config.get("type") == "wangshangliao":
             await self.save_wangshangliao(config, owner)
             return
+        validator = getattr(
+            platform_cls_map.get(config.get("type")), "validate_dashboard_config", None
+        )
+        if config.get("type") == "lajiaoliao" and validator is None:
+            raise ValueError("lajiaoliao_plugin_unavailable")
+        if validator:
+            validator(config, owner=owner, current=None)
         ensure_platform_webhook_config(config)
         self.config["platform"].append(config)
         save_config(self.config, self.config, is_core=True)
         await self.core_lifecycle.platform_manager.load_platform(config)
 
     async def update_bot(self, bot_id: str, config: dict, owner: str = "") -> None:
+        from astrbot.core.platform.message_policy import validate_message_policy
+
+        validate_message_policy(config)
         if config.get("id") != bot_id:
             raise ValueError("Bot id cannot be changed")
         current = self._find_bot(bot_id)
+        if (
+            current
+            and current.get("type") == "lajiaoliao"
+            and config.get("type") != "lajiaoliao"
+        ):
+            raise ValueError("platform_type_change")
         if current and current.get("type") == "wangshangliao":
             await self.save_wangshangliao(config, owner, current)
             return
         if config.get("type") == "wangshangliao":
             raise ValueError("platform_type_change")
+        validator = getattr(
+            platform_cls_map.get(config.get("type")), "validate_dashboard_config", None
+        )
+        if config.get("type") == "lajiaoliao" and validator is None:
+            raise ValueError("lajiaoliao_plugin_unavailable")
+        if validator:
+            validator(config, owner=owner, current=current)
+        if config.get("type") == "lajiaoliao":
+            async with instance_lock(bot_id):
+                current = self._find_bot(bot_id)
+                if current is None:
+                    raise ValueError(f"Bot {bot_id} not found")
+                if config.get("_instance_revision") != instance_revision(current):
+                    raise ApiError("instance_changed_refresh_required", status_code=409)
+                validator(config, owner=owner, current=current)
+                clean = copy.deepcopy(config)
+                clean.pop("_instance_revision", None)
+                ensure_platform_webhook_config(clean)
+                for idx, bot in enumerate(self.config["platform"]):
+                    if bot.get("id") == bot_id:
+                        self.config["platform"][idx] = clean
+                        try:
+                            save_config(self.config, self.config, is_core=True)
+                        except BaseException:
+                            self.config["platform"][idx] = current
+                            raise
+                        await self.core_lifecycle.platform_manager.reload(clean)
+                        return
         ensure_platform_webhook_config(config)
         for idx, bot in enumerate(self.config.get("platform", [])):
             if bot.get("id") == bot_id:
@@ -1548,6 +1609,8 @@ class BotConfigService:
             raise ValueError(f"Bot {bot_id} not found")
         new_config = copy.deepcopy(bot)
         new_config["enable"] = enabled
+        if bot.get("type") == "lajiaoliao":
+            new_config["_instance_revision"] = instance_revision(bot)
         await self.update_bot(bot_id, new_config, owner=owner)
 
     async def delete_bot(self, bot_id: str) -> None:

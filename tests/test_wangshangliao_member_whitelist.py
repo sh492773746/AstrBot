@@ -49,7 +49,7 @@ async def whitelist(setup, tmp_path, monkeypatch):
 
 
 async def search_preview(value, event):
-    """Create one immutable draft through the actual native command route.
+    """Create an immutable backend draft without the retired chat addition route.
 
     Args:
         value: Isolated command service.
@@ -58,11 +58,24 @@ async def search_preview(value, event):
     Returns:
         Explicit confirmation token.
     """
-    reply = await step(value, event, "添加白名单 Target", native=True)
-    assert "Target" in reply and "UID 3" in reply
-    reply = await step(value, event, "选择白名单 1", native=True)
-    assert "预览" in reply and "不自动解禁" in reply
-    return re.search(r"确认白名单 ([A-Za-z0-9_-]+)", reply)[1]
+    options = {
+        "actor": event.actor_identity.principal,
+        "session": value.navigation.key(event),
+        "event": event,
+    }
+    search = await value.member_whitelist.run(
+        event.platform, "5", "search", mode="add", query="Target", **options
+    )
+    assert search["members"] == [{"id": "3", "name": "Target"}]
+    preview = await value.member_whitelist.run(
+        event.platform,
+        "5",
+        "preview",
+        selection=search["selection"],
+        index=1,
+        **options,
+    )
+    return preview["token"]
 
 
 @pytest.mark.asyncio
@@ -144,13 +157,27 @@ async def test_stale_preview_cannot_commit(whitelist, change):
 async def test_names_not_uid_and_homonyms_are_selected_individually(whitelist):
     value, event, rows = whitelist
     rows["4"] = {**rows["3"], "userId": "4", "nimId": "904"}
-    reply = await step(value, event, "添加白名单 903", native=True)
-    assert "没有符合" in reply
-    reply = await step(value, event, "添加白名单 Target", native=True)
-    assert "UID 3" in reply and "UID 4" in reply
-    reply = await step(value, event, "选择白名单 2", native=True)
-    token = re.search(r"确认白名单 ([A-Za-z0-9_-]+)", reply)[1]
-    await step(value, event, "确认白名单 " + token, native=True)
+    options = {"actor": "dashboard/offline", "session": "dashboard/offline"}
+    result = await value.member_whitelist.run(
+        event.platform, "5", "search", mode="add", query="903", **options
+    )
+    assert not result["members"]
+    result = await value.member_whitelist.run(
+        event.platform, "5", "search", mode="add", query="Target", **options
+    )
+    assert {row["id"] for row in result["members"]} == {"3", "4"}
+    preview = await value.member_whitelist.run(
+        event.platform,
+        "5",
+        "preview",
+        selection=result["selection"],
+        index=2,
+        **options,
+    )
+    token = preview["token"]
+    await value.member_whitelist.run(
+        event.platform, "5", "commit", token=token, **options
+    )
     assert member_exemptions.is_exempt(
         event.platform.config["id"], "1", "5", "4", "904"
     )
@@ -160,33 +187,21 @@ async def test_names_not_uid_and_homonyms_are_selected_individually(whitelist):
 
 
 @pytest.mark.asyncio
-async def test_menu_name_search_select_confirm_and_cancel(whitelist):
+async def test_add_menu_explains_native_mention_without_opening_a_draft(whitelist):
     value, event, _ = whitelist
     path = next(path for item, path in leaves() if item.command == "添加白名单")
     await step(value, event, "菜单", native=True)
     for number in path:
         reply = await step(value, event, str(number), native=True)
-    assert "名称" in reply
-    reply = await step(value, event, "Target", native=True)
-    assert "UID 3" in reply and "序号" in reply
-    reply = await step(value, event, "1", native=True)
-    assert "预览" in reply and "确认执行" in reply
-    await step(value, event, "0", native=True)
+    assert "真正@" in reply and "无需搜索或确认" in reply
     assert not value.member_whitelist.pending
     assert not member_exemptions.is_exempt(
         event.platform.config["id"], "1", "5", "3", "903"
     )
-    await step(value, event, "取消", native=True)
-    await step(value, event, "菜单", native=True)
-    for number in path:
-        await step(value, event, str(number), native=True)
-    await step(value, event, "Target", native=True)
-    await step(value, event, "1", native=True)
-    assert "已加入" in await step(value, event, "1", native=True)
 
 
 @pytest.mark.asyncio
-async def test_private_menu_requires_group_then_name_and_fresh_confirmation(whitelist):
+async def test_private_add_menu_returns_to_the_target_group(whitelist):
     value, event, _ = whitelist
     event.is_private_chat = lambda: True
     event.get_group_id = lambda: ""
@@ -195,13 +210,9 @@ async def test_private_menu_requires_group_then_name_and_fresh_confirmation(whit
     await step(value, event, "菜单", native=True)
     for number in path:
         reply = await step(value, event, str(number), native=True)
-    assert "授权群" in reply and "Group 5" in reply
-    reply = await step(value, event, "1", native=True)
-    assert "当前已选群" in reply and "名称" in reply
-    assert "Target" in await step(value, event, "Target", native=True)
-    assert "预览" in await step(value, event, "1", native=True)
-    assert "已加入" in await step(value, event, "1", native=True)
-    assert member_exemptions.is_exempt(
+    assert "真正@" in reply and "目标群" in reply
+    assert not value.member_whitelist.pending
+    assert not member_exemptions.is_exempt(
         event.platform.config["id"], "1", "5", "3", "903"
     )
 

@@ -23,7 +23,11 @@ let browser;
 try {
   await server.listen();
   const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
-  browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
+  browser = await chromium.launch({
+    headless: true,
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+    args: ["--no-sandbox"],
+  });
   for (const width of [320, 390, 1440]) {
     for (const kind of ["whitelist", "blacklist"]) {
       const white = kind === "whitelist";
@@ -59,6 +63,10 @@ try {
       const remove = id => panel.getByRole("button", { name: new RegExp(`（UID ${id}）移出${label}$`) });
       await list.getByText(`UID ${target}`, { exact: true }).waitFor();
       assert.match(await list.textContent(), white ? /同时在黑名单/ : /同时在白名单/);
+      if (white) {
+        assert.match(await list.textContent(), /昨日前30名 · 昨日 101 条有效发言/);
+        assert.doesNotMatch(await list.textContent(), /今日前30名/);
+      }
       assert.equal(await list.getByRole("button").count(), await list.getByRole("listitem").count());
       assert.equal(await remove(target).getAttribute("title"), `移出${label}`);
       assert.equal(await remove(target).locator("svg").count(), 1);

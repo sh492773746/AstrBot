@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Automation Status Fixture</title></head>
+  <body style="margin:16px;font-family:sans-serif"><div id="app"></div><script type="module">
+    import { createApp, h } from "vue";
+    import Panel from "../../plugin-pages/wangshangliao/RuleAutomationPanel.vue";
+    const mode = new URLSearchParams(location.search).get("mode") || "stale";
+    const api = async (action, payload) => {
+      if (action === "page_schema") return { fields: { properties: {
+        ads: { maxItems: 20 }, keywords: { maxItems: 50 },
+      }, $defs: {
+        Advertisement: { properties: { mode: { enum: ["daily", "interval"] } } },
+        KeywordReply: { properties: { match: { enum: ["exact", "contains"] } } },
+      } } };
+      if (action !== "business_rules" || payload.operation !== "read") throw new Error("Read only fixture");
+      return {
+        version: 2, tenant_version: mode === "stale" ? 3 : 4,
+        config: { keywords: [], ads: [{
+          id: "neutral", name: "中性测试公告", enabled: true,
+          mode: "daily", times: ["09:00"], text: "本群日常通知。",
+          images: [], start: "09:00", end: "22:00", interval_minutes: 60,
+        }] },
+        schedules: [{
+          rule_id: "neutral", last_state: mode === "rejected" ? "rejected" : "skipped",
+          last_error: mode === "expired" ? "advertisement_slot_expired" : "business_rules_inactive",
+          blocked: "",
+        }],
+      };
+    };
+    createApp({ render: () => h(Panel, { api, account: "99", group: "5", tenantVersion: 4 }) }).mount("#app");
+  </script></body>
+</html>

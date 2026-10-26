@@ -4,7 +4,7 @@ import asyncio
 import sqlite3
 import time
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from astrbot.api import logger
@@ -34,6 +34,11 @@ def read_automatic(instance, account, group, *, member=None, peer=None):
     if not path.is_file() or path.is_symlink():
         return {}
     now = time.time()
+    today = datetime.fromtimestamp(now, ZoneInfo("Asia/Shanghai")).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    day_start = today.timestamp()
+    ranking_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
     with closing(
         sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)
     ) as db:
@@ -41,11 +46,17 @@ def read_automatic(instance, account, group, *, member=None, peer=None):
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='automatic_exemptions'"
         ).fetchone():
             return {}
+        if not any(
+            row[1] == "ranking_day"
+            for row in db.execute("PRAGMA table_info(automatic_exemptions)")
+        ):
+            return {}
         query = (
             "SELECT member,peer,name,messages FROM automatic_exemptions "
-            "WHERE account=? AND group_id=? AND valid_until>? AND day_start<=?"
+            "WHERE account=? AND group_id=? AND valid_until>? AND day_start=? "
+            "AND ranking_day=? AND messages>100"
         )
-        arguments = (account, group, now, now)
+        arguments = (account, group, now, day_start, ranking_date)
         if member is not None:
             query += " AND member=? AND peer=?"
             arguments += (member, peer)
@@ -55,11 +66,6 @@ def read_automatic(instance, account, group, *, member=None, peer=None):
         }
     if not entries:
         return {}
-    day_start = (
-        datetime.fromtimestamp(now, ZoneInfo("Asia/Shanghai"))
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp()
-    )
     for filename, query, arguments in (
         (
             "member_blacklist.sqlite3",
@@ -99,11 +105,15 @@ class AutomaticWhitelist:
             group: Enabled business group.
             account: Frozen collector account.
             mapping: Frozen native member mapping.
-            date: Beijing ranking date.
-            end: Beijing day-end timestamp.
+            date: Yesterday's Beijing ranking date.
+            end: Yesterday's day-end timestamp, today's grant start.
             ranked: Settled UID/name/count tuples.
         """
         now = time.time()
+        today = datetime.fromtimestamp(now, ZoneInfo("Asia/Shanghai")).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        grant_end = (today + timedelta(days=1)).timestamp()
         root = instance_dir(adapter.config["id"])
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = root / "automatic_exemptions.sqlite3"
@@ -116,11 +126,20 @@ class AutomaticWhitelist:
                 CREATE TABLE IF NOT EXISTS automatic_exemptions(
                     account TEXT,group_id TEXT,member TEXT,peer TEXT,name TEXT,
                     messages INTEGER,day_start REAL,valid_until REAL,
+                    ranking_day TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY(account,group_id,member));
                 CREATE INDEX IF NOT EXISTS automatic_exemptions_expiry
                     ON automatic_exemptions(valid_until);
             """)
             db.execute("BEGIN IMMEDIATE")
+            if not any(
+                row[1] == "ranking_day"
+                for row in db.execute("PRAGMA table_info(automatic_exemptions)")
+            ):
+                db.execute(
+                    "ALTER TABLE automatic_exemptions "
+                    "ADD COLUMN ranking_day TEXT NOT NULL DEFAULT ''"
+                )
             current = adapter.config
             if (
                 not self.active
@@ -130,10 +149,9 @@ class AutomaticWhitelist:
                 or group not in current.get("enabled_groups", [])
                 or not current.get("moderation", {}).get("automation_enabled")
                 or adapter.members.get(group, {}) != mapping
-                or datetime.fromtimestamp(
-                    time.time(), ZoneInfo("Asia/Shanghai")
-                ).strftime("%Y-%m-%d")
-                != date
+                or (today - timedelta(days=1)).strftime("%Y-%m-%d") != date
+                or today.timestamp() != end
+                or time.time() >= grant_end
             ):
                 raise ProtocolError("automatic_whitelist_scope_changed")
             blocked = set()
@@ -146,7 +164,7 @@ class AutomaticWhitelist:
                 (
                     "member_exemptions.sqlite3",
                     "SELECT member FROM speech_exemptions WHERE account=? AND group_id=? AND enabled=0 AND created>=?",
-                    (account, group, end - 86400),
+                    (account, group, end),
                 ),
             ):
                 other = root / filename
@@ -157,10 +175,11 @@ class AutomaticWhitelist:
                         blocked.update(row[0] for row in saved.execute(sql, params))
             entries = []
             fixture = flood_fixture(adapter, group)
-            for uid, name, count in ranked:
+            for uid, name, count in ranked[:30]:
                 peer = mapping.get(uid, "")
                 if (
-                    uid in blocked
+                    count <= 100
+                    or uid in blocked
                     or uid == account
                     or is_managed_account(uid)
                     and not (fixture and fixture.ranking and uid == "23691273")
@@ -175,18 +194,20 @@ class AutomaticWhitelist:
                         peer,
                         name,
                         count,
-                        end - 86400,
-                        min(end, now + 90),
+                        end,
+                        min(grant_end, now + 90),
+                        date,
                     )
                 )
-                if len(entries) == 30:
-                    break
             db.execute(
                 "DELETE FROM automatic_exemptions WHERE valid_until<=? OR (account=? AND group_id=?)",
                 (now, account, group),
             )
             db.executemany(
-                "INSERT INTO automatic_exemptions VALUES(?,?,?,?,?,?,?,?)", entries
+                "INSERT INTO automatic_exemptions"
+                "(account,group_id,member,peer,name,messages,day_start,valid_until,ranking_day) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                entries,
             )
             if (
                 not self.active
@@ -194,6 +215,7 @@ class AutomaticWhitelist:
                 or group not in adapter.config.get("enabled_groups", [])
                 or adapter.members.get(group, {}) != mapping
                 or not adapter.config.get("moderation", {}).get("automation_enabled")
+                or time.time() >= grant_end
             ):
                 raise ProtocolError("automatic_whitelist_scope_changed")
         path.chmod(0o600)
@@ -223,7 +245,7 @@ class AutomaticWhitelist:
                     mapping = dict(adapter.members.get(group, {}))
                     async with asyncio.timeout(10):
                         date, end, ranked = await self.rankings.snapshot(
-                            view, group, settled=True
+                            view, group, settled=True, previous_day=True
                         )
                         count = await asyncio.to_thread(
                             self.publish,

@@ -191,13 +191,29 @@ async def message(adapter, uid, mid, stamp, text="valid conversation"):
             "recall_route": {"peer": adapter.members["5"][uid], "time": stamp * 1000},
         },
     )
+    await adapter.ledger.db.execute(
+        "UPDATE inbox SET received_at=? WHERE account=? AND team='5' AND message=?",
+        (stamp + 0.1, adapter.account, mid),
+    )
+    await adapter.ledger.db.commit()
+
+
+async def history(adapter, uid, stamp, count=101):
+    for index in range(count):
+        await message(
+            adapter,
+            uid,
+            f"{uid}-{stamp}-{index}",
+            stamp - (count - 1 - index) * 31,
+            f"valid conversation {uid} {index}",
+        )
 
 
 @pytest.mark.asyncio
 async def test_top_thirty_exact_scope_binding_and_daily_expiry(daily):
     adapter, ranking, runtime, root, clock = daily
     for uid in range(10, 43):
-        await message(adapter, str(uid), str(uid), clock[0] - 100)
+        await history(adapter, str(uid), clock[0] - 86400 - 100)
     await runtime.step()
     entries = automatic_whitelist.read_automatic("daily", "1", "5")
     assert len(entries) == 30
@@ -224,10 +240,15 @@ async def test_top_thirty_exact_scope_binding_and_daily_expiry(daily):
 @pytest.mark.asyncio
 async def test_recalls_and_unsettled_messages_never_award_automatic_grants(daily):
     adapter, ranking, runtime, root, clock = daily
+    clock[0] = datetime(
+        2026, 10, 24, 0, 0, 5, tzinfo=ZoneInfo("Asia/Shanghai")
+    ).timestamp()
+    for uid in ("10", "11", "12", "13"):
+        await history(adapter, uid, clock[0] - 400, count=100)
     await message(adapter, "10", "100", clock[0] - 100)
     await message(adapter, "11", "101", clock[0] - 100)
     await message(adapter, "12", "102", clock[0] - 100)
-    await message(adapter, "13", "103", clock[0] - 5)
+    await message(adapter, "13", "103", clock[0] - 6)
     await adapter.ledger.db.execute(
         "INSERT INTO observed_recalls VALUES('1','5','notice','55','100','','910','999','','',?)",
         (clock[0],),
@@ -245,11 +266,13 @@ async def test_recalls_and_unsettled_messages_never_award_automatic_grants(daily
         db.execute("INSERT INTO flood_recalls VALUES('1','5','102','burst','accepted')")
     await runtime.step()
     assert not automatic_whitelist.read_automatic("daily", "1", "5")
-    text = await ranking.read(adapter, "5", "10")
-    assert (
-        "Member 10" not in text and "Member 11" not in text and "Member 12" not in text
-    )
-    assert "Member 13" in text
+    _date, _end, ranked = await ranking.snapshot(adapter, "5", previous_day=True)
+    assert {uid: count for uid, _name, count in ranked} == {
+        "10": 100,
+        "11": 100,
+        "12": 100,
+        "13": 101,
+    }
     clock[0] += 31
     ranking.cache.clear()
     await runtime.step()
@@ -259,7 +282,8 @@ async def test_recalls_and_unsettled_messages_never_award_automatic_grants(daily
 @pytest.mark.asyncio
 async def test_manual_removal_suppresses_today_but_does_not_erase_manual_grants(daily):
     adapter, ranking, runtime, root, clock = daily
-    await message(adapter, "10", "100", clock[0] - 100)
+    await history(adapter, "10", clock[0] - 86400 - 100)
+    await history(adapter, "10", clock[0] - 100)
     await runtime.step()
     options = {
         "enabled": False,
@@ -274,7 +298,6 @@ async def test_manual_removal_suppresses_today_but_does_not_erase_manual_grants(
     set_exemption("daily", "1", "5", "11", "911", **{**options, "enabled": True})
     clock[0] += 86400
     assert is_exempt("daily", "1", "5", "11", "911")
-    await message(adapter, "10", "next-day", clock[0] - 100)
     await runtime.step()
     assert is_exempt("daily", "1", "5", "10", "910")
 
@@ -282,7 +305,7 @@ async def test_manual_removal_suppresses_today_but_does_not_erase_manual_grants(
 @pytest.mark.asyncio
 async def test_blacklist_immediately_overrides_automatic_grant_and_replacement(daily):
     adapter, ranking, runtime, root, clock = daily
-    await message(adapter, "10", "100", clock[0] - 100)
+    await history(adapter, "10", clock[0] - 86400 - 100)
     await runtime.step()
     assert is_exempt("daily", "1", "5", "10", "910")
     with sqlite3.connect(root / "member_blacklist.sqlite3") as db:
@@ -298,8 +321,10 @@ async def test_blacklist_immediately_overrides_automatic_grant_and_replacement(d
 @pytest.mark.asyncio
 async def test_reauthorization_rejects_stale_mapping_and_cancelled_runtime(daily):
     adapter, ranking, runtime, root, clock = daily
-    await message(adapter, "10", "100", clock[0] - 100)
-    date, end, ranked = await ranking.snapshot(adapter, "5", settled=True)
+    await history(adapter, "10", clock[0] - 86400 - 100)
+    date, end, ranked = await ranking.snapshot(
+        adapter, "5", settled=True, previous_day=True
+    )
     mapping = dict(adapter.members["5"])
     adapter.members["5"]["10"] = "changed"
     with pytest.raises(ProtocolError):
@@ -323,8 +348,112 @@ async def test_reauthorization_rejects_stale_mapping_and_cancelled_runtime(daily
 @pytest.mark.asyncio
 async def test_paused_or_unmanaged_group_never_receives_automatic_grants(daily):
     adapter, ranking, runtime, root, clock = daily
-    await message(adapter, "10", "100", clock[0] - 100)
+    await history(adapter, "10", clock[0] - 86400 - 100)
     adapter.config["_open_groups"] = {}
     await runtime.step()
     assert not automatic_whitelist.read_automatic("daily", "1", "5")
     assert not (root / "automatic_exemptions.sqlite3").exists()
+
+
+@pytest.mark.asyncio
+async def test_only_yesterdays_top_thirty_with_more_than_one_hundred_messages(daily):
+    adapter, ranking, runtime, root, clock = daily
+    yesterday = clock[0] - 86400 - 100
+    for uid, count in (("10", 100), ("11", 101), ("12", 1)):
+        await history(adapter, uid, yesterday, count=count)
+    await history(adapter, "10", clock[0] - 100, count=150)
+    await history(adapter, "12", clock[0] - 100, count=200)
+    await runtime.step()
+    entries = automatic_whitelist.read_automatic("daily", "1", "5")
+    assert set(entries) == {"11"}
+    assert entries["11"]["count"] == 101
+    # Public rankings remain today's counts, not the exemption source day.
+    text = await ranking.read(adapter, "5", "10")
+    assert "Member 12 - 200 条" in text
+    assert "Member 10 - 150 条" in text
+    assert "Member 11" not in text
+
+
+@pytest.mark.asyncio
+async def test_rank_thirty_one_is_not_promoted_when_top_member_is_blocked(daily):
+    adapter, ranking, runtime, root, clock = daily
+    for uid in range(10, 41):
+        await history(adapter, str(uid), clock[0] - 86400 - 100)
+    set_exemption(
+        "daily",
+        "1",
+        "5",
+        "10",
+        "910",
+        enabled=False,
+        actor="server/test",
+        reason="explicit removal",
+        guard=lambda: None,
+    )
+    await runtime.step()
+    entries = automatic_whitelist.read_automatic("daily", "1", "5")
+    assert set(entries) == {str(uid) for uid in range(11, 40)}
+    assert "40" not in entries
+
+
+@pytest.mark.asyncio
+async def test_late_recall_revokes_yesterday_grant_and_restart_rebuilds_it(daily):
+    adapter, ranking, runtime, root, clock = daily
+    await history(adapter, "10", clock[0] - 86400 - 100)
+    await runtime.step()
+    assert is_exempt("daily", "1", "5", "10", "910")
+    await adapter.ledger.db.execute(
+        "INSERT INTO outbox VALUES(?, '', 'native', 'unknown', '')",
+        (f"recall/1/5/10-{clock[0] - 86400 - 100}-100",),
+    )
+    await adapter.ledger.db.commit()
+    runtime.rankings = rankings.DailyRankings()
+    await runtime.step()
+    assert not is_exempt("daily", "1", "5", "10", "910")
+    await adapter.ledger.db.execute("UPDATE outbox SET state='rejected'")
+    await adapter.ledger.db.commit()
+    runtime.rankings = rankings.DailyRankings()
+    await runtime.step()
+    assert is_exempt("daily", "1", "5", "10", "910")
+
+
+@pytest.mark.asyncio
+async def test_legacy_current_day_grants_fail_closed_until_rebuilt(daily):
+    adapter, ranking, runtime, root, clock = daily
+    with sqlite3.connect(root / "automatic_exemptions.sqlite3") as db:
+        db.execute(
+            "CREATE TABLE automatic_exemptions("
+            "account TEXT,group_id TEXT,member TEXT,peer TEXT,name TEXT,"
+            "messages INTEGER,day_start REAL,valid_until REAL,"
+            "PRIMARY KEY(account,group_id,member))"
+        )
+        db.execute(
+            "INSERT INTO automatic_exemptions VALUES('1','5','10','910','Member 10',200,?,?)",
+            (clock[0] - 43200, clock[0] + 90),
+        )
+    assert not is_exempt("daily", "1", "5", "10", "910")
+    await history(adapter, "11", clock[0] - 86400 - 100)
+    await runtime.step()
+    assert set(automatic_whitelist.read_automatic("daily", "1", "5")) == {"11"}
+
+
+@pytest.mark.asyncio
+async def test_beijing_midnight_changes_source_day_and_rejects_old_publication(daily):
+    adapter, ranking, runtime, root, clock = daily
+    midnight = datetime(2026, 10, 25, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+    clock[0] = midnight - 1
+    await history(adapter, "10", midnight - 86400 - 100)
+    await history(adapter, "11", midnight - 100)
+    await runtime.step()
+    assert set(automatic_whitelist.read_automatic("daily", "1", "5")) == {"10"}
+    date, end, ranked = await ranking.snapshot(
+        adapter, "5", settled=True, previous_day=True
+    )
+    clock[0] = midnight
+    assert not automatic_whitelist.read_automatic("daily", "1", "5")
+    with pytest.raises(ProtocolError):
+        runtime.publish(
+            adapter, "5", "1", dict(adapter.members["5"]), date, end, ranked
+        )
+    await runtime.step()
+    assert set(automatic_whitelist.read_automatic("daily", "1", "5")) == {"11"}

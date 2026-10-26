@@ -43,6 +43,18 @@ jobs:
           uv sync --locked --dev --extra wsl
           uv run python -m playwright install --with-deps chromium --only-shell
 
+      - name: Set up Go for the managed protocol worker
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: services/lajiaoliao-bridge/go.mod
+          cache-dependency-path: services/lajiaoliao-bridge/go.sum
+
+      - name: Build and test the offline LajiaoLiao worker
+        run: |
+          python services/lajiaoliao-bridge/build_plugin.py --worker-only
+          cd services/lajiaoliao-bridge
+          go test ./...
+
       - name: Prepare native Linux sandbox tests
         run: |
           sudo apt-get update

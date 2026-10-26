@@ -1125,7 +1125,7 @@ def test_default_keywords_match_obfuscated_promotions(tmp_path, text):
 )
 def test_each_configured_default_matches_without_auto_kick(tmp_path, word):
     defaults = BusinessSettings(None, tmp_path).keyword_defaults
-    assert len(defaults["mute_keywords"]) == len(set(defaults["mute_keywords"])) == 36
+    assert len(defaults["mute_keywords"]) == len(set(defaults["mute_keywords"])) == 39
     assert not defaults["kick_keywords"]
     text = ("example" + word if word.startswith(".") else word) + " \u4e0a\u5206"
     assert (

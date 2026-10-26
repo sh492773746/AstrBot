@@ -500,6 +500,9 @@ function getPlatformStatusLabel(platform) {
     return tm("workspace.disabled");
   }
   const state = getPlatformStat(platform.id)?.connection_state;
+  if (platform.type === "lajiaoliao" && state) {
+    return tm(`runtimeStatus.${state === "online" ? "running" : state === "connecting" ? "pending" : "stopped"}`);
+  }
   if (platform.type === "wangshangliao" && state)
     return tm(`wangshangliao.${state}`);
   const status = getPlatformStat(platform.id)?.status || "unknown";
@@ -510,7 +513,7 @@ function getPlatformStatusClass(platform) {
   if (platform.enable === false) return "bot-list-item__status-dot--disabled";
   const connection = getPlatformStat(platform.id)?.connection_state;
   if (
-    platform.type === "wangshangliao" &&
+    ["wangshangliao", "lajiaoliao"].includes(platform.type) &&
     connection &&
     connection !== "online"
   ) {

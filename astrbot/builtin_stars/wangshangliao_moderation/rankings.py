@@ -31,13 +31,14 @@ class DailyRankings:
         self.lock = asyncio.Lock()
         self.cache = {}
 
-    async def snapshot(self, adapter, group: str, *, settled=False):
-        """Read today's bounded ranking, optionally allowing moderation to settle.
+    async def snapshot(self, adapter, group: str, *, settled=False, previous_day=False):
+        """Read a bounded Beijing-day ranking, allowing moderation to settle.
 
         Args:
             adapter: Native adapter owning the authenticated inbox.
             group: Enabled business group, never a displayed group number.
             settled: Exclude the newest thirty seconds for automatic exemptions.
+            previous_day: Read yesterday instead of today's public ranking.
 
         Returns:
             Date, day-end timestamp and ranked UID/name/count tuples.
@@ -56,6 +57,8 @@ class DailyRankings:
         start = datetime.fromtimestamp(now, zone).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
+        if previous_day:
+            start -= timedelta(days=1)
         end = start + timedelta(days=1)
         date = start.strftime("%Y-%m-%d")
         fixture = flood_fixture(adapter, group)

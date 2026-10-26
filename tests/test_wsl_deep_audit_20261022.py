@@ -11,6 +11,9 @@ import pytest
 
 from astrbot.builtin_stars.wangshangliao_moderation import activity_store
 from astrbot.builtin_stars.wangshangliao_moderation.lifecycle import clear_working_data
+from astrbot.builtin_stars.wangshangliao_moderation.rule_replies import (
+    ADMISSION_WINDOW_SECONDS,
+)
 from astrbot.core.platform.sources.wangshangliao import wire
 from astrbot.core.platform.sources.wangshangliao.adapter import WangshangliaoAdapter
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
@@ -251,7 +254,7 @@ async def test_roster_wait_cannot_send_an_advertisement_after_its_live_window(
         db.execute("UPDATE business_ad_cursors SET next_at=?", (cursor["next_at"],))
 
     async def slow_roster(*args):
-        now[0] += 11
+        now[0] += ADMISSION_WINDOW_SECONDS + 1
         return {}
 
     rules.service.roster.side_effect = slow_roster
@@ -261,6 +264,11 @@ async def test_roster_wait_cannot_send_an_advertisement_after_its_live_window(
     adapter.send_text.assert_not_awaited()
     adapter.send_reply_text.assert_not_awaited()
     with rules.store.connect() as db:
-        assert db.execute("SELECT COUNT(*) FROM business_rule_sends").fetchone()[0] == 0
+        evidence = db.execute(
+            "SELECT state,error FROM business_rule_sends"
+        ).fetchall()
+        assert [tuple(row) for row in evidence] == [
+            ("skipped", "advertisement_slot_expired")
+        ]
         current = db.execute("SELECT * FROM business_ad_cursors").fetchone()
         assert current["next_at"] > now[0] and not current["blocked"]

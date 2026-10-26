@@ -231,9 +231,12 @@ class WangshangliaoAdapter(Platform):
             "invalid_packets": 0,
             "decode_failures": 0,
             "unsupported_formats": 0,
+            "plaintext_notices": 0,
+            "unverified_messages": 0,
         }
         self.decode_reasons = {}
         self.decode_shapes = {}
+        self.unverified_formats = {}
         self.current_error = ""
         self.last_connected_at = None
         self.next_retry_at = None
@@ -287,6 +290,7 @@ class WangshangliaoAdapter(Platform):
                 **self.receive_health,
                 "decode_reasons": dict(self.decode_reasons),
                 "decode_shapes": dict(self.decode_shapes),
+                "unverified_formats": dict(self.unverified_formats),
             },
             "current_error": self.current_error,
             "last_connected_at": self.last_connected_at,
@@ -713,6 +717,53 @@ class WangshangliaoAdapter(Platform):
             except wire.ProtocolError as exc:
                 if str(exc) != "message_decode":
                     raise
+                unverified = getattr(exc, "unverified", {})
+                if unverified:
+                    format_id = unverified["format"]
+                    # This is classification, not message authentication. Only the
+                    # verified transport catalog may choose the archive's scope.
+                    group = (
+                        next(
+                            (
+                                gid
+                                for gid, team in self.groups.items()
+                                if team == outer[1]
+                            ),
+                            None,
+                        )
+                        if outer[0] == "1"
+                        else None
+                    )
+                    notice = group is not None and format_id in {7, 8}
+                    await self.ledger.ingest(
+                        self.account,
+                        group
+                        if group is not None
+                        else f"unsupported/{outer[0]}/{outer[1]}",
+                        outer[12],
+                        unverified,
+                        state="plaintext_notice" if notice else "unverified_message",
+                    )
+                    key = str(format_id) if 0 <= format_id <= 40 else "other"
+                    self.unverified_formats[key] = (
+                        self.unverified_formats.get(key, 0) + 1
+                    )
+                    self.receive_health[
+                        "plaintext_notices" if notice else "unverified_messages"
+                    ] += 1
+                    if not notice:
+                        self.unsupported_pushes += 1
+                    self.diagnostics.emit(
+                        "receive",
+                        "plaintext_notice" if notice else "unverified_message",
+                        outer[12],
+                        failed=not notice,
+                        error="" if notice else "message_unverified",
+                        group=group or "",
+                        action="archive_only",
+                    )
+                    await self.nim.acknowledge(int(outer[0]), outer[12])
+                    return
                 # Persist only routing metadata, never unverified content. This
                 # prevents poison history from repeatedly reconnecting the socket.
                 target = "unsupported/" + outer[0] + "/" + outer[1]
@@ -1017,6 +1068,18 @@ class WangshangliaoAdapter(Platform):
                         "server": str(inner.reply.server_id),
                         "client": str(inner.reply.client_id),
                     }
+            else:
+                # Preserve type-only evidence, not an empty unexplained record.
+                # Application notices are never authoritative membership events.
+                notice = inner.format in {7, 8}
+                state = "application_notice" if notice else "unsupported"
+                payload = {
+                    "format": inner.format if 0 <= inner.format <= 65535 else -1,
+                    "reason": "application_notice" if notice else "unsupported_format",
+                }
+                if not notice:
+                    self.receive_health["unsupported_formats"] += 1
+                    self.unsupported_pushes += 1
         from .runtime_policy import runtime
 
         if state == "pending" and not self.config.get("_business_active"):

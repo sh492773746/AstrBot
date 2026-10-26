@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>辣椒聊群管</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <main id="main-content" tabindex="-1">
+    <header class="page-header">
+      <div class="heading"><img src="./logo.ico" class="logo" alt="" width="36" height="36"><div><h1>辣椒聊群管</h1><span id="instance-count" class="muted">0 个机器人</span></div></div>
+      <button id="refresh" class="icon-button" aria-label="刷新状态" title="刷新状态"><img src="./icons/refresh-cw.svg" class="icon" alt=""></button>
+    </header>
+    <div class="scope-bar">
+      <label for="instance">当前机器人<select id="instance" aria-label="当前机器人"></select></label>
+      <div class="group-scope"><label for="action-group">当前群<select id="action-group" aria-label="当前群"><option value="">暂无群聊</option></select></label><button id="groups" class="icon-button" aria-label="刷新群列表" title="刷新群列表"><img src="./icons/refresh-cw.svg" class="icon" alt=""></button></div>
+    </div>
+    <button id="more" hidden>加载更多群</button>
+    <p id="identity" class="muted"></p>
+    <p id="status" role="status" aria-live="polite"></p>
+    <div id="workspace" hidden>
+      <div class="overview">
+        <div><span>连接状态</span><strong id="connection-state">待连接</strong></div>
+        <div><span>群内身份</span><strong id="group-role">待核实</strong></div>
+        <div><span>群白名单</span><strong id="allowed-groups">0 个群</strong></div>
+      </div>
+      <nav id="main-tabs" class="tabs" role="tablist" aria-label="群管功能">
+        <button type="button" role="tab" id="tab-controls" data-view="controls" aria-controls="controls" aria-selected="true" tabindex="0">消息权限</button>
+        <button type="button" role="tab" id="tab-group-actions" data-view="group-actions" aria-controls="group-actions" aria-selected="false" tabindex="-1">自动化状态</button>
+        <button type="button" role="tab" id="tab-business-settings" data-view="business-settings" aria-controls="business-settings" aria-selected="false" tabindex="-1">自动化设置</button>
+        <button type="button" role="tab" id="tab-managers" data-view="managers" aria-controls="managers" aria-selected="false" tabindex="-1">管理授权</button>
+        <button type="button" role="tab" id="tab-ai" data-view="ai-settings" aria-controls="ai-settings" aria-selected="false" tabindex="-1">AI 配额</button>
+        <button type="button" role="tab" id="tab-activities" data-view="activities" aria-controls="activities" aria-selected="false" tabindex="-1">活动任务</button>
+        <button type="button" role="tab" id="tab-records" data-view="records" aria-controls="records" aria-selected="false" tabindex="-1">记录</button>
+        <button type="button" role="tab" id="tab-business-capabilities" data-view="business-capabilities" aria-controls="business-capabilities" aria-selected="false" tabindex="-1">能力</button>
+        <button type="button" role="tab" id="tab-commerce" data-view="commerce" aria-controls="commerce" aria-selected="false" tabindex="-1" hidden>套餐运营</button>
+      </nav>
+      <div class="feedback-bar">
+        <p id="business-status" role="status" aria-live="polite"></p>
+        <button id="load-business" class="icon-button" aria-label="刷新业务状态" title="刷新业务状态" hidden><img src="./icons/refresh-cw.svg" class="icon" alt=""></button>
+      </div>
+      <section id="commerce" data-main-panel role="tabpanel" aria-labelledby="tab-commerce" tabindex="0" hidden>
+        <div class="section-heading"><h2>套餐运营</h2><button id="commerce-refresh" class="icon-button" aria-label="刷新套餐" title="刷新套餐"><img src="./icons/refresh-cw.svg" class="icon" alt=""></button></div>
+        <p id="commerce-status" role="status" aria-live="polite"></p>
+        <div class="business-fields">
+          <label>客户<select id="commerce-customer"><option value="">暂无客户</option></select></label>
+          <form id="commerce-create" class="commerce-form"><label>客户名称<input id="commerce-label" maxlength="128" required></label><label class="switch"><span>确认新增客户</span><input id="commerce-create-confirm" type="checkbox"></label><button type="submit"><img src="./icons/plus.svg" class="icon" alt="">新增客户</button></form>
+        </div>
+        <div id="commerce-summary" class="overview"></div>
+        <form id="commerce-order" class="commerce-form">
+          <div class="business-fields">
+            <label>操作<select id="commerce-action"><option value="activate">开通套餐</option><option value="renew">续费至下一周期</option><option value="topup">积分追加包</option><option value="pause">暂停服务</option><option value="resume">恢复服务</option><option value="bind">分配机器人</option></select></label>
+            <label id="commerce-plan-label">套餐<select id="commerce-plan"><option value="standard">普通版 · 49U / 30 天 · 1 机器人 / 10 群</option><option value="ai">AI 版 · 99U / 30 天 · 20,000 积分</option></select></label>
+            <label id="commerce-topup-label" hidden>追加包<select id="commerce-product"><option value="5000">5,000 积分 / 10U</option><option value="10000">10,000 积分 / 20U</option></select></label>
+            <label id="commerce-bot-label" hidden>待分配机器人<select id="commerce-bot"></select></label>
+            <label id="commerce-receipt-label">人工收款记录号<input id="commerce-receipt" maxlength="128"></label>
+          </div>
+          <label class="switch" id="commerce-paid-label"><span>已核实收款</span><input id="commerce-paid" type="checkbox"></label>
+          <label class="switch"><span>确认执行此操作</span><input id="commerce-confirm" type="checkbox"></label>
+          <div class="actions save-bar"><span id="commerce-customer-state" class="muted"></span><button type="submit" class="primary"><img src="./icons/check.svg" class="icon" alt="">提交操作</button></div>
+        </form>
+        <div class="section-heading"><h2>月用量与预留</h2></div>
+        <div id="commerce-periods" class="commerce-records"></div>
+        <div id="commerce-calls" class="commerce-records"></div>
+        <div class="actions"><button id="commerce-previous" class="icon-button" title="上一页" aria-label="上一页"><img src="./icons/chevron-left.svg" class="icon" alt=""></button><span id="commerce-page">1</span><button id="commerce-next" class="icon-button" title="下一页" aria-label="下一页"><img src="./icons/chevron-right.svg" class="icon" alt=""></button></div>
+        <details class="advanced"><summary>人工对账</summary>
+          <form id="commerce-reconcile" class="commerce-form">
+            <div class="business-fields">
+              <label>待核验调用<select id="commerce-call"></select></label>
+              <label>处理<select id="commerce-reconcile-action"><option value="settle">按账单结算</option><option value="release">确认未扣费并释放</option></select></label>
+              <label>实际人民币费用<input id="commerce-actual" inputmode="decimal" value="0" pattern="[0-9]+(\.[0-9]+)?" required></label>
+              <label>核验记录号<input id="commerce-evidence" maxlength="256" required></label>
+            </div>
+            <label class="switch"><span>已核对账单并确认处理</span><input id="commerce-reconcile-confirm" type="checkbox"></label>
+            <button class="primary" type="submit"><img src="./icons/check.svg" class="icon" alt="">确认对账</button>
+          </form>
+        </details>
+        <details class="advanced"><summary>内部费率与核验证据</summary>
+          <form id="commerce-rate" class="commerce-form">
+            <div class="business-fields">
+              <label>原生 Gemini 来源<select id="commerce-provider"></select></label>
+              <label>普通输入 / 百万 Token（人民币）<input id="commerce-input-price" inputmode="decimal" value="0" required></label>
+              <label>缓存输入 / 百万 Token（人民币）<input id="commerce-cache-price" inputmode="decimal" value="0" required></label>
+              <label>输出含思考 / 百万 Token（人民币）<input id="commerce-output-price" inputmode="decimal" value="0" required></label>
+              <label>账单与上限核验记录号<input id="commerce-rate-evidence" maxlength="256"></label>
+            </div>
+            <div class="switch-grid">
+              <label class="switch"><span>已核验最终输入计数</span><input id="commerce-count-proof" type="checkbox"></label>
+              <label class="switch"><span>已核验输出与思考合计上限</span><input id="commerce-bound-proof" type="checkbox"></label>
+              <label class="switch"><span>已核验原始用量与实际账单</span><input id="commerce-usage-proof" type="checkbox"></label>
+              <label class="switch"><span>核验通过，仅用于后续新周期</span><input id="commerce-verified" type="checkbox"></label>
+              <label class="switch"><span>确认保存费率版本</span><input id="commerce-rate-confirm" type="checkbox"></label>
+            </div>
+            <button type="submit" class="primary"><img src="./icons/save.svg" class="icon" alt="">保存费率</button>
+          </form>
+        </details>
+        <details class="advanced"><summary>实例归属与运营记录</summary><div id="commerce-bindings" class="commerce-records"></div><div id="commerce-alerts" class="commerce-records"></div><div id="commerce-audit" class="commerce-records"></div></details>
+      </section>
+      <section id="controls" data-main-panel role="tabpanel" aria-labelledby="tab-controls" tabindex="0">
+        <div class="section-heading"><h2>消息权限</h2><span class="badge">群白名单</span></div>
+        <label class="switch"><span>允许当前群</span><input id="current-group-enabled" type="checkbox" disabled></label>
+        <label class="switch"><span>允许私聊</span><input id="private" type="checkbox"></label>
+        <details class="advanced"><summary>手动添加群</summary><form id="add-form" class="actions"><input id="group-id" aria-label="添加群 ID" placeholder="群 ID" maxlength="128" required><button type="submit"><img src="./icons/plus.svg" class="icon" alt="">添加并开启</button></form></details>
+        <div class="actions save-bar"><span id="dirty" role="status">权限已同步</span><button id="save" class="primary"><img src="./icons/save.svg" class="icon" alt="">保存权限</button></div>
+      </section>
+      <section id="group-actions" data-main-panel role="tabpanel" aria-labelledby="tab-group-actions" tabindex="0" hidden>
+        <div class="section-heading"><h2>群自动化</h2><button id="load-group" class="icon-button" aria-label="刷新群状态" title="刷新群状态"><img src="./icons/refresh-cw.svg" class="icon" alt=""></button></div>
+        <p id="group-state" class="muted" role="status" aria-live="polite"></p>
+        <p id="automation-status-summary" class="muted">自动化配置仅作用于当前机器人和当前群。</p>
+        <button id="open-automation-settings" type="button">配置自动化规则</button>
+      </section>
+      <section id="business-settings" data-main-panel role="tabpanel" aria-labelledby="tab-business-settings" tabindex="0" hidden>
+        <h2>自动化设置</h2>
+        <form id="business-form" hidden>
+          <div class="switch-grid">
+            <label class="switch"><span>群 AI 聊天</span><input id="group-ai-enabled" type="checkbox"></label>
+            <label class="switch"><span>规则命令识别</span><input id="commands-enabled" type="checkbox" checked></label>
+            <label class="switch"><span>发言排名</span><input id="rankings-enabled" type="checkbox"></label>
+            <label class="switch"><span>群抽奖</span><input id="lottery-enabled" type="checkbox"></label>
+            <label class="switch"><span>每日定时通知</span><input id="reminders-enabled" type="checkbox"></label>
+            <label class="switch"><span>内容审核</span><input id="review-enabled" type="checkbox"></label>
+            <label class="switch"><span>邀请统计（新成员）</span><input id="invitations-enabled" type="checkbox"></label>
+          </div>
+          <p id="astrbot-ai-status" class="muted" role="status"></p>
+          <details class="advanced"><summary>抽奖参数</summary><div class="business-fields">
+            <label class="switch"><span>按计划自动开启抽奖</span><input id="lottery-plan-enabled" type="checkbox"></label>
+            <label>开始时间（北京时间）<input id="lottery-start" type="datetime-local"></label>
+            <label>奖品<input id="lottery-prize" maxlength="128"></label>
+            <label>领奖联系人<input id="lottery-contact" maxlength="128"></label>
+            <label>中奖人数<input id="lottery-winners" type="number" min="1" max="100" step="1" required></label>
+            <label>倒计时（分钟）<input id="lottery-minutes" type="number" min="1" max="10080" step="1" required></label>
+            <label>参与上限<input id="lottery-capacity" type="number" min="0" max="10000" step="1" required></label>
+            <label>最低有效邀请人数<input id="lottery-min-invitations" type="number" min="0" max="10000" step="1" required></label>
+            <label class="switch"><span>逐人引用开奖结果并发送 GIF</span><input id="lottery-notify-results" type="checkbox"></label>
+          </div></details>
+          <details class="advanced"><summary>邀请积分</summary><label class="switch"><span>奖励非现金积分</span><input id="invitation-rewards-enabled" type="checkbox"></label><label>每人非现金积分<input id="invitation-points" type="number" min="0" max="10000" step="1" value="1"></label></details>
+          <details class="advanced"><summary>每日通知</summary><label class="switch"><span>按计划自动发送</span><input id="reminder-plan-enabled" type="checkbox"></label><div class="business-fields"><label>通知时间（北京时间）<input id="reminder-clock" type="time" required></label><label>通知内容<textarea id="reminder-text" maxlength="2000" rows="3"></textarea></label></div></details>
+          <details class="advanced"><summary>群作息与成员维护</summary>
+            <div class="switch-grid">
+              <label class="switch"><span>定时全员禁言／解禁</span><input id="quiet-enabled" type="checkbox"></label>
+              <label class="switch"><span>自动同步成员名片</span><input id="cards-enabled" type="checkbox" disabled></label>
+              <label class="switch"><span>清理已核验封禁／注销账号</span><input id="cleanup-enabled" type="checkbox" disabled></label>
+              <label class="switch"><span>功能回复 20 秒后撤回</span><input id="reply-recall-enabled" type="checkbox"></label>
+            </div>
+            <div class="business-fields">
+              <label>禁言时间（北京时间）<input id="quiet-start" type="time" required></label>
+              <label>解禁时间（北京时间）<input id="quiet-end" type="time" required></label>
+              <label>名片原昵称字数<input id="card-characters" type="number" min="1" max="15" step="1" required></label>
+              <label>名片前缀<input id="card-prefix" maxlength="10"></label>
+              <label>名片后缀<input id="card-suffix" maxlength="10"></label>
+            </div>
+            <p id="maintenance-capability-status" class="muted"></p>
+          </details>
+          <details class="advanced" id="automation-rules"><summary>自动化与 AI</summary>
+            <div class="switch-grid">
+              <label class="switch"><span>自动递进禁言</span><input id="automation-enabled" type="checkbox"></label>
+              <label class="switch"><span>关键词规则</span><input id="automation-keyword" type="checkbox"></label>
+              <label class="switch"><span>刷屏规则</span><input id="automation-flood" type="checkbox"></label>
+              <label class="switch"><span>撤回已核验刷屏消息</span><input id="automation-flood-recall" type="checkbox" disabled></label>
+              <label class="switch"><span>AI 高置信度自动禁言</span><input id="automation-ai" type="checkbox"></label>
+              <label class="switch"><span>AI 群管查询</span><input id="ai-management-enabled" type="checkbox"></label>
+            </div>
+            <div class="business-fields">
+              <label>处罚模式<select id="automation-mode"><option value="mute">递进禁言（保留现有模式）</option><option value="recall_progressive" disabled>前三次撤回，后续撤回并禁言</option></select></label>
+              <label>审核模型<select id="review-provider"><option value="">不使用 AI 审核</option></select></label>
+              <label>AI 处罚置信度<input id="automation-confidence" type="number" min="0.9" max="1" step="0.01" required></label>
+              <label>连续消息数量<input id="automation-flood-limit" type="number" min="2" max="32" step="1" required></label>
+              <label>连续消息窗口（秒）<input id="automation-flood-window" type="number" min="1" max="60" step="1" required></label>
+              <label>重复消息数量<input id="automation-duplicate-limit" type="number" min="2" max="32" step="1" required></label>
+              <label>重复消息窗口（秒）<input id="automation-duplicate-window" type="number" min="1" max="120" step="1" required></label>
+              <label>违规计数窗口（小时）<input id="automation-count-window" type="number" min="1" max="168" step="1" required></label>
+              <label>处罚冷却（秒）<input id="automation-cooldown" type="number" min="60" max="3600" step="1" required></label>
+              <label>首次禁言（分钟）<input id="automation-mute-0" type="number" min="1" max="60" step="1" required></label>
+              <label>第二次禁言（分钟）<input id="automation-mute-1" type="number" min="1" max="60" step="1" required></label>
+              <label>后续禁言（分钟）<input id="automation-mute-2" type="number" min="1" max="60" step="1" required></label>
+            </div>
+            <label>审核关键词<textarea id="review-keywords" rows="3"></textarea></label>
+            <label>AI 群规<textarea id="automation-ai-rules" maxlength="2000" rows="4"></textarea></label>
+          </details>
+          <div class="actions save-bar"><span class="muted">仅保存当前机器人、当前群</span><button type="submit" id="save-business" class="primary"><img src="./icons/save.svg" class="icon" alt="">保存业务设置</button></div>
+        </form>
+      </section>
+      <section id="managers" data-main-panel role="tabpanel" aria-labelledby="tab-managers" tabindex="0" hidden>
+        <div class="section-heading"><h2>本群机器人管理员</h2><button id="load-users" class="icon-button" aria-label="刷新群成员" title="刷新群成员"><img src="./icons/refresh-cw.svg" class="icon" alt=""></button></div>
+        <input id="user-search" type="search" placeholder="成员名称或 UID" aria-label="搜索群成员">
+        <p id="users-status" class="muted" role="status"></p>
+        <div id="users-list"></div>
+        <div class="actions pagination"><button id="users-prev" class="icon-button" aria-label="上一页成员" title="上一页成员"><img src="./icons/chevron-left.svg" class="icon" alt=""></button><span id="users-page"></span><button id="users-next" class="icon-button" aria-label="下一页成员" title="下一页成员"><img src="./icons/chevron-right.svg" class="icon" alt=""></button></div>
+        <div class="actions save-bar"><span id="managers-dirty" class="muted">授权已同步</span><button id="save-managers" class="primary" disabled><img src="./icons/save.svg" class="icon" alt="">保存授权</button></div>
+      </section>
+      <section id="ai-settings" data-main-panel role="tabpanel" aria-labelledby="tab-ai" tabindex="0" hidden>
+        <div class="section-heading"><h2>AI 人格与配额</h2><button id="refresh-ai" class="icon-button" aria-label="刷新 AI 用量" title="刷新 AI 用量"><img src="./icons/refresh-cw.svg" class="icon" alt=""></button></div>
+        <p id="ai-status" role="status" aria-live="polite"></p>
+        <form id="ai-form" hidden>
+          <h3>当前机器人</h3>
+          <div class="business-fields">
+            <label>聊天人格<select id="ai-chat-persona" required></select></label>
+            <label>群管私聊人格<select id="ai-management-persona" required></select></label>
+            <label>普通用户每日次数<input id="ai-user-limit" type="number" min="0" max="100000" step="1" required></label>
+            <label>群管私聊每日次数<input id="ai-management-limit" type="number" min="0" max="100000" step="1" required></label>
+            <label>私聊额度提醒管理员<select id="ai-private-recipient"><option value="">未指定</option></select></label>
+          </div>
+          <div id="ai-group-fields"><h3>当前群</h3><div class="business-fields">
+            <label>单群每日 AI 次数<input id="ai-group-limit" type="number" min="0" max="100000" step="1" required></label>
+            <label>群额度提醒管理员<select id="ai-group-recipient"><option value="">未指定</option></select></label>
+          </div></div>
+          <div class="actions save-bar"><span id="ai-dirty" class="muted">配置已同步</span><button type="submit" class="primary"><img src="./icons/save.svg" class="icon" alt="">保存 AI 设置</button></div>
+        </form>
+        <div class="overview">
+          <div><span>今日单群已用</span><strong id="ai-group-used">0</strong></div>
+          <div><span>今日单群剩余</span><strong id="ai-group-remaining">500</strong></div>
+          <div><span>下次重置</span><strong id="ai-reset">北京时间 00:00</strong></div>
+        </div>
+        <p id="ai-metrics" class="muted"></p>
+        <h3>今日额度</h3><div id="ai-usage-list"></div>
+        <div class="actions pagination"><button id="ai-prev" class="icon-button" aria-label="上一页 AI 用量" title="上一页"><img src="./icons/chevron-left.svg" class="icon" alt=""></button><span id="ai-page">1</span><button id="ai-next" class="icon-button" aria-label="下一页 AI 用量" title="下一页"><img src="./icons/chevron-right.svg" class="icon" alt=""></button></div>
+        <h3>管理员提醒记录</h3><div id="ai-alert-list"></div>
+      </section>
+      <section id="activities" data-main-panel role="tabpanel" aria-labelledby="tab-activities" tabindex="0" hidden>
+        <nav id="business-tabs" class="tabs sub-tabs" role="tablist" aria-label="活动任务">
+          <button type="button" role="tab" id="tab-business-rankings" data-view="business-rankings" aria-controls="business-rankings" aria-selected="true" tabindex="0">发言排名</button>
+          <button type="button" role="tab" id="tab-business-activities" data-view="business-activities" aria-controls="business-activities" aria-selected="false" tabindex="-1">抽奖记录</button>
+          <button type="button" role="tab" id="tab-business-reminders" data-view="business-reminders" aria-controls="business-reminders" aria-selected="false" tabindex="-1">定时通知</button>
+          <button type="button" role="tab" id="tab-business-invitations" data-view="business-invitations" aria-controls="business-invitations" aria-selected="false" tabindex="-1">邀请积分</button>
+        </nav>
+        <div id="business-rankings" data-business-panel role="tabpanel" aria-labelledby="tab-business-rankings" tabindex="0"><h3>今日发言排名</h3><div id="rankings-list"></div><div class="actions pagination"><button id="ranking-prev" class="icon-button" aria-label="上一页" title="上一页"><img src="./icons/chevron-left.svg" class="icon" alt=""></button><span id="ranking-page"></span><button id="ranking-next" class="icon-button" aria-label="下一页" title="下一页"><img src="./icons/chevron-right.svg" class="icon" alt=""></button></div></div>
+        <div id="business-activities" data-business-panel role="tabpanel" aria-labelledby="tab-business-activities" tabindex="0" hidden><h3>抽奖活动</h3><div id="activities-list"></div></div>
+        <div id="business-reminders" data-business-panel role="tabpanel" aria-labelledby="tab-business-reminders" tabindex="0" hidden><h3>自动计划与回执</h3><div id="scheduled-list"></div><h3>原有通知任务</h3><div id="reminders-list"></div></div>
+        <div id="business-invitations" data-business-panel role="tabpanel" aria-labelledby="tab-business-invitations" tabindex="0" hidden><h3>已核实邀请积分</h3><div id="invitation-list"></div></div>
+      </section>
+      <section id="records" data-main-panel role="tabpanel" aria-labelledby="tab-records" tabindex="0" hidden>
+        <nav id="record-tabs" class="tabs sub-tabs" role="tablist" aria-label="记录分类">
+          <button type="button" role="tab" id="tab-notifications-panel" data-view="notifications-panel" aria-controls="notifications-panel" aria-selected="true" tabindex="0">群通知</button>
+          <button type="button" role="tab" id="tab-action-history-panel" data-view="action-history-panel" aria-controls="action-history-panel" aria-selected="false" tabindex="-1">操作回执</button>
+          <button type="button" role="tab" id="tab-business-audit" data-view="business-audit" aria-controls="business-audit" aria-selected="false" tabindex="-1">审核记录</button>
+          <button type="button" role="tab" id="tab-own-messages-panel" data-view="own-messages-panel" aria-controls="own-messages-panel" aria-selected="false" tabindex="-1">机器人消息</button>
+        </nav>
+        <div id="notifications-panel" data-record-panel role="tabpanel" aria-labelledby="tab-notifications-panel" tabindex="0"><h3>最近群通知</h3><div id="notifications"></div></div>
+        <div id="action-history-panel" data-record-panel role="tabpanel" aria-labelledby="tab-action-history-panel" tabindex="0" hidden><h3>原生操作回执</h3><div id="action-history"></div></div>
+        <div id="business-audit" data-record-panel role="tabpanel" aria-labelledby="tab-business-audit" tabindex="0" hidden><h3>自动处罚回执</h3><div id="automatic-list"></div><h3>审核与业务操作</h3><div id="audit-list"></div><button id="audit-more">较早记录</button></div>
+        <div id="own-messages-panel" data-record-panel role="tabpanel" aria-labelledby="tab-own-messages-panel" tabindex="0" hidden><h3>机器人最近消息</h3><div id="own-messages"></div></div>
+      </section>
+      <section id="business-capabilities" data-main-panel role="tabpanel" aria-labelledby="tab-business-capabilities" tabindex="0" hidden>
+        <h2>平台能力</h2>
+        <dl class="capability-summary"><div><dt>文字与引用</dt><dd><span class="badge">已接入</span></dd></div><div><dt>自己的消息撤回、群名片</dt><dd><span class="badge">已接入</span></dd></div><div><dt>图片收发</dt><dd><span id="image-capability" class="badge muted">待验收</span></dd></div><div><dt>语音、文件、视频</dt><dd><span class="badge muted">本轮不接入</span></dd></div></dl>
+        <div id="capabilities-list"></div>
+      </section>
+      <div class="operation-feedback"><p id="action-result" role="status" aria-live="polite"></p><button id="query-action" hidden><img src="./icons/refresh-cw.svg" class="icon" alt="">查询操作结果</button></div>
+    </div>
+  </main>
+  <dialog id="discard-dialog"><h2>未保存的更改</h2><p>放弃当前机器人未保存的设置？</p><div class="actions"><button id="cancel-discard">返回编辑</button><button id="confirm-discard">放弃修改</button></div></dialog>
+  <dialog id="manager-dialog"><h2>确认管理员授权</h2><p id="manager-preview"></p><div class="actions"><button id="cancel-managers">取消</button><button id="confirm-managers">确认保存授权</button></div></dialog>
+  <dialog id="automation-dialog"><h2>确认自动处罚规则</h2><p id="automation-preview"></p><div class="actions"><button id="cancel-automation">取消</button><button id="confirm-automation" class="primary">确认保存</button></div></dialog>
+  <script src="/api/plugin/page/bridge-sdk.js"></script>
+  <script src="./commerce.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

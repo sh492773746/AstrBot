@@ -1,5 +1,15 @@
 # Wangshangliao Command Tree
 
+## Current In-Group Release Command
+
+Use one actual mention, or reply to a verifiable original message in the same
+group, with `解除黑名单` (alias `移除黑名单`). The bot removes the entry and
+attempts to unmute, reporting each result separately. Command cleanup follows
+the existing recall rule. Private-chat and Dashboard removal only remove the
+entry; an independent unmute does not remove it. The whitelist is unchanged.
+Unknown results require reconciliation, not automatic retry. Earlier dated
+removal-without-unmute statements below describe their original rounds.
+
 ## Current Direct Workflows (October 23, 2026)
 
 **The exclusivity/removal fix loaded at22:59:23 Beijing time, October23,2026**
@@ -196,7 +206,7 @@ Menu
 |   |-- 11. Test message text
 |   `-- 12. Group speech whitelist
 |       |-- 1. View this group's whitelist
-|       |-- 2. Add by member-name search
+|       |-- 2. Add in the group: genuinely @one member + 白名单, immediately
 |       |-- 3. Remove by member-name search
 |       |-- 4. Select a search result
 |       `-- 5. Confirm an existing whitelist preview
@@ -412,9 +422,12 @@ Activity points never transfer money or pay repeatedly for rejoining.
 Rankings use retained, trusted text for the Beijing day, twenty members per page:
 at most one count per member per thirty seconds, no repeated text within five
 minutes, excluding recorded sanctioned or recalled messages. They are not complete platform totals.
-`排名` and `发言排行榜` also accept a page number. Today's top thirty receive separate
-automatic speech exemptions, refreshed every thirty seconds with a thirty-second settling delay.
-Dropping rank or midnight removes automatic grants, never manual ones. Explicit removal
+`排名` and `发言排行榜` still show today's ranking and accept a page number.
+Automatic speech exemptions use yesterday's Beijing-day ranking: only its top thirty
+with more than 100 eligible texts (at least 101) qualify today. Excluded members
+are not replaced with ranks below thirty. Refresh runs every thirty seconds with
+a thirty-second settling delay; midnight switches the source to the next day.
+Manual grants remain unchanged. Explicit removal
 suppresses automatic re-entry for the day; blacklist wins and existing mutes stay in place.
 
 The plugin now uses two-level navigation:

@@ -23,16 +23,27 @@ def test_large_parameter_ids_are_bounded_stable_and_keep_distinct_inputs(request
     assert hook(config=request.config, val="short", argname="body") is None
 
 
-def test_module_shards_are_disjoint_complete_and_order_independent(tmp_path):
+@pytest.mark.parametrize("count", [4, 8])
+def test_module_shards_are_disjoint_complete_and_order_independent(tmp_path, count):
     items = [
         SimpleNamespace(path=Path(f"tests/{module}.py"), nodeid=f"{module}::{index}")
-        for module, size in (("a", 7), ("b", 5), ("c", 4), ("d", 3), ("e", 2))
+        for module, size in (
+            ("a", 7),
+            ("b", 5),
+            ("c", 4),
+            ("d", 3),
+            ("e", 2),
+            ("f", 1),
+            ("g", 1),
+            ("h", 1),
+            ("i", 1),
+        )
         for index in range(size)
     ]
     assignments = {}
-    for shard in range(4):
+    for shard in range(count):
         evidence = tmp_path / f"collection-{shard}.json"
-        plugin = ModuleShard(shard, 4, evidence)
+        plugin = ModuleShard(shard, count, evidence)
         selected = items.copy()
         config = SimpleNamespace(hook=SimpleNamespace(pytest_deselected=Mock()))
         plugin.pytest_collection_modifyitems(config, selected)

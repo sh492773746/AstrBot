@@ -30,7 +30,7 @@ from tests.test_wangshangliao_scoped_knowledge import edit
         ("私信选择群怎么操作", "管理 选择群"),
         ("客服负责人怎么添加客服知识", "添加客服知识"),
         ("免费指引试用次数每天重置吗", "不每日重置"),
-        ("成员发言白名单怎么添加", "添加白名单 对方名称"),
+        ("成员发言白名单怎么添加", "真正@一名成员并发送「白名单」"),
     ],
 )
 def test_manual_is_searchable_for_real_procedures(tmp_path, question, expected):
@@ -94,7 +94,7 @@ def test_manual_sync_revocation_never_writes(tmp_path):
     ("question", "expected"),
     [
         ("关键词自动回复怎么添加", "添加回复 名称|精确"),
-        ("成员发言白名单怎么添加", "添加白名单 对方名称"),
+        ("成员发言白名单怎么添加", "真正@一名成员并发送「白名单」"),
     ],
 )
 async def test_administrator_chat_includes_retrieved_procedure_without_tools(

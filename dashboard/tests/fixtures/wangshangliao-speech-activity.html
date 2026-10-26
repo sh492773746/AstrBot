@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>发言统计离线验收</title></head>
+  <body style="margin:0;font-family:system-ui,sans-serif"><div id="app"></div><script type="module">
+    import { createApp, h, ref } from "vue";
+    import Panel from "../../plugin-pages/wangshangliao/SpeechActivityPanel.vue";
+    import "../../plugin-pages/wangshangliao/style.css";
+    const group = ref("5");
+    const bridge = { apiGet: async (endpoint, params) => {
+      if (endpoint === "speech-report") return {
+        configured: true, catching_up: false,
+        groups: [{ id: "5", name: "中性测试群A" }, { id: "6", name: "中性测试群B" }, { id: "7", name: "中性测试群C" }],
+        days: [0, 1].map(index => ({
+          date: `2026-10-${26-index}`, total: 165, totals: [55, 55, 55],
+          members: Array.from({ length: 5 }, (_, i) => ({
+            id: String(i + 10), name: `汇报成员${i + 1}`,
+            counts: [i * 5 + 1, i * 5 + 1, i * 5 + 1], total: (i * 5 + 1) * 3,
+          })),
+        })),
+      };
+      if (endpoint !== "speech-activity") throw new Error("Read only fixture");
+      window.activityCalls.push(params);
+      return {
+        updated_at: 1792944000, catching_up: false, has_more: false,
+        days: [0, 1].map(index => ({
+          date: `2026-10-${26-index}`, total: index ? 680 : 240, active_members: 38,
+          kinds: { text: 201, image: 30, video: 8, forward: 1 },
+          top: [
+            { id: "10", name: "日常交流成员甲", count: 101 },
+            { id: "11", name: "日常交流成员乙", count: 68 },
+          ],
+          hours: Array.from({ length: 24 }, (_, hour) => hour % 5 * 4),
+          member: params.member_id ? { count: index ? 101 : 38, first_at: 1792940400, last_at: 1792944000 } : null,
+        })),
+        members: params.query ? [
+          { id: "10", name: "日常交流成员甲" }, { id: "11", name: "日常交流成员乙" },
+        ] : [],
+        selected_member: params.member_id ? { id: params.member_id, name: "日常交流成员甲" } : null,
+      };
+    }};
+    window.activityCalls = [];
+    createApp({ setup() { return () => h("main", { class: "page", style: "max-width:1100px;margin:auto;padding:16px;box-sizing:border-box" }, [
+      h("label", ["当前群", h("select", { "aria-label": "当前群", value: group.value, onChange: event => group.value = event.target.value }, [
+        h("option", { value: "5" }, "中性测试群A"), h("option", { value: "6" }, "中性测试群B"),
+      ])]),
+      h(Panel, { bridge, botId: "fixture", groupId: group.value, groupName: group.value === "5" ? "中性测试群A" : "中性测试群B" }),
+    ]); }}).mount("#app");
+  </script></body>
+</html>
