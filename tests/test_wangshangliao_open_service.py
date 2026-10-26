@@ -62,6 +62,26 @@ def activate(store, group="5", actor="1"):
     return store.tenant("99", group)
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_video_policy_is_scoped_typed_and_cannot_be_silently_dropped(store, enabled):
+    row = activate(store)
+    rules = {**row["rules"], "video_whitelist_only": enabled}
+    store.change("99", "5", row["version"], "1", rules=rules)
+    saved = store.tenant("99", "5")
+    assert saved["rules"]["video_whitelist_only"] is enabled
+    assert "video_whitelist_only" not in store.tenant("99", "6")["rules"]
+    with pytest.raises(OpenError, match="tenant_rules_refresh"):
+        store.change("99", "5", saved["version"], "1", rules=row["rules"])
+    with pytest.raises(OpenError, match="tenant_invalid"):
+        store.change(
+            "99",
+            "5",
+            saved["version"],
+            "1",
+            rules={**saved["rules"], "video_whitelist_only": 1},
+        )
+
+
 def test_invite_operator_and_owner_never_grant_role(store):
     row = store.tenant("99", "5")
     with pytest.raises(OpenError, match="inviter_unproven"):

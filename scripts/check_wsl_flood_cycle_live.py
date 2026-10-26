@@ -483,28 +483,25 @@ async def main():
             assert TARGET not in {row["id"] for row in listing["members"]}
             record("recalled_text_did_not_award_whitelist")
             await send("rank")
-            for _ in range(40):
-                await asyncio.sleep(2)
-                listing = await rpc(
-                    "member_whitelist",
-                    account=RECEIVER,
-                    group_id=GROUP,
-                    tenant_version=(await tenant())["version"],
-                    operation="read",
-                )
-                member = next(
-                    (row for row in listing["members"] if row["id"] == TARGET), None
-                )
-                if member:
-                    break
-            assert (
-                member
-                and member.get("source") == "daily_top30"
-                and member.get("count") == 1
-            ), member
-            record("automatic_whitelist_verified", count=member["count"])
-            await send("exempt")
-            record("controlled_acceptance_passed", phone_observation=False)
+            await asyncio.sleep(33)
+            listing = await rpc(
+                "member_whitelist",
+                account=RECEIVER,
+                group_id=GROUP,
+                tenant_version=(await tenant())["version"],
+                operation="read",
+            )
+            assert TARGET not in {row["id"] for row in listing["members"]}
+            record("current_day_text_did_not_award_whitelist")
+            record(
+                "automatic_whitelist_acceptance_deferred",
+                reason="Requires yesterday's top30 and at least101 eligible texts; no historical records are synthesized.",
+            )
+            record(
+                "controlled_acceptance_passed",
+                phone_observation=False,
+                automatic_whitelist_acceptance=False,
+            )
         except BaseException as exc:
             record("failed", error=type(exc).__name__, detail=str(exc)[:800])
             raise

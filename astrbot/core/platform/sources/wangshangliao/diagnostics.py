@@ -62,6 +62,7 @@ ERROR_LABELS = frozenset(
         "message_trailing",
         "message_count",
         "message_decode",
+        "message_unverified",
         "recall_notification",
         "notification",
         "receipt_shape",

@@ -81,7 +81,8 @@ async def create_bot(
         payload.to_dashboard_config(),
         **(
             {"owner": _auth.username if _auth.via == "jwt" else ""}
-            if payload.to_dashboard_config().get("type") == "wangshangliao"
+            if payload.to_dashboard_config().get("type")
+            in {"wangshangliao", "lajiaoliao"}
             else {}
         ),
     )
@@ -117,7 +118,8 @@ async def update_bot_by_id(
         payload.to_dashboard_config(fallback_id=bot_id),
         **(
             {"owner": _auth.username if _auth.via == "jwt" else ""}
-            if payload.to_dashboard_config().get("type") == "wangshangliao"
+            if payload.to_dashboard_config().get("type")
+            in {"wangshangliao", "lajiaoliao"}
             else {}
         ),
     )
@@ -141,7 +143,11 @@ async def set_bot_enabled_by_id(
     service: BotConfigService = Depends(get_service),
 ):
     bot_id = _required_text(payload.bot_id, "bot_id")
-    await service.set_bot_enabled(bot_id, bool(payload.enabled))
+    await service.set_bot_enabled(
+        bot_id,
+        bool(payload.enabled),
+        owner=_auth.username if _auth.via == "jwt" else "",
+    )
     return ok(message="更新平台配置成功~")
 
 
@@ -161,7 +167,9 @@ async def set_bot_enabled(
     _auth: AuthContext = Depends(require_bot_scope),
     service: BotConfigService = Depends(get_service),
 ):
-    await service.set_bot_enabled(bot_id, payload.enabled)
+    await service.set_bot_enabled(
+        bot_id, payload.enabled, owner=_auth.username if _auth.via == "jwt" else ""
+    )
     return ok(message="更新平台配置成功~")
 
 
@@ -194,7 +202,8 @@ async def update_bot(
         payload.to_dashboard_config(fallback_id=bot_id),
         **(
             {"owner": _auth.username if _auth.via == "jwt" else ""}
-            if payload.to_dashboard_config().get("type") == "wangshangliao"
+            if payload.to_dashboard_config().get("type")
+            in {"wangshangliao", "lajiaoliao"}
             else {}
         ),
     )
@@ -230,7 +239,8 @@ async def create_dashboard_alias_platform(
             payload.to_dashboard_config(),
             **(
                 {"owner": _auth.username if _auth.via == "jwt" else ""}
-                if payload.to_dashboard_config().get("type") == "wangshangliao"
+                if payload.to_dashboard_config().get("type")
+                in {"wangshangliao", "lajiaoliao"}
                 else {}
             ),
         )
@@ -258,7 +268,7 @@ async def update_dashboard_alias_platform(
             ),
             **(
                 {"owner": _auth.username if _auth.via == "jwt" else ""}
-                if config.get("type") == "wangshangliao"
+                if config.get("type") in {"wangshangliao", "lajiaoliao"}
                 else {}
             ),
         )

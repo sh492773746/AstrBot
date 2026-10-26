@@ -124,6 +124,7 @@ def clear_working_data(root, account, group, team, guard):
         "schedules.sqlite3",
         "cards.sqlite3",
         "activities.sqlite3",
+        "speech_activity.sqlite3",
     ):
         path = root / filename
         if not path.is_file() or path.is_symlink():
@@ -164,6 +165,13 @@ def clear_working_data(root, account, group, team, guard):
                             "DELETE FROM review_holds WHERE account=? AND team IN (?,?)",
                             (account, group, "unsupported/1/" + team),
                         )
+                elif filename == "speech_activity.sqlite3":
+                    for table in ("speech_messages", "speech_cursors"):
+                        if table in tables:
+                            deleted += db.execute(
+                                f"DELETE FROM {table} WHERE account=? AND group_id=?",
+                                (account, group),
+                            ).rowcount
                 elif filename == "moderation.sqlite3":
                     for table in ("content_violations", "semantic_reviews"):
                         if table in tables:

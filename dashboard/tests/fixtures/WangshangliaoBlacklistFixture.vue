@@ -22,11 +22,11 @@ const lists: Record<string, BlacklistEntry[]> = {
   ],
   "6": [],
 };
-const whitelist: Record<string, BlacklistMember[]> = {
+const whitelist: Record<string, Array<BlacklistMember & { source?: string; count?: number }>> = {
   "5": [
     { id: "12", name: "" },
     { id: "13", name: "同名名单成员" },
-    { id: "14", name: "同名名单成员" },
+    { id: "14", name: "同名名单成员", source: "daily_top30", count: 101 },
     { id: "11", name: "历史双名单成员" },
   ],
   "6": [],

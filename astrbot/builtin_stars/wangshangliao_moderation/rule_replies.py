@@ -37,6 +37,9 @@ COMMANDS = {
     "确认广告",
 }
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+ADMISSION_WINDOW_SECONDS = 120
+ACCOUNT_AD_GAP_SECONDS = 3
+IMAGE_TEXT_GAP_SECONDS = 1
 
 
 class KeywordReply(BaseModel):
@@ -174,6 +177,8 @@ class RuleReplies:
     def __init__(self, service):
         self.service, self.store = service, service.store
         self.tasks = {}
+        self.ad_locks = {}
+        self.ad_ready_at = {}
         self.image_sessions = {}
         self.started = time.time()
         with self.store.connect(write=True) as db:
@@ -919,16 +924,24 @@ class RuleReplies:
             task.add_done_callback(lambda done, key=key: self.tasks.pop(key, None))
 
     async def send_ad(self, adapter, cursor):
-        """Govern a scheduled send without permitting replay or widening its scope."""
-        governance = getattr(self.service, "governance", None)
-        if governance is None or adapter is None:
-            return await self._send_ad(adapter, cursor)
-        return await governance.run(
-            "advertisements",
-            adapter,
-            lambda: self._send_ad(adapter, cursor),
-            group=cursor["group_id"],
-        )
+        """Serialize account campaigns without holding the native message lock."""
+        account = cursor["account"]
+        async with self.ad_locks.setdefault(account, asyncio.Lock()):
+            await asyncio.sleep(
+                max(0, self.ad_ready_at.get(account, 0) - time.monotonic())
+            )
+            try:
+                governance = getattr(self.service, "governance", None)
+                if governance is None or adapter is None:
+                    return await self._send_ad(adapter, cursor)
+                return await governance.run(
+                    "advertisements",
+                    adapter,
+                    lambda: self._send_ad(adapter, cursor),
+                    group=cursor["group_id"],
+                )
+            finally:
+                self.ad_ready_at[account] = time.monotonic() + ACCOUNT_AD_GAP_SECONDS
 
     async def _send_ad(self, adapter, cursor):
         """Claim one scheduled slot before native IO; never retry uncertain sends."""
@@ -949,12 +962,20 @@ class RuleReplies:
         state, error, claimed = "skipped", "", False
         image_ids, image_position = ad.get("images", []), 0
         try:
-            if adapter is None or planned < self.started or now - planned > 10:
+            if adapter is None:
+                error = "advertisement_adapter_unavailable"
+                return
+            if planned < self.started:
+                error = "advertisement_before_runtime"
+                return
+            if now - planned > ADMISSION_WINDOW_SECONDS:
+                error = "advertisement_slot_expired"
                 return
             members = await self.service.roster(adapter, group)
             self.service.member_evidence[(account, group)] = members
             self.send_guard(adapter, row, posting=True)
-            if time.time() - planned > 10:
+            if time.time() - planned > ADMISSION_WINDOW_SECONDS:
+                error = "advertisement_slot_expired"
                 return
             with self.store.connect(write=True) as db:
                 current = db.execute(
@@ -999,6 +1020,8 @@ class RuleReplies:
                 not image_ids or state in {"accepted", "verified"}
             ):
                 state = "unknown"
+                if image_ids:
+                    await asyncio.sleep(IMAGE_TEXT_GAP_SECONDS)
                 state = await adapter.send_reply_text(
                     group,
                     operation,
@@ -1012,6 +1035,8 @@ class RuleReplies:
             if state not in {"accepted", "verified", "not_sent", "rejected", "partial"}:
                 state = "unknown"
         except asyncio.CancelledError:
+            if not claimed:
+                error = "advertisement_cancelled_before_send"
             raise
         except (OpenError, ProtocolError) as exc:
             error = str(exc)
@@ -1019,7 +1044,11 @@ class RuleReplies:
             from astrbot.core.star.component_runtime import report_execution_fault
 
             report_execution_fault(exc)
-            error = "advertisement_delivery_unknown"
+            error = (
+                "advertisement_delivery_unknown"
+                if claimed
+                else "advertisement_preflight_failed"
+            )
         finally:
             with self.store.connect(write=True) as db:
                 if claimed:
@@ -1044,7 +1073,7 @@ class RuleReplies:
                                 row["version"],
                             ),
                         )
-                db.execute(
+                advanced = db.execute(
                     "UPDATE business_ad_cursors SET next_at=?,blocked=? WHERE "
                     "account=? AND group_id=? AND rule_id=? AND next_at=?",
                     (
@@ -1059,7 +1088,22 @@ class RuleReplies:
                         rule_id,
                         planned,
                     ),
-                )
+                ).rowcount
+                if advanced and not claimed and error:
+                    db.execute(
+                        "INSERT OR IGNORE INTO business_rule_sends "
+                        "VALUES(?,?,?,?,?,?,'skipped',?,?)",
+                        (
+                            operation,
+                            account,
+                            group,
+                            "advertisement",
+                            rule_id,
+                            planned,
+                            time.time(),
+                            error,
+                        ),
+                    )
 
     async def close(self):
         """Cancel detached ad jobs before unloading their original service."""

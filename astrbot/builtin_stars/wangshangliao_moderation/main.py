@@ -36,6 +36,7 @@ from .private_invitation import SELECTION, MyInvitationsTool, private_invitation
 from .schedules import GroupSchedules
 from .semantic import assess
 from .settings import BusinessSettings
+from .speech_activity import SpeechActivity
 from .syntax import recognize_command
 from .text import (
     PLAIN_TEXT_INSTRUCTION,
@@ -62,6 +63,8 @@ class Main(star.Star):
         self.commands = Commands(self.schedules, self.activities)
         self.automatic_whitelist = AutomaticWhitelist(context, self.commands.rankings)
         self.whitelist_poller = None
+        self.speech_activity = SpeechActivity(context)
+        self.speech_poller = None
         self.group_management = GroupManagement(context)
         self.legacy_management = self.group_management
         self.commands.management = self.group_management
@@ -126,6 +129,7 @@ class Main(star.Star):
                 self.open_poller = asyncio.create_task(self.open_service.poll())
             self.flood_poller = asyncio.create_task(self.flood_runtime.run())
             self.whitelist_poller = asyncio.create_task(self.automatic_whitelist.run())
+            self.speech_poller = asyncio.create_task(self.speech_activity.run())
             self.dashboard_page.register()
             self.dashboard_page.friend_auto.active = True
             self.friend_poller = asyncio.create_task(
@@ -143,6 +147,10 @@ class Main(star.Star):
     async def terminate(self):
         """Stop card processing before the plugin is unloaded."""
         self.dashboard_page.active = False
+        self.speech_activity.active = False
+        if self.speech_poller:
+            self.speech_poller.cancel()
+            await asyncio.gather(self.speech_poller, return_exceptions=True)
         self.automatic_whitelist.active = False
         if self.whitelist_poller:
             self.whitelist_poller.cancel()

@@ -7,9 +7,127 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 @page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
 </style></head>
 <body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊维护修复操作说明</h1>
-<p>更新：2026-10-24（北京时间）。<a href="wangshangliao-index.html">文档目录</a>；
+<p>更新：2026-10-26（北京时间）。<a href="wangshangliao-index.html">文档目录</a>；
 <a href="wangshangliao-architecture-permissions.html">当前架构与权限</a>。
 适用于公共合并模式；操作前核对当前账号、群和有效配置，不能沿用旧AI管理工具流程。</p>
+<h2>2026-10-26 黑名单重入被历史未知回执阻断</h2>
+<p>根因是名单意图预留查询将同一成员任一历史<code>unknown</code>作为永久阻断条件：
+新真实入群通知虽然完成核验并标记处理，却没有生成新的禁言意图。
+现改为保留旧回执，按<strong>规范入群ID及请求完成时间</strong>隔离：
+同一入群仍去重；旧请求在途、缺少不可修改完成审计、入群发生在完成之前或同时，
+以及后续管理命令仍不能借机重试。只有完成后新发生、经最新原生入群记录、
+完整目录和当前权限核实的真实入群，才可创建独立禁言意图。
+增加完成审计查重索引，不合并、删除或改写旧记录，不增加踢人或放宽普通禁言上限。</p>
+<p>先用新增回归复现原漏洞，再验证完成后重入、重复通知、并发、重启、
+旧通知、未完成请求、名单移除及权限fence。
+生产源码六文件<strong>606 passed</strong>，另有既存<code>audioop</code>弃用警告；Ruff通过。
+开发树相关651项及扩展634项通过，覆盖重叠，不与生产数目相加。
+旧测试中管理员指令保留及默认关键词数量断言按各树现有行为校正；
+未因此修改生产关键词、撤回逻辑或生产新增的解除黑名单流程。</p>
+<p>北京时间2026-10-26 <strong>22:58:00受控完整重启</strong>，PID402859→1013043，
+active/running、NRestarts=0。重启前消息、规则及发送队列无在途工作，
+距下一轮定时发言约119秒；重启后旺商聊原账号在线，另两个账号继续停用。
+23:07:15核对：原意图、不可修改审计、原通知及原未知回执完整保留，
+消息、名单及发件队列无积压，旧12条<code>needs_review</code>不重试。
+23:00三个正式群的原定时轮次均有平台受理回执，未补发历史轮次。</p>
+<p>23项业务保护面中仅名单表摘要变化，已逐行核对为工作期间
+原生管理员自行新增的一名成员，非本轮操作；保留该业务变更，不整库回滚。
+配置及其余规则、白名单、财务、活动保护面不变。
+本轮未新增或删除真实成员名单、未对真实成员试罚或强制重进；
+一个未登记目标当前也不在最新完整目录，正式搜索无候选，未绕过校验改库补人。
+不能把代码加载及离线回归称为这两名成员均已完成新一轮真实重进验收，
+也未验证新的手机显示或未来实际到期。</p>
+<p>备份及私有回执：<code>/opt/backups/wsl-blacklist-rejoin-20261026/</code>。
+回滚仅恢复本轮核心源码及必要资源，保留后续业务、原审计和未知状态；
+不要整库覆盖，也不要把旧通知重置为待处理。</p>
+<h2>2026-10-25 接收封包分类与空异常记录修复</h2>
+<p>官方3.7.3 native在标记为0时有无认证明文分支。接入器仍不把此分支返回为
+已认证消息，只提取有界且明确未验证的格式元数据：已知传输群的7／8格式
+归档<code>plaintext_notice</code>；其他归档<code>unverified_message</code>并告警，正文、昵称、声称的身份不落库。
+两类都不进入AI、关键词、排行榜、处罚、成员事件或财务；损坏认证不降级为明文。
+已认证但不支持的类型保存格式与原因，7／8格式仅为<code>application_notice</code>，不再留空对象。
+提交先于ACK，提交失败不ACK；重复投递幂等。原生成员通知及群管鉴权未改变。</p>
+<p>离线十文件437项通过；直接导入生产源码的五文件298项复测通过，覆盖重叠、不相加。
+Ruff及编译检查通过。避开广告在途和未来90秒到期窗口，完成一次受控完整重启，
+2026-10-25北京时间17:32:36启动，17:32:49在线读回，PID3161821→402859、NRestarts=0。
+35项群配置／手动名单／财务／活动保护摘要一致，另两个旺商聊账号保持停用。
+17:35观察到14次7格式明文通知及2次12格式插件消息，解码失败／非法封包为0；
+5条正常消息已处理，待处理及规则队列均为0，原12条<code>needs_review</code>保留不重试。
+启动后的340次应用解码包含NIM正常重连同步，不等于340条新聊天或业务执行。
+未主动重放、补罚、重置旧异常或伪造原始正文；旧记录无法据时间相关性补造分类。
+此观察不证明所有未来格式均已支持，也不把未验证插件消息宣称为正常聊天漏读已补齐。
+备份及结构化证据：<code>/opt/backups/wsl-receive-compatibility-20261025/</code>；
+回滚仅恢复本轮源码／文档，不整库回退后续业务。指标含义见<a href="wangshangliao-diagnostics.html">排障说明</a>。</p>
+<p>English: classify unsigned plaintext without granting application authority,
+retain type-only evidence, and keep commit-before-ACK plus deduplication.
+One guarded restart loaded the fix; protected business fingerprints matched.
+Observed unsigned inputs were group notifications and plugin-format packets,
+not evidence that every message type is supported. Unknown input is not replayed.</p>
+<h2>2026-10-25 视频白名单与群内直接加入</h2>
+<p>新增独立的本群开关“仅白名单成员可发视频”，默认关闭。
+开启后，非白名单普通成员的原生视频只撤回，不单独累计警告或禁言；
+图片、表情不按视频处理，管理员、群主和受保护机器人仍豁免，独立刷屏规则保留。
+手动白名单和有效的昨日达标自动白名单均可发视频。</p>
+<p>本群授权管理员用客户端真实@一名成员并发送“白名单”，核对原生身份及权限后直接加入；
+不再经过添加名称、选序号和确认令牌。假@、多人、引用冲突和跨群目标拒绝执行。
+已有黑名单不自动转换，已有禁言不自动解除；后台操作及移除仍保留预览确认。
+旧“添加白名单”命令只说明新入口，私信引导回目标群；管理员指引及中英文帮助同步更新。</p>
+<p>离线后端1324项、前端115项、文档5项通过，生产源码独立回归80项通过；
+最终指引补充后另跑41项通过，Ruff和页面构建通过。
+编译后页面在320／390／1440px检查开关、确认流程和跨群隔离，无横向溢出及脚本异常；
+这些是中性离线夹具结果，不等于真实视频撤回或手机客户端验收。</p>
+<p>北京时间2026-10-25 08:13运行态核对完成：一次受控完整重启，PID由4136450变为3161821，
+账号43506527在线，pending及rejected均为0，管理员手册40／40条且版本最新。
+仅汇赢1417872、鼎峰1459534、真龙1516387经预览确认开启视频开关；
+业务版本11／5／4、正文、图片和时间保持不变，未人为重置发送游标，授权绑定随群规版本同步。
+各群手动白名单仍5人，昨日达标自动名单依次0／1／1人，达标条数111及129且豁免有效。
+其余群配置、黑白名单、财务、活动和账号配置保护摘要不变，三个群轮播无阻塞标记。
+本轮未启用另外两个账号，也未拿真实成员试罚；真实@加入及视频撤回的群内实测单列待验收。</p>
+<p>English: native single-member mentions now add speech exemptions directly after
+current administrator and tenant checks. The optional group video restriction
+recalls only non-exempt ordinary members' videos; flood rules remain independent.
+One controlled restart and three guarded group updates were verified without
+changing campaign contents, schedules or protected business data. Offline passes
+and live state checks are not claimed as native recipient or phone acceptance.</p>
+<h2>2026-10-25 轮播授权联动与同账号排队</h2>
+<p>修复仅改群审核规则便令已确认图文失效的问题：当前授权随纯群规编辑在同一事务递增绑定版本，
+不更新业务正文、素材、业务版本或发送游标；旧版本在途任务仍被拦住。
+管理员变化、暂停、原授权已失效、成员代数／原生权限变化不自动续接。
+同账号定时图文逐群串行，图后正文至少1秒、群间至少3秒；前置核验窗口由10秒改为120秒，
+超时跳过并保存原因，不重放历史时段，不自动重试未知／部分／被拒绝结果。
+页面显示授权变化及最近发送前跳过／拒绝，原未知／部分暂停保护保留。</p>
+<p>最终离线十个后端文件603项通过，前端112项及文档10项通过，构建通过；
+中性离线页面的授权失效／超时／拒绝在320／390／1440px九项检查无横向溢出或脚本异常。
+三群同刻到期、两任务上限排队、图片先于正文、撤权与事务回滚均有隔离回归。
+部署及真实送达须另核对本轮运行态回执，不以本地通过宣称平台限流保证或手机通过。</p>
+<p>北京时间07:14完成插件热重载，PID4136450不变，正式配置、财务、活动和名单保护摘要一致。
+07:20原有计划自然触发，鼎峰／真龙／汇赢三个群分别形成accepted回执，按同账号排队完成，
+没有人工补发或改动正文。此次证据不等于手机客户端显示确认或平台固定限流阈值承诺。
+补充覆盖图片成功后、正文等待中取消的情况：结果保持unknown并暂停，不误记为完整成功。</p>
+<h2>2026-10-25 自动白名单改用昨日达标榜</h2>
+<p>新规则替换下方10月24日的“今日前30名即可进入”：按北京时间昨天的有效文字榜，
+仅前30名且有效发言超过100条（至少101条）获得今天的自动豁免，不从第31名补位。
+今天发言不用于今天授予；午夜切换来源日期，原生撤回或未知撤回仍排除，
+保留30秒最多一条、同文五分钟去重、30秒核对期、30秒刷新及最长90秒失效。
+存储增加来源日期，旧版自动授权失效后重新计算，不改手动名单、黑名单、群业务规则或财务。
+管理员明确移出后当日不自动加回，黑名单优先；名单及指引改标“昨日前30名”。</p>
+<p>旧实测脚本不再把当天一条有效文字当成授予条件，也不伪造昨天的生产记录；
+短窗口只核对当天发言不立即授予，昨日达标实发资格另需跨日样本。
+下方旧的一条文字实发通过仅是原版本证据，不能证明本次新条件已实群验收。
+加载、离线结果与保护面核对须以本次实际操作记录为准。</p>
+<p>English: today's automatic grants require yesterday's Beijing-day top30 rank and
+at least101 eligible texts, with no backfill beyond rank30. Current-day counts do
+not grant current-day immunity. Source dates fence legacy grants; manual lists,
+blacklist precedence, recall exclusion and short expiry remain unchanged.
+Older one-message live acceptance below applies only to the previous policy.</p>
+<p><strong>本轮加载与核对</strong>：北京时间2026-10-25 05:18:12在线读回，
+仅热重载旺商聊插件，PID4136450不变，接收账号在线，pending为0。
+三个正式群均启用且未暂停，自动授权来源日期为2026-10-24，所有自动条数均大于100；
+手动白名单各5人，黑名单、群业务规则、财务、活动及账号配置保护摘要无变化。
+保留线上独立修改的黑名单指引和运维历史，页面使用线上原有桥接脚本重新构建，不覆盖其他修复。
+离线后端两个互不重复文件集分别444和205项通过，共649项；前端与生成器109项通过，
+名单页320／390／1440px检查通过。旧浏览器路径失败后使用已安装Chromium复测通过。
+本轮没有拿真实成员试罚，不代表新的手机客户端或跨日实发验收通过。</p>
 <h2>2026-10-24 三账号真实验收结果</h2>
 <p>仅测试群1459282，既有三个账号及中性文案。3秒4条不处罚；
 3秒5条、10秒15条、30秒5条同文分别触发一批违规，整批撤回、每批只计一次，

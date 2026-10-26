@@ -7,6 +7,12 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 @page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
 </style></head>
 <body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊命令树文字版</h1>
+<h2>当前群内解封命令</h2>
+<p>真实@一名成员或回复其可核验的同群原消息，发送「解除黑名单」
+（兼容「移除黑名单」）：移出名单并尝试解禁，分别反馈结果。
+只操作当前机器人、本群和唯一可信目标；指令消息按现有规则撤回。
+私信或后台移除只移出名单；单独解禁不移除黑名单，不连带删除白名单。
+未知回执先核对，不自动重试。下方带日期的移除不解禁说明属于早期轮次。</p>
 <h2>当前直接命令流程（2026-10-23）</h2>
 <p><strong>名单互斥／移除已于北京时间2026-10-23 22:59:23完整重启加载</strong>（PID4071721，NRestarts=0）。
 保护快照22面／config一致；本轮未新增真实成员操作／处罚，旧needs_review12不重试，
@@ -151,7 +157,7 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 │  ├─ 11. 测试一段文字
 │  └─ 12. 发言白名单
 │     ├─ 1. 查看本群白名单
-│     ├─ 2. 添加白名单（名称搜索）
+│     ├─ 2. 群内@成员加入（提示真实@一名成员＋白名单，直接加入）
 │     ├─ 3. 移除白名单（名称搜索）
 │     ├─ 4. 选择搜索成员
 │     └─ 5. 确认已有白名单申请
@@ -317,8 +323,9 @@ Pro为50 USDT／30天、每天5000次。付费费用上限为后台登记实收�
 不把原生入群操作者直接当邀请人，不对重复入群重复计奖。排名只统计本地可信文字记录：
 北京时间当日、每页20人，同成员30秒内最多计一条、同文五分钟内不重复计入，
 排除已记录的处罚文字及被撤回消息；不是平台完整发言量。
-<code>排名</code>／<code>发言排行榜</code>支持翻页。当天实时前30名自动获得独立的发言白名单，
-每30秒刷新，最近30秒发言待核对；名次下降或换日自动退出，不影响手动白名单。
+<code>排名</code>／<code>发言排行榜</code>仍查看今天、支持翻页。自动白名单使用北京时间昨天的榜单：
+仅前30名且昨日有效发言超过100条（至少101条）获得今天的豁免，不从第31名补位。
+每30秒刷新，最近30秒发言待核对；换日按新的昨天重算，不影响手动白名单。
 管理员明确移出后今日不自动加回；黑名单优先，不授管理权、不自动解禁。</p>
 <p>当前插件页使用两级导航，旧页签的对应位置如下：</p>
 <table>

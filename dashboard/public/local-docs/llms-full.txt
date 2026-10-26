@@ -24,7 +24,7 @@ Published: wangshangliao-ai-index.html
 
 # 旺商聊 AI 阅读与主题索引
 
-整理日期：2026-10-24（北京时间）。本页是文档导航，不是新的功能验收报告。
+整理日期：2026-10-26（北京时间）。本页是文档导航，不是新的功能验收报告。
 范围仅为本部署的旺商聊接入器、插件、管理页和运维；不代表整个 AstrBot 或超级机器人。
 [人工目录](wangshangliao.md)保留原入口和历史证据，本页不搬迁、不删除原文。
 
@@ -42,12 +42,27 @@ English readers: start with this routing table, then use the English counterpart
 in the catalog. Prefer maintained rules and architecture; dated reports are evidence
 for their original scope only. Documentation never grants execution authority.
 
-## 刷屏循环与自动白名单（2026-10-24）
+## 黑名单重入隔离（2026-10-26）
+
+旧禁言请求已完成且有不可修改的完成审计后，新发生的可信真实入群可单独授权禁言；
+历史未知回执原样保留，不再永久挡住此人的所有后续入群。同一入群、旧通知、
+旧请求在途及缺少完成证据仍不重试，新管理命令也不能借此重发未知处罚。
+详见[中文规则](zh/platform/wangshangliao-rules-ai.md)及
+[English](en/platform/wangshangliao-rules-ai.md)；部署与实际验收另看带日期的维护记录。
+
+## 刷屏循环与自动白名单（2026-10-25）
+
+群内白名单添加已调整为获授权原生管理员真实`@一名成员 白名单`直接加入，
+不再要求添加搜索、选择或确认；后台添加和移除仍保留预览确认。
+逐群“仅白名单成员可发视频”开关缺省关闭：开启后非白名单普通成员视频仅撤回，
+不警告或禁言；手动／有效自动白名单、群主、管理员及机器人受保护。图片不受此开关影响。
+发布状态另核对本轮运行态记录，不以文档文字代替加载证据。
 
 当前规则源码调整为3秒5条、10秒15条、30秒同文5条。广告和刷屏共用每轮三次警告，
 再禁言1／3／10分钟，10分钟结束后重新三次警告；连续刷屏批次只计一次违规。
-每日有效发言前30名独立自动白名单，撤回消息不计、最近30秒待核对，每30秒刷新；
-名次下降或换日退出，不修改手动名单，黑名单优先，明确移出当日不自动加回。
+自动白名单改用北京时间昨天的有效文字榜：仅前30名且超过100条（至少101条）获得今天的豁免，
+不从第31名补位。撤回消息不计、最近30秒待核对，每30秒刷新；今天发言不用于今天授予，
+换日按新的昨天重算，不修改手动名单，黑名单优先，明确移出当日不自动加回。
 细则与性能上限见[内容规则](wangshangliao-content-rules.md)；是否已经加载及验收范围
 须另核对[维护记录](wangshangliao-maintenance.md)，不以源码说明代替运行态证据。
 
@@ -690,6 +705,76 @@ Published: wangshangliao-rules-ai.html
 
 # 旺商聊规则与 AI 分权
 
+## 当前群内解除黑名单
+
+管理员真实@一名成员或回复其可核验的同群原消息，发送「解除黑名单」
+（兼容「移除黑名单」），直接移出名单并尝试解禁，分别反馈结果。
+同机器人、本群、真实目标和最新权限检查不变；命令原消息按规则撤回。
+私信或后台移除只移出名单，单独解禁不移除黑名单，不连带修改白名单。
+未知结果先核对，不自动重试。下方带日期的“移除不解禁”属于此前版本，
+不能用来解释当前群内固定解封命令。
+
+## 黑名单真实重入与未知回执隔离（2026-10-26）
+
+修复历史“结果未知”阻断同一成员所有后续入群的问题。**同一次真实入群只处罚一次**：
+重复通知、重复命令、重启及改名不会重发旧禁言。旧请求仍在途、没有完成审计，
+或入群实际发生在旧请求完成之前，继续暂停核对，不自动重试。
+
+旧禁言请求已结束且有不可修改的完成审计时，**之后新发生并经平台入群记录、
+完整成员目录及当前权限核实的真实重入**，可以创建独立的禁言意图，
+按本机器人＋本群当前配置时长重新禁言，不再被历史未知记录永久挡住。
+原来的未知状态、回执与审计原样保留，不改成成功；新命令也不能借此重试未知处罚。
+名单移除、目标晋升管理员、机器人失去群管或群暂停仍会阻断提交。
+不增加自动踢人，不放宽普通禁言24小时上限，也不在普通发言时循环续封。
+平台受理、当前在禁言名单、手机显示和未来实际到期是不同证据，不能相互代替。
+
+## 每日群与成员发言统计（2026-10-26）
+
+新增独立入口 **群管理 → 发言统计**，按所选机器人和当前群隔离。
+北京时间每天00:00切换当天，从零计数；只能查看**今日和昨日**，
+更早的统计明细、昵称与游标自动清理，停用账号的统计同样到期清理。
+这是统计专用存储，不删除消息账本、处罚审计、财务或活动记录。
+
+群统计显示有效消息数、活跃人数、文字／表情、图片、视频、转发数量、
+小时分布及当日前30名。按消息逐条计数；撤回及违规消息、机器人消息、
+已识别管理命令不计，最近30秒等待核对，后台约20秒增量收集，
+页面约30秒刷新。显示“正在补齐”时不能把局部结果视作完整数据。
+重启沿用已保存的去重游标，仅从现有可信账本补齐昨日及今日，
+不重放消息或处罚，也不保存正文和图片内容。
+
+成员统计在同页输入名称或UID搜索，选择明确成员后查看当日／昨日条数、
+首次和最近发言及小时分布。当前完整目录有缓存时支持无发言成员；
+最近两天发过言的已离群成员也可查询。没有记录显示0，不从其他群猜人。
+**本页活跃前30名不是自动白名单授予榜**：自动白名单仍按昨日有效文字榜，
+保留每30秒最多一条、同文五分钟去重、前30名且超过100条等原规则。
+
+## 管理授权变更与定时发言（2026-10-26）
+
+增减其他机器人管理员不再使已确认的定时发言和关键词回复永久失效。
+仅在原计划绑定当前群版本、同一入群代数且原创建人仍获授权时，
+与管理员变更在同一事务内更新版本绑定；后台总控创建的计划不依赖某一群管理员。
+已在途操作仍受旧版本阻断，下次轮次重新校验最新目录、原生权限和主动发送授权。
+创建人被撤权、群暂停、离群或机器人失去群管权限时不会自动恢复计划；
+此前已过期的版本也不会因再次授予权限而自行复活。
+
+历史漏发不补发，结果未知不重试。管理员可在原群预览并确认保存未改动的计划，
+恢复下一次未来时刻；文案、图片与发送时刻可保持原值。
+同账号跨群计划沿用串行发送、组间至少3秒间隔，图片先于正文且间隔至少1秒。
+
+## 名单指令清理与新增关键词（2026-10-25）
+
+群内真实`@一名成员 黑名单`、`@一名成员 白名单`等固定管理指令，
+管理员发送的**本条指令消息**与机器人处理结果沿用约12秒自动清理机制；
+不会因此撤回被@成员的其他消息。仅清理展示，不删除原始账本、处罚回执或审计，
+也不重试未知处罚。下方10月24日“保留管理员原消息”描述的是当时版本。
+发送者仍须同时具有本群原生群主／管理员身份和本群机器人管理授权；
+只有原生群管身份不会自动获得机器人权限，拒绝提示会说明这两个条件。
+
+默认广告审核关键词在原列表基础上追加`的来`、`私我`、`大秀`；
+汇赢1417872、鼎峰1459534、真龙1516387同步追加这三项，
+保留各群其余关键词、组合规则、图文计划、成员名单及管理授权。
+这些是审核关键词，不是关键词自动回复，也不改变既有警告和禁言递进规则。
+
 ## 群内黑名单立即禁言（2026-10-24）
 
 此节取代下方2026-10-23记录中的“群内添加不立即处罚”：
@@ -776,7 +861,8 @@ UI177项unit及9项browser通过。真实群成员未新增、移除或处罚，
 时长**直接禁言并留在群内，不再踢出**，不以前三次踢出或历史成功次数作为前置条件。
 普通发言、重复入群通知、重启或重复添加不触发处罚或续封。时长修改**只影响确认后新的可信真实重入**，
 不自动重设已有禁言、不追罚已在群成员、不追放历史通知，也不建立每日续封任务。
-回执未知时暂停相关处理，先核对原回执与平台状态，不重试、不清历史或伪造成功。
+回执未知时暂停该次处理，先核对原回执与平台状态，不重试、不清历史或伪造成功。
+2026-10-26起，已完成请求之后新发生的可信真实重入按上方隔离规则单独授权。
 移除名单**不解除已有禁言**；独立解禁也**不移除黑名单**。
 
 ### 旧规则到新规则
@@ -837,6 +923,14 @@ tenants原始整体hash不全同，不宣称正式群从未变动。详见[维�
 不会自动补内容、启用计划或向任何群发消息；原有配置不因上线自动改写。
 三条错峰是**三个独立计划**，不是同一计划一次连发三图。新计划须分别启用，
 核对00／20／40分及正文配图后预览并确认保存，不能仅点“应用三条时间”。
+
+2026-10-25调度修复：仅修改广告审核、防刷屏或拦截词时，原本有效的图文授权随群版本原子更新，
+不再要求重存轮播。改管理员、暂停、退群／重新入群、权限丢失或原授权已过期时不自动续接，
+后台显示授权变化并要求重新预览确认；已在途的旧版本任务仍会停止。
+同一机器人在多个群同刻到期时逐群排队，图片确认后至少等1秒发正文，一群结束后至少等3秒开始下一群。
+到期后最多允许120秒完成发送前入队／权限核验；超时跳过并记录原因，不补发错过时段。
+这是本地节流，不是平台限流额度承诺；被拒绝、未知或部分送达均不自动重试，
+未知／部分结果继续暂停核对。后台显示最近一轮发送前跳过或拒绝提示。
 
 上传失败：检查JPG／PNG／WebP静态格式、原图≤5MB、当前机器人／群及权限；
 等进度结束或超时控件恢复，先查是否已有素材／保存结果，再由本人重新选图、预览确认。
@@ -1047,18 +1141,23 @@ AI参数随所选业务加载和保存，不再始终编辑旧账号客服。配
 不能按任意UID、NIM或跨群身份添加，同名结果的UID供核对身份。
 **移除模式**查已保存名单，可用当前名、保存旧名或精确UID；退群／改名不阻止移除，
 也可直接用列表行移除图标，仍须预览确认，不从另一名单连带删除。
-私聊菜单为“审核规则 → 发言白名单”，先选择本人获授权的群，再输入名称；
-群内默认当前群。也可发送固定命令：
+**2026-10-25起，群内添加改为真实`@一名成员 白名单`，直接加入，无需搜索、选择或确认。**
+操作者须同时具有本群原生管理角色及本机器人群授权；目标须匹配同群完整可信目录。
+手打昵称、多目标、引用与@冲突、跨群及身份变化均拒绝；重复加入不重复写审计。
+私信不能跨群@添加，回到目标群操作。旧`添加白名单 名称`只提示新方式，不再发起添加搜索。
+后台添加保留上述预览确认流程；私聊菜单“审核规则 → 发言白名单”提供查询、添加指引及移除。
+群内默认当前群；私信查询和移除须先选择本人获授权群。固定命令：
 
 ```text
 白名单
-添加白名单 对方名称
+@一名成员 白名单
 移除白名单 当前名／保存旧名／精确UID
 选择白名单 本次搜索结果序号
 确认白名单 预览令牌
 ```
 
-添加的搜索、选择、确认均核验完整原生成员目录；移除核对本群已保存记录，不要求目标仍在群。
+群内直接添加在写入前和事务提交前复核原生管理权、目标真实@及完整目录。
+后台添加的搜索、选择、确认均核验完整原生成员目录；移除核对本群已保存记录，不要求目标仍在群。
 两种操作均重新检查权限和版本。预览十分钟有效，
 确认必须使用新消息；切换群、重新搜索、取消、操作者／机器人权限变化及名单版本冲突均拒绝旧选择。
 **仅添加**还会因目标成员身份或名称变化拒绝旧选择；
@@ -1076,6 +1175,15 @@ AI参数随所选业务加载和保存，不再始终编辑旧账号客服。配
 不授予管理、客服编辑、AI额度或财务权限，不影响其他管理员手动处罚。
 加入白名单不会自动解除已有禁言，需要另走已授权解禁流程。
 管理员指引从服务端手册解释这些步骤，不根据自然语言直接修改名单或编造成功。
+
+### 仅白名单成员可发视频
+
+后台“群管理 → 规则”的**仅白名单成员可发视频**按机器人和群独立保存，旧群缺省关闭。
+开启后，仅对平台识别的真实视频消息执行：非白名单普通成员的视频撤回，
+不因此发送警告、增加广告违规次数或禁言；手动及当日有效自动白名单可发视频。
+群主、原生管理员和机器人仍受保护。图片、表情、语音、文件名不按视频处理；
+刷屏规则独立适用。后台保存前复核版本，旧页面漏传已存在的开关会拒绝，避免静默关闭。
+快速审核与普通消息处理共用同一原消息操作号，重复事件不重复撤回，未知回执不自动重试。
 
 ![白名单列表与逐行移除图标，含退群、同名及历史双名单记录，2026-10-23离线UI夹具](/images/wangshangliao/member-whitelist-desktop.png)
 
@@ -1235,6 +1343,90 @@ Published: wangshangliao-rules-ai-en.html
 
 # Wangshangliao Rules And AI Ownership
 
+## Current In-Group Blacklist Release
+
+A verified administrator uses one actual mention or a verifiable same-group
+reply with `解除黑名单` (alias `移除黑名单`). This removes the entry and attempts
+to unmute, with separate results. Current bot, group, target and permission
+checks still apply; command recall follows existing rules. Private-chat and
+Dashboard removal only remove the entry. Independent unmuting does not remove
+it, and the whitelist is unchanged. Unknown outcomes are not automatically
+retried. Earlier dated removal-only statements describe previous versions.
+
+## Real Rejoins And Unknown Receipt Isolation (October 26, 2026)
+
+A historical unknown result must not permanently exempt a blacklisted member
+from future admissions. Each canonical join remains at-most-once: duplicate
+notices, commands, renames and restarts never replay the old mute. In-flight
+requests, missing immutable completion evidence, and admissions at or before
+that completion remain held for reconciliation.
+
+After a mute request has finished with immutable completion evidence, a strictly
+later actual admission may receive its own capability, using the configured
+duration for this bot and group. Fresh native admission history, a complete
+current roster, identity and current authorization are still required.
+Keep the original unknown receipt and audit unchanged; new commands cannot use
+this exception to retry it. Removal, promotion, lost bot permissions and pauses
+still revoke pending work. No automatic kick, ordinary cap increase or
+per-message mute renewal is introduced. Platform acceptance, current mute-list
+membership, phone display and eventual expiry remain separate evidence.
+
+## Daily Group And Member Activity (October 26, 2026)
+
+Open **Groups → Speech Activity**, select a bot and its enabled group.
+Dates use Asia/Shanghai: the current day starts from zero at midnight.
+Only today and yesterday's statistics are retained; older message identifiers,
+labels and collection cursors expire, including stores belonging to inactive bots.
+This retention applies only to the separate statistics store, not operational
+inboxes, sanction audits, finance or lottery records.
+
+The view shows message totals, active members, text/emoji, images, videos,
+forwards, hourly counts and the top 30. Messages count individually, excluding
+recalls, violations, bots and recognized management commands. The newest 30
+seconds await verification; a background collector imports small batches about
+every 20 seconds and the page refreshes about every 30 seconds. A catching-up
+notice means the displayed result is incomplete. Restart resumes durable cursors
+and backfills only the retained dates without dispatching messages or sanctions.
+Message bodies and media content are never copied into the statistics store.
+
+Search by name or UID, then select an exact scoped member to view their daily
+count, first/last activity and hourly distribution. Cached complete directories
+include members with no activity; recently departed speakers remain searchable
+within the two retained dates. The activity top 30 is **not** the automatic
+whitelist ranking. Existing yesterday-only text eligibility, 30-second spacing,
+five-minute duplicate suppression and the greater-than-100 threshold stay intact.
+
+## Management Changes And Scheduled Messages (October 26, 2026)
+
+Adding or removing other bot managers preserves current confirmed schedules and
+literal replies. Rebind only rules matching the current tenant version and join
+epoch, with their native creator still authorized before and after the change.
+Dashboard-owned rules do not depend on an individual group manager. Rebinding and
+the manager update share one transaction; already admitted work keeps its old
+version fence. Future occurrences still verify fresh native roles and send grants.
+Never revive stale rules, revoked creators, paused groups, departures or lost bot
+administrator permissions merely because a manager is subsequently added.
+
+Missed occurrences are not replayed and uncertain deliveries are not retried.
+Previewing and confirming an unchanged plan restores its next future occurrence
+without editing its text, images or clock. Existing same-account serialization,
+at least three seconds between groups, and image-before-text spacing remain.
+
+## Command Cleanup And Added Keywords (October 25, 2026)
+
+Fixed group controls such as an actual single mention plus `黑名单` or `白名单`
+now schedule the administrator's incoming command and the bot's response for the
+existing approximately twelve-second cleanup. This does not recall the mentioned
+member's other messages, delete audit evidence or retry unknown sanctions.
+The October24 statement about retaining the incoming command describes the older
+version. Both native group administrator/owner status and the exact group's bot
+management grant remain mandatory; denial replies explain both requirements.
+
+Append `的来`, `私我` and `大秀` to the existing default moderation keywords and
+to groups1417872,1459534,1516387. Preserve all other group rules, image/text
+campaigns, member lists and management grants. These are moderation triggers,
+not automatic-reply keywords, and do not change the warning/mute progression.
+
 ## Immediate Native Blacklist Mutes (October 24, 2026)
 
 This supersedes the October23 statements below about no immediate punishment
@@ -1371,8 +1563,10 @@ Ordinary messages, duplicate join notifications, restarts and repeated adds do n
 punish or renew a mute. Duration changes affect **only new trusted actual rejoins
 after confirmation**. They never reset existing mutes, punish current members,
 replay historical notices or create daily mute renewals.
-An unknown receipt pauses the affected flow for reconciliation against the original
+An unknown receipt pauses that occurrence for reconciliation against the original
 receipt and platform state; never retry, erase history or invent success.
+Since October26, a strictly later verified real admission after completion follows
+the independent authorization rules above.
 Removing an entry **does not unmute** an existing mute.
 An independent unmute **does not remove the blacklist entry**.
 
@@ -1454,6 +1648,19 @@ existing configurations, fill content, enable plans or send messages.
 These are **three independent plans**, not three images sent together by one plan.
 For new plans, explicitly enable each, check its content/images and minute 00/20/40,
 then preview and confirm save. Applying times alone does not enable anything.
+
+October 25 scheduler fix: moderation-only edits atomically carry forward an
+already-current business authorization. Manager changes, pauses, membership
+generation changes, lost permissions and already-stale authorizations never
+renew it automatically; review and confirmation remain required. In-flight work
+still carries its original version fence.
+Due campaigns serialize per receiving account. An accepted image precedes its
+caption by at least one second; the next campaign starts at least three seconds
+after the previous one ends. Preflight admission may wait up to120 seconds from
+the scheduled boundary, then skips with a durable reason instead of replaying.
+Local pacing does not guarantee a provider quota. Rejections, unknown results
+and partial delivery are not automatically retried; unknown/partial results
+remain paused for reconciliation. The form shows recent preflight skips and rejections.
 
 Upload failure: check static JPG/PNG/WebP format, the 5MB original limit, selected
 robot/group and permission. Wait for progress or timeout recovery, check for an
@@ -1715,18 +1922,26 @@ homonyms show UIDs for verification. **Removal mode** searches saved entries by
 current name, saved old name or exact UID, including departed/renamed members.
 The list-row removal icon also requires preview/confirmation and never deletes
 the other list's entry.
-The private menu is **审核规则 → 发言白名单**; select an authorized group first.
-Group commands use the current group:
+From October 25, 2026, a native group administrator with this bot's group grant
+adds a member by genuinely mentioning exactly one member and sending `白名单`.
+The addition is immediate, with no search, selection or confirmation messages.
+Typed nicknames, multiple targets, conflicting quotes, cross-group identities and
+changed permissions are rejected. Repeated additions do not duplicate the audit.
+Private addition redirects to the target group; the old name-based addition command
+only explains the new route. Dashboard additions retain preview and confirmation.
+Private queries and removals still require selecting an authorized group first.
 
 ```text
 白名单
-添加白名单 member-name
+@ONE_REAL_MEMBER 白名单
 移除白名单 CURRENT_NAME/SAVED_OLD_NAME/EXACT_UID
 选择白名单 search-result-number
 确认白名单 preview-token
 ```
 
-Addition verifies complete native membership at search, selection and confirmation;
+Direct group addition verifies the real mention, complete directory and native/tenant
+authority before writing and before transaction commit. Dashboard
+addition verifies complete native membership at search, selection and confirmation;
 removal checks saved entries in this group without requiring the target still to
 be a member. Both recheck actor/bot authority and revisions. Previews expire after
 ten minutes and chat confirmation requires a new message. Changing groups,
@@ -1740,6 +1955,18 @@ token and result index, never an arbitrary member identity. Exact UID removal lo
 only locates an existing entry in that scope, never authorizes addition.
 Changes persist with a separate audit; restart and upgrades preserve existing
 server-maintained entries.
+
+### Whitelist-Only Videos
+
+**Group Management → Rules → 仅白名单成员可发视频** is scoped to this bot and group,
+defaulting off for existing groups without the field. When enabled, authenticated
+videos from ordinary non-whitelisted members are recalled only: no warning, mute
+or advertising strike is added merely for the video. Manual and currently valid
+yesterday-qualified automatic whitelist entries may send videos. Native owners,
+administrators and managed bots remain protected. Images, stickers, audio and
+filenames are not classified as videos. Independent flood rules still apply.
+Fast-lane and ordinary processing share the original recall operation key; duplicate
+events cannot duplicate recalls, and unknown results are never automatically retried.
 
 October 22 source update: after `authority_guard()`, the `member_whitelist` guard
 compares `service.store.tenant(account, group)` with the complete original tenant
@@ -3273,6 +3500,38 @@ Published: wangshangliao-start.html
 
 # 旺商聊：从零开始
 
+## 群内解除黑名单
+
+管理员真实@一个群员或回复其可核验的同群消息，发送「解除黑名单」
+（兼容「移除黑名单」）。机器人移出名单并尝试解禁，分别说明结果。
+私信或后台移除只移出名单，单独解禁不移除黑名单。未知结果不要重复发送。
+下方旧日期中的“移除不解禁”不代表当前群内解封命令。
+
+## 每日发言统计（2026-10-26）
+
+进入 **旺商聊管理 → 群管理 → 发言统计**，选择机器人、群，再切换今日／昨日。
+每天北京时间零点重新计算当天；只保存昨天和今天的统计，不保留长期统计历史。
+页面可查看群发言量、活跃人数、消息类型、小时分布和前30名。
+在“成员发言统计”搜索名称或UID，点选对应成员即可单独查看，不需要聊天命令。
+撤回、违规、机器人消息和管理命令不计，最近30秒待核对；自动白名单规则保持不变。
+排名右侧的复制图标可一键复制当前所选日期的前30名，包含群名、群号、日期、
+名次、成员名称、UID和发言条数。空榜或数据补齐中不复制；浏览器拒绝时会显示失败提示。
+
+已配置专门汇报的机器人，在同页显示**专门发言汇报**，固定按UID核对指定成员，
+分别列出各指定群的有效文字聊天句数、个人跨群合计和全员合计。上方今日／昨日切换同时生效，
+右侧复制图标可复制完整分群汇报。图片、视频、转发、撤回、违规、机器人消息和管理命令不计入句数；
+最近30秒待核对，只保存今日和昨日统计。统计补齐时禁止复制；任一指定群停用时不展示不完整的跨群总计。
+这是统计展示，不会自动发到群里，不修改白名单或处罚。
+
+![每日发言与成员统计，390px离线界面验收，不是生产手机截图](/images/wangshangliao/speech-activity-mobile.png)
+
+## 自动白名单（2026-10-25）
+
+按北京时间昨天的有效文字发言榜，前30名且超过100条（至少101条）自动获得今天的发言白名单。
+今天发言不影响今天资格，撤回消息不计，保留每30秒最多一条、同文五分钟去重的防刷榜限制。
+每30秒刷新，零点按新的昨天重算，不从第31名补位；手动白名单不变，黑名单优先。
+`排名`／`发言排行榜`仍查看今天的榜单；管理员明确移出后当天不自动加回，不自动解除已有禁言。
+
 ## 现在从这里操作（2026-10-22）
 
 配置集中在旺商聊插件页面，不必先在聊天里逐层选数字：
@@ -3445,7 +3704,12 @@ Published: wangshangliao-start.html
 | 抽奖 | `抽奖设置`、`开启抽奖`、`立即开奖` | 本群管理可在群内／私聊固定命令操作；普通成员自行报名 |
 
 广告和刷屏每轮前三次撤回警告，后续按1／3／10分钟禁言，10分钟结束后重新三次警告，不自动踢人。
-普通图片、表情、视频及合并聊天记录不因消息类型直接撤回或禁言。
+普通图片、表情及合并聊天记录不因消息类型直接撤回或禁言。
+群内获授权的原生管理员可真正`@一名成员 白名单`直接加入，无需搜索、选择、确认；
+私信添加请回目标群，后台添加及移除仍保留预览确认。
+“群管理 → 规则”可逐群开启“仅白名单成员可发视频”（缺省关闭）：
+非白名单普通成员的视频只撤回，不因此警告或禁言；手动／有效自动白名单可发视频，
+群主、原生管理员和机器人受保护。未开启此开关的普通视频不因类型直接处罚。
 媒体仅按已支持的真实入站计入刷屏条数；不下载、识别媒体内容，
 不将普通文字、语音或文件名当作图片／视频。
 不追罚规则加载前的消息；管理员及受保护机器人豁免不变。
@@ -3704,7 +3968,41 @@ Published: wangshangliao-start-en.html
 
 # Wangshangliao Beginner Guide
 
-## Current Starting Point (October 24, 2026)
+## In-Group Blacklist Release
+
+An administrator mentions one member using the real client selector, or replies
+to their verifiable same-group message, and sends `解除黑名单` (alias
+`移除黑名单`). The bot removes the entry and attempts to unmute, reporting both
+results. Private-chat and Dashboard removal only remove the entry; independent
+unmuting does not remove it. Do not retry an unknown outcome. Older dated
+removal-only notes do not describe this current in-group command.
+
+## Daily Speech Activity (October 26, 2026)
+
+Open **Wangshangliao Management → Groups → Speech Activity**, select the bot and
+group, then choose today or yesterday. Beijing midnight starts a new daily count;
+only the previous and current dates are retained, not a long-term activity history.
+Group totals include active members, message types, hourly distribution and top 30.
+Search a member name or UID and select the matching member for separate daily
+statistics. Recalled/violating messages, bots and commands do not count; the newest
+30 seconds await verification. Automatic whitelist eligibility is unchanged.
+The copy icon beside the ranking copies the selected date's top 30 with group
+name/ID, date, rank, member name/UID and message count. Empty or incomplete rankings
+cannot be copied. A browser denial displays an error, never a false success.
+
+Bots with a configured **Focused Speech Report** also show exact-UID member totals
+by configured group, per-member combined totals and the combined team total.
+The Today/Yesterday selection applies to this report; its copy icon includes the
+complete group breakdown. Only effective text counts as chat sentences: images,
+videos, forwards, recalled/violating messages, bots and commands are excluded.
+The newest 30 seconds await verification, and only today/yesterday are retained.
+Incomplete reports cannot be copied. A disabled configured group blocks the whole
+report rather than silently shrinking its scope. Reports do not post into groups
+or change whitelist/moderation settings.
+
+![Daily and member activity, 390px offline browser acceptance, not a live phone capture](/images/wangshangliao/speech-activity-mobile.png)
+
+## Current Starting Point (October 25, 2026)
 
 Current flood thresholds are five messages in three seconds, fifteen in ten
 seconds, or five identical texts in thirty seconds. Each penalty cycle gives
@@ -3712,15 +4010,18 @@ three recall warnings, then one-, three- and ten-minute mutes. Warning grace
 restarts only after the final ten-minute mute expires; unknown receipts do not
 reset the cycle or trigger retries. A continuous burst counts as one violation.
 `发言排行榜`, `发言排行` and `排名` show today's effective text ranking.
-The top30 receive separate automatic speech-whitelist grants, refreshed every
-30seconds and recalculated at Beijing midnight. Recalled or uncertain-recall
+Automatic speech-whitelist grants now require both a top30 position in yesterday's
+Beijing-day ranking and more than100 eligible texts (at least101) yesterday.
+Today's messages do not qualify a member today, and excluded positions are not
+filled from rank31 onward. Grants refresh every30seconds and recalculate from the
+new previous day at Beijing midnight. Recalled or uncertain-recall
 messages do not count; the most recent30seconds are not yet eligible for grants.
 Existing limits of one counted text per member per30seconds and identical-text
 deduplication over five minutes remain. Media-only messages and commands are not
 counted. Manual grants remain intact; blacklist entries take priority. An explicit
 removal suppresses automatic readdition for the rest of that Beijing day.
-See the [maintenance record](../../wangshangliao-maintenance.md) for the
-October24 deployment and offline coverage. No new real-user penalty-cycle trial
+See the [maintenance record](../../wangshangliao-maintenance.md) for dated
+deployment evidence and offline coverage. No new real-user penalty-cycle trial
 or official-phone acceptance is claimed.
 
 Configure features directly in the Wangshangliao plugin: **Group Management →
@@ -3946,8 +4247,16 @@ for five minutes. Falling below the top thirty or crossing midnight removes the 
 grant, never the manual whitelist. Explicit removal suppresses automatic re-entry for the day.
 Blacklist always takes precedence; no management role or automatic unmute is granted.
 
-There is no automatic removal. Ordinary images, stickers, videos and merged
-forwards are not recalled or muted solely for their media type.
+There is no automatic removal of group members. Authorized native administrators
+can genuinely mention one member and send `白名单` to add them immediately, without
+search/selection/confirmation. Private addition redirects to the target group;
+dashboard additions and removals retain preview and confirmation.
+**Groups → Rules → 仅白名单成员可发视频** is an independent per-group switch,
+defaulting off. When enabled, ordinary non-whitelisted members' real videos are
+recalled only, without a warning or mute. Manual/current automatic whitelist entries,
+native owners/administrators and managed bots are exempt.
+Ordinary images, stickers, merged forwards and videos in groups without this
+switch are not recalled or muted solely for their media type.
 Supported authenticated media messages count toward flood thresholds; media is not
 downloaded or interpreted, and text, voice and file names are not guessed to be
 images or videos. Administrators and protected bots remain
@@ -4364,6 +4673,14 @@ Published: wangshangliao-command-tree.html
 
 # 旺商聊命令树文字版
 
+## 当前群内解封命令
+
+真实@一名成员或回复其可核验的同群原消息，发送「解除黑名单」
+（兼容「移除黑名单」）：移出名单并尝试解禁，分别反馈结果。
+只操作当前机器人、本群和唯一可信目标；指令消息按现有规则撤回。
+私信或后台移除只移出名单；单独解禁不移除黑名单，不连带删除白名单。
+未知回执先核对，不自动重试。下方带日期的移除不解禁说明属于早期轮次。
+
 ## 当前直接命令流程（2026-10-23）
 
 **名单互斥／移除已于北京时间2026-10-23 22:59:23完整重启加载**（PID4071721，NRestarts=0）。
@@ -4526,7 +4843,7 @@ Published: wangshangliao-command-tree.html
 │  ├─ 11. 测试一段文字
 │  └─ 12. 发言白名单
 │     ├─ 1. 查看本群白名单
-│     ├─ 2. 添加白名单（名称搜索）
+│     ├─ 2. 群内@成员加入（提示真实@一名成员＋白名单，直接加入）
 │     ├─ 3. 移除白名单（名称搜索）
 │     ├─ 4. 选择搜索成员
 │     └─ 5. 确认已有白名单申请
@@ -4701,8 +5018,9 @@ Pro为50 USDT／30天、每天5000次。付费费用上限为后台登记实收�
 不把原生入群操作者直接当邀请人，不对重复入群重复计奖。排名只统计本地可信文字记录：
 北京时间当日、每页20人，同成员30秒内最多计一条、同文五分钟内不重复计入，
 排除已记录的处罚文字及被撤回消息；不是平台完整发言量。
-`排名`／`发言排行榜`支持翻页。当天实时前30名自动获得独立的发言白名单，
-每30秒刷新，最近30秒发言待核对；名次下降或换日自动退出，不影响手动白名单。
+`排名`／`发言排行榜`仍查看今天、支持翻页。自动白名单使用北京时间昨天的榜单：
+仅前30名且昨日有效发言超过100条（至少101条）获得今天的豁免，不从第31名补位。
+每30秒刷新，最近30秒发言待核对；换日按新的昨天重算，不影响手动白名单。
 管理员明确移出后今日不自动加回；黑名单优先，不授管理权、不自动解禁。
 
 当前插件页使用两级导航，旧页签的对应位置如下：
@@ -4859,6 +5177,16 @@ Topics: commands, menus, finance
 Published: wangshangliao-command-tree-en.html
 
 # Wangshangliao Command Tree
+
+## Current In-Group Release Command
+
+Use one actual mention, or reply to a verifiable original message in the same
+group, with `解除黑名单` (alias `移除黑名单`). The bot removes the entry and
+attempts to unmute, reporting each result separately. Command cleanup follows
+the existing recall rule. Private-chat and Dashboard removal only remove the
+entry; an independent unmute does not remove it. The whitelist is unchanged.
+Unknown results require reconciliation, not automatic retry. Earlier dated
+removal-without-unmute statements below describe their original rounds.
 
 ## Current Direct Workflows (October 23, 2026)
 
@@ -5056,7 +5384,7 @@ Menu
 |   |-- 11. Test message text
 |   `-- 12. Group speech whitelist
 |       |-- 1. View this group's whitelist
-|       |-- 2. Add by member-name search
+|       |-- 2. Add in the group: genuinely @one member + 白名单, immediately
 |       |-- 3. Remove by member-name search
 |       |-- 4. Select a search result
 |       `-- 5. Confirm an existing whitelist preview
@@ -5272,9 +5600,12 @@ Activity points never transfer money or pay repeatedly for rejoining.
 Rankings use retained, trusted text for the Beijing day, twenty members per page:
 at most one count per member per thirty seconds, no repeated text within five
 minutes, excluding recorded sanctioned or recalled messages. They are not complete platform totals.
-`排名` and `发言排行榜` also accept a page number. Today's top thirty receive separate
-automatic speech exemptions, refreshed every thirty seconds with a thirty-second settling delay.
-Dropping rank or midnight removes automatic grants, never manual ones. Explicit removal
+`排名` and `发言排行榜` still show today's ranking and accept a page number.
+Automatic speech exemptions use yesterday's Beijing-day ranking: only its top thirty
+with more than 100 eligible texts (at least 101) qualify today. Excluded members
+are not replaced with ranks below thirty. Refresh runs every thirty seconds with
+a thirty-second settling delay; midnight switches the source to the next day.
+Manual grants remain unchanged. Explicit removal
 suppresses automatic re-entry for the day; blacklist wins and existing mutes stay in place.
 
 The plugin now uses two-level navigation:
@@ -10513,6 +10844,13 @@ Published: wangshangliao-plugin.html
 
 # 旺商聊群管
 
+当前群内解封：真实@一名成员或回复其可核验的同群消息，发送「解除黑名单」
+（兼容「移除黑名单」），移出名单并尝试解除禁言，分别反馈结果。
+私信或后台移除只移出名单；单独解禁不移除黑名单，不连带修改白名单。
+重复命令不重复解禁，未知回执暂停核对。下方带日期的“移除不解禁”为旧轮次说明。
+本次源码同时归档重入轮次隔离修复：已结束旧轮次的未知回执不再永久阻断可信新入群，
+但同轮重复通知、未结束动作及无完成审计的未知结果仍阻断，不自动重试旧动作。
+
 2026-10-22入口简化：独立结账页移至「旺商聊管理 → 活动与财务 → 邀请记账／结账」，
 旧域名、DNS、专属Access、隧道路由和独立6186服务已移除，不再跳转；
 旧网页、Unix RPC及独立构建目标已清理。原现金账本与历史付款保留。后台仅总控登录；
@@ -10746,7 +11084,7 @@ with the owner.
 | 群管理 | `公告 <内容>`；旧`全员禁言`、`解除全员禁言`仅提示使用App，不执行；定时功能保留 |
 | 管理授权 | `管理员列表`、`添加管理员 <真实@或编号>`、`移除管理员 <真实@或编号>`、`确认授权 <码>` |
 | 群规则 | `开启广告审核`、`关闭广告审核`、`开启防刷屏`、`关闭防刷屏`、`添加关键词 <文本>`、`修改关键词 <序号> <新词>`、`删除关键词 <序号>` |
-| 本群发言白名单 | `白名单`、`添加白名单 <成员名称>`、`移除白名单 <当前名／保存旧名／精确UID>`、`选择白名单 <本次搜索结果序号>`、`确认白名单 <预览令牌>`；添加按本群真实目录名称搜索，移除仅查已有记录，预览后本人确认；互斥／移除22:59:23已加载 |
+| 本群发言白名单 | 群内原生管理员且有本群授权时，真实`@一名成员 白名单`直接加入，无需搜索、选择、确认；`白名单`查询；`移除白名单 <当前名／保存旧名／精确UID>` → `选择白名单 <序号>` → `确认白名单 <令牌>`；旧`添加白名单 <名称>`只提示群内真实@的新方式；后台添加仍按真实目录预览确认 |
 | 本群黑名单 | `黑名单`、`黑名单列表`、`移除黑名单`；群内原生回复／真正@单一目标添加后立即按本群时长禁言，不踢人；私信先选群，`添加黑名单 <名称>`／`移除黑名单 <名称>`搜索、`选择黑名单 <搜索结果序号>`、本人`确认黑名单 <预览令牌>`；私信／后台添加只登记，可信真实重入仍禁言 |
 | 黑名单重入禁言时长（已加载／在线配置通过） | `黑名单禁言时长 N分钟`／`黑名单禁言时长 N小时`／`黑名单禁言时长 N天`；私信先选群，预览后本人`确认黑名单 token`；仅影响本机器人本群后续真实重入，不重设已有禁言或追罚 |
 | 组合规则 | `添加规则 <名称> \| <词一> \| <词二>`、`修改规则 <序号> <名称> \| <词一> \| <词二>`、`启用规则 <序号>`、`停用规则 <序号>`、`删除规则 <序号>`、`测试规则 <文字>`；每群20条，每条2—5个词同时出现，测试不处罚 |
@@ -10790,17 +11128,24 @@ with the owner.
 后台群配置可编辑同一份组合规则，旧页面漏传已有组合规则会被拒绝以防误覆盖。
 组合规则仍沿用本群广告开关、管理员保护及递进处罚，不覆盖默认规则或财务设置。
 
-菜单“审核规则 → 发言白名单”及后台“群管理 → 规则 → 本群发言白名单”保留预览本人确认；
-私聊先选本人授权群。添加按真实当前目录名称搜索，移除可查当前名／保存旧名／精确UID或用名单行图标，
+群内添加简化为真实`@一名成员 白名单`直接加入，不再要求搜索、选择或确认。
+菜单“审核规则 → 发言白名单”提供新方式指引；私信添加请回目标群。
+后台“群管理 → 规则 → 本群发言白名单”添加保留真实当前目录名称搜索、预览本人确认；
+私聊查询和移除先选本人授权群。移除可查当前名／保存旧名／精确UID或用名单行图标，
 不要求目标仍在群内；UID不能用来盲添加。逐步重核操作者权限、记录和版本，补修状态见本页首节。
 白名单仅豁免本机器人在本群的自动广告、媒体及刷屏禁言和撤回，不授予管理、AI或财务权限，
 不自动解除已有禁言，也不改变其他管理员的手动处罚。变更独立审计，既有记录和重启均保留。
 白名单不覆盖上文独立黑名单重入规则；黑名单移除和解除禁言分别处理。
 
+后台“群管理 → 规则”新增逐群“仅白名单成员可发视频”开关，旧群缺省关闭。
+开启后非白名单普通成员视频只撤回，不警告、不禁言，不增加广告违规次数；
+手动和有效自动白名单可发视频，群主、原生管理员和机器人仍受保护。
+不把图片、表情、语音或文件名当视频；独立刷屏规则继续适用，未知撤回不重试。
+
 - 广告与刷屏：每轮前三次成功撤回警告，之后按1／3／10分钟禁言；10分钟结束后重新三次警告，不自动踢人。
 - 刷屏：同一成员3秒5条、10秒15条文字或媒体，或30秒5条重复文字；一个持续批次只计一次违规，撤回对应整批消息，不识别图片／视频广告内容。
-- 今日有效发言前30名自动白名单：北京时间，每30秒刷新，发言留30秒核对期；被撤回消息不计数。沿用30秒内最多一条、同文5分钟去重的防刷榜规则。
-- 自动白名单按接收机器人和群隔离、精确绑定原生身份，名次下降或换日退出；不改手动名单，不授管理权限、不自动解禁，黑名单优先。管理员明确移出后当日不自动加回，后台标明“今日前30名”。
+- 昨日有效发言前30名且超过100条（至少101条）自动获得今天的白名单：按北京时间，每30秒刷新，发言留30秒核对期；被撤回消息不计数。沿用30秒内最多一条、同文5分钟去重的防刷榜规则，不从第31名补位。
+- 自动白名单按接收机器人和群隔离、精确绑定原生身份，换日按新的昨天重算，不再符合条件时退出；不改手动名单，不授管理权限、不自动解禁，黑名单优先。管理员明确移出后当日不自动加回，后台标明“昨日前30名”及昨日有效条数；`排名`仍查看今天的榜单。
 - 广告和刷屏使用独立于AI等待的执行链；证据丢失时停止受影响自动处罚。
 - 权限不足或明确未提交记失败；实际发出且结果无法确认才记结果不明。
 - 不自动重放未知处罚；关闭广告后旧广告处罚不得因刷屏仍开着而继续。
@@ -11241,13 +11586,22 @@ Published: wangshangliao-testing.html
 
 # 旺商聊测试与验收
 
-同步日期：2026-10-24（北京时间）。[文档目录](../../wangshangliao.md) ·
+同步日期：2026-10-25（北京时间）。[文档目录](../../wangshangliao.md) ·
 [架构权限](wangshangliao-architecture-permissions.md) ·
 [按日期逐项证据](wangshangliao-acceptance-20261015.md) ·
 [问题补齐](wangshangliao-remediation-20261015.md)。
 
 本页说明当前方法，不将历史结果当作本次复测。离线回归、合成浏览器、真实平台回执、
 官方手机客户端观察和供应商账单分别留证。按日期报告保留原结果，不为消除缺项改写证据。
+
+## 2026-10-25：昨日达标自动白名单
+
+新规则要求北京时间昨日前30名且昨日有效文字超过100条（至少101条）；今天发言不用于今天授予。
+离线覆盖100／101条边界、前30名及第31名不补位、今日与昨日榜缓存隔离、
+北京时间零点切换及旧快照拒绝、旧表加法迁移、迟到及未知撤回扣减、重启恢复。
+同时复核手动名单保留、明确移出当日不再授予、黑名单优先、机器人／群／原生身份隔离。
+下方10月24日单条文字自动授予及当日前30名的在线证据不适用于本次新规则，
+短窗口实测不伪造昨日记录，不用发送成功代替跨日资格或手机客户端验收。
 
 ## 2026-10-24：刷屏循环与每日前三十名白名单
 
@@ -11931,20 +12285,38 @@ AI只能解释，不能执行或代确认；本次文档更新不执行生产操
 生产群`1516387`当前已启用；下文带日期的生产补验、保留样本及旧暂停记录均为历史证据，
 不能把“两个正式群关闭”继续当作当前状态，也不据此推断其他群已启用。
 
-## 今日发言排行与自动白名单
+## 白名单快捷添加与视频限制（2026-10-25）
 
-2026-10-24起，`排名`（或`发言排行榜`）读取北京时间当天有效文字发言。
-每日实时前30名自动豁免本机器人在本群的普通自动撤回、禁言；不授管理权、不解除已有禁言。
-后台白名单标明“今日前30名”及有效条数，与手动白名单区分。
+群内获本机器人授权的原生管理员，真实`@一名成员 白名单`即可直接加入本群白名单，
+不用搜索、选择、确认。只认结构化@与完整可信目录，不按昵称猜人；多目标、伪造@、
+引用冲突和撤权拒绝。重复加入不重复审计。旧添加命令仅提示新方式，后台添加及移除流程仍保留。
+
+逐群`video_whitelist_only`开关缺省关闭，后台显示“仅白名单成员可发视频”。
+开启后，非白名单普通成员的真实视频**只撤回**，不增加警告、禁言或广告违规次数；
+手动及有效自动白名单可发视频，群主、管理员和机器人受保护。旧媒体误罚修复仍适用于
+未开启该独立规则的群；图片／表情／语音不受此规则影响。刷屏规则仍独立执行。
+入站固定规则进入现有有界快速审核队列，提交前重新核对权限、白名单、原生身份和当前群版本，
+与普通处理共享原消息撤回操作号，未知结果不重试。
+
+## 发言排行与昨日达标自动白名单
+
+2026-10-25规则调整：`排名`（或`发言排行榜`）仍读取北京时间当天有效文字发言。
+自动白名单改用**昨天**完整自然日的榜单：仅排名前30名且昨日有效发言**超过100条（至少101条）**，
+获得今天本机器人在本群的普通自动撤回、禁言豁免；不授管理权、不解除已有禁言。
+后台白名单标明“昨日前30名”及昨日有效条数，与手动白名单区分。
+旧“今日实时前30名即可进入”的规则被替换，旧自动授权不沿用，手动名单不改动。
 
 - 排名沿用防刷榜限制：同成员30秒内最多一条，同文5分钟内不重复计数；机器人、命令和纯表情／媒体不计文字榜。
 - 原生撤回通知、机器人已受理撤回、刷屏整批撤回均不计入；撤回未知或发送中也不用于获取自动豁免。
 - 自动计算排除最近30秒待核对消息，每30秒刷新一次；原生撤回在下一次刷新扣减，不追溯补罚过去发言。
-- 名次掉出前30或北京时间换日自动退出；手动名单不受影响。管理员明确移出后，当天不自动加回。
+- 今天的新发言不影响今天资格；北京时间换日按新的昨天重算，未达标者退出。
+  昨日前30名中有黑名单、移出记录或身份无效时不从第31名补位；晚到的撤回仍在刷新时扣减。
+  手动名单不受影响。管理员明确移出后，当天不自动加回。
 - 名单按接收机器人、群、UID与原生身份隔离。黑名单立即优先，不会被自动白名单覆盖。
-- 仅由后台定时任务异步读取有索引的当天账本，不在单条消息处理路径扫描全天历史。
+- 仅由后台定时任务异步读取有索引的昨日账本，不在单条消息处理路径扫描全天历史。
   每次最多100000条；超限或读取失败停止续期，自动授权最长90秒且不过当日零点，不展示伪造的完整榜。
-- 自动记录独立保存在`automatic_exemptions.sqlite3`；手动白名单、黑名单及其审计不合并改写。
+- 自动记录独立保存在`automatic_exemptions.sqlite3`，记录来源日期并拒绝旧规则授权；
+  手动白名单、黑名单及其审计不合并改写。
 
 ## 普通审核仅手动踢出
 
@@ -12015,7 +12387,8 @@ AI不能修改此限制，也不能重新开启 `auto_kick`，旧自动踢出请
 | 普通高置信广告，尚未满三次成功撤回 | 撤回受理后计一次警告；失败、未知不计 | 不禁言 |
 | 普通高置信广告，已有三次成功撤回 | 本条原消息单独撤回并记账 | 重新核权后按1／3／10分钟递进；撤回失败不自动跳过禁言 |
 | 命中同成员刷屏阈值 | 仅撤回本批可信证据中的消息，不清扫其他发言；一个持续批次只算一次违规 | 共用三次警告及1／3／10分钟循环；同一持续批次只禁言一次 |
-| 普通图片、表情包、视频、合并聊天记录，未命中刷屏或独立文字广告证据 | 不因类型自动撤回；广告审核开启也不禁止普通媒体 | 不禁言，不计违规次数 |
+| 普通图片、表情包、合并聊天记录，未命中刷屏或独立文字广告证据；以及未开启独立视频限制的普通视频 | 不因类型自动撤回；广告审核开启也不禁止普通媒体 | 不禁言，不计违规次数 |
+| 已开启“仅白名单成员可发视频”的群，非白名单普通成员发送真实视频 | 仅撤回该视频；管理员、机器人和有效白名单不受此限制 | 不警告、不禁言、不增加广告违规次数 |
 | 本次禁言失败或回执未知 | 仍可在权限有效时独立撤回；两项结果不混为成功 | 失败不升级；已有未知禁言时冻结后续自动禁言，不能盲目重发 |
 | 管理员或本人撤回的原生通知 | 单独归属；通知本身不作为机器人成功回执，不增加自动警告次数 | 人工撤回／禁言不增加自动处罚次数 |
 | 拆分广告的旧证据已撤回，或撤回回执未知／发送中 | 关联读取时不再使用该条拼接普通号码；当前号码已处于该状态时不作新的关联处罚 | 不因这组失效证据触发禁言 |
@@ -12462,9 +12835,152 @@ Published: wangshangliao-maintenance.html
 
 # 旺商聊维护修复操作说明
 
-更新：2026-10-24（北京时间）。[文档目录](wangshangliao.md)；
+更新：2026-10-26（北京时间）。[文档目录](wangshangliao.md)；
 [当前架构与权限](zh/platform/wangshangliao-architecture-permissions.md)。
 适用于公共合并模式；操作前核对当前账号、群和有效配置，不能沿用旧AI管理工具流程。
+
+## 2026-10-26 黑名单重入被历史未知回执阻断
+
+根因是名单意图预留查询将同一成员任一历史`unknown`作为永久阻断条件：
+新真实入群通知虽然完成核验并标记处理，却没有生成新的禁言意图。
+现改为保留旧回执，按**规范入群ID及请求完成时间**隔离：
+同一入群仍去重；旧请求在途、缺少不可修改完成审计、入群发生在完成之前或同时，
+以及后续管理命令仍不能借机重试。只有完成后新发生、经最新原生入群记录、
+完整目录和当前权限核实的真实入群，才可创建独立禁言意图。
+增加完成审计查重索引，不合并、删除或改写旧记录，不增加踢人或放宽普通禁言上限。
+
+先用新增回归复现原漏洞，再验证完成后重入、重复通知、并发、重启、
+旧通知、未完成请求、名单移除及权限fence。
+生产源码六文件**606 passed**，另有既存`audioop`弃用警告；Ruff通过。
+开发树相关651项及扩展634项通过，覆盖重叠，不与生产数目相加。
+旧测试中管理员指令保留及默认关键词数量断言按各树现有行为校正；
+未因此修改生产关键词、撤回逻辑或生产新增的解除黑名单流程。
+
+北京时间2026-10-26 **22:58:00受控完整重启**，PID402859→1013043，
+active/running、NRestarts=0。重启前消息、规则及发送队列无在途工作，
+距下一轮定时发言约119秒；重启后旺商聊原账号在线，另两个账号继续停用。
+23:07:15核对：原意图、不可修改审计、原通知及原未知回执完整保留，
+消息、名单及发件队列无积压，旧12条`needs_review`不重试。
+23:00三个正式群的原定时轮次均有平台受理回执，未补发历史轮次。
+
+23项业务保护面中仅名单表摘要变化，已逐行核对为工作期间
+原生管理员自行新增的一名成员，非本轮操作；保留该业务变更，不整库回滚。
+配置及其余规则、白名单、财务、活动保护面不变。
+本轮未新增或删除真实成员名单、未对真实成员试罚或强制重进；
+一个未登记目标当前也不在最新完整目录，正式搜索无候选，未绕过校验改库补人。
+不能把代码加载及离线回归称为这两名成员均已完成新一轮真实重进验收，
+也未验证新的手机显示或未来实际到期。
+
+备份及私有回执：`/opt/backups/wsl-blacklist-rejoin-20261026/`。
+回滚仅恢复本轮核心源码及必要资源，保留后续业务、原审计和未知状态；
+不要整库覆盖，也不要把旧通知重置为待处理。
+
+## 2026-10-25 接收封包分类与空异常记录修复
+
+官方3.7.3 native在标记为0时有无认证明文分支。接入器仍不把此分支返回为
+已认证消息，只提取有界且明确未验证的格式元数据：已知传输群的7／8格式
+归档`plaintext_notice`；其他归档`unverified_message`并告警，正文、昵称、声称的身份不落库。
+两类都不进入AI、关键词、排行榜、处罚、成员事件或财务；损坏认证不降级为明文。
+已认证但不支持的类型保存格式与原因，7／8格式仅为`application_notice`，不再留空对象。
+提交先于ACK，提交失败不ACK；重复投递幂等。原生成员通知及群管鉴权未改变。
+
+离线十文件437项通过；直接导入生产源码的五文件298项复测通过，覆盖重叠、不相加。
+Ruff及编译检查通过。避开广告在途和未来90秒到期窗口，完成一次受控完整重启，
+2026-10-25北京时间17:32:36启动，17:32:49在线读回，PID3161821→402859、NRestarts=0。
+35项群配置／手动名单／财务／活动保护摘要一致，另两个旺商聊账号保持停用。
+17:35观察到14次7格式明文通知及2次12格式插件消息，解码失败／非法封包为0；
+5条正常消息已处理，待处理及规则队列均为0，原12条`needs_review`保留不重试。
+启动后的340次应用解码包含NIM正常重连同步，不等于340条新聊天或业务执行。
+未主动重放、补罚、重置旧异常或伪造原始正文；旧记录无法据时间相关性补造分类。
+此观察不证明所有未来格式均已支持，也不把未验证插件消息宣称为正常聊天漏读已补齐。
+备份及结构化证据：`/opt/backups/wsl-receive-compatibility-20261025/`；
+回滚仅恢复本轮源码／文档，不整库回退后续业务。指标含义见[排障说明](wangshangliao-diagnostics.md)。
+
+English: classify unsigned plaintext without granting application authority,
+retain type-only evidence, and keep commit-before-ACK plus deduplication.
+One guarded restart loaded the fix; protected business fingerprints matched.
+Observed unsigned inputs were group notifications and plugin-format packets,
+not evidence that every message type is supported. Unknown input is not replayed.
+
+## 2026-10-25 视频白名单与群内直接加入
+
+新增独立的本群开关“仅白名单成员可发视频”，默认关闭。
+开启后，非白名单普通成员的原生视频只撤回，不单独累计警告或禁言；
+图片、表情不按视频处理，管理员、群主和受保护机器人仍豁免，独立刷屏规则保留。
+手动白名单和有效的昨日达标自动白名单均可发视频。
+
+本群授权管理员用客户端真实@一名成员并发送“白名单”，核对原生身份及权限后直接加入；
+不再经过添加名称、选序号和确认令牌。假@、多人、引用冲突和跨群目标拒绝执行。
+已有黑名单不自动转换，已有禁言不自动解除；后台操作及移除仍保留预览确认。
+旧“添加白名单”命令只说明新入口，私信引导回目标群；管理员指引及中英文帮助同步更新。
+
+离线后端1324项、前端115项、文档5项通过，生产源码独立回归80项通过；
+最终指引补充后另跑41项通过，Ruff和页面构建通过。
+编译后页面在320／390／1440px检查开关、确认流程和跨群隔离，无横向溢出及脚本异常；
+这些是中性离线夹具结果，不等于真实视频撤回或手机客户端验收。
+
+北京时间2026-10-25 08:13运行态核对完成：一次受控完整重启，PID由4136450变为3161821，
+账号43506527在线，pending及rejected均为0，管理员手册40／40条且版本最新。
+仅汇赢1417872、鼎峰1459534、真龙1516387经预览确认开启视频开关；
+业务版本11／5／4、正文、图片和时间保持不变，未人为重置发送游标，授权绑定随群规版本同步。
+各群手动白名单仍5人，昨日达标自动名单依次0／1／1人，达标条数111及129且豁免有效。
+其余群配置、黑白名单、财务、活动和账号配置保护摘要不变，三个群轮播无阻塞标记。
+本轮未启用另外两个账号，也未拿真实成员试罚；真实@加入及视频撤回的群内实测单列待验收。
+
+English: native single-member mentions now add speech exemptions directly after
+current administrator and tenant checks. The optional group video restriction
+recalls only non-exempt ordinary members' videos; flood rules remain independent.
+One controlled restart and three guarded group updates were verified without
+changing campaign contents, schedules or protected business data. Offline passes
+and live state checks are not claimed as native recipient or phone acceptance.
+
+## 2026-10-25 轮播授权联动与同账号排队
+
+修复仅改群审核规则便令已确认图文失效的问题：当前授权随纯群规编辑在同一事务递增绑定版本，
+不更新业务正文、素材、业务版本或发送游标；旧版本在途任务仍被拦住。
+管理员变化、暂停、原授权已失效、成员代数／原生权限变化不自动续接。
+同账号定时图文逐群串行，图后正文至少1秒、群间至少3秒；前置核验窗口由10秒改为120秒，
+超时跳过并保存原因，不重放历史时段，不自动重试未知／部分／被拒绝结果。
+页面显示授权变化及最近发送前跳过／拒绝，原未知／部分暂停保护保留。
+
+最终离线十个后端文件603项通过，前端112项及文档10项通过，构建通过；
+中性离线页面的授权失效／超时／拒绝在320／390／1440px九项检查无横向溢出或脚本异常。
+三群同刻到期、两任务上限排队、图片先于正文、撤权与事务回滚均有隔离回归。
+部署及真实送达须另核对本轮运行态回执，不以本地通过宣称平台限流保证或手机通过。
+
+北京时间07:14完成插件热重载，PID4136450不变，正式配置、财务、活动和名单保护摘要一致。
+07:20原有计划自然触发，鼎峰／真龙／汇赢三个群分别形成accepted回执，按同账号排队完成，
+没有人工补发或改动正文。此次证据不等于手机客户端显示确认或平台固定限流阈值承诺。
+补充覆盖图片成功后、正文等待中取消的情况：结果保持unknown并暂停，不误记为完整成功。
+
+## 2026-10-25 自动白名单改用昨日达标榜
+
+新规则替换下方10月24日的“今日前30名即可进入”：按北京时间昨天的有效文字榜，
+仅前30名且有效发言超过100条（至少101条）获得今天的自动豁免，不从第31名补位。
+今天发言不用于今天授予；午夜切换来源日期，原生撤回或未知撤回仍排除，
+保留30秒最多一条、同文五分钟去重、30秒核对期、30秒刷新及最长90秒失效。
+存储增加来源日期，旧版自动授权失效后重新计算，不改手动名单、黑名单、群业务规则或财务。
+管理员明确移出后当日不自动加回，黑名单优先；名单及指引改标“昨日前30名”。
+
+旧实测脚本不再把当天一条有效文字当成授予条件，也不伪造昨天的生产记录；
+短窗口只核对当天发言不立即授予，昨日达标实发资格另需跨日样本。
+下方旧的一条文字实发通过仅是原版本证据，不能证明本次新条件已实群验收。
+加载、离线结果与保护面核对须以本次实际操作记录为准。
+
+English: today's automatic grants require yesterday's Beijing-day top30 rank and
+at least101 eligible texts, with no backfill beyond rank30. Current-day counts do
+not grant current-day immunity. Source dates fence legacy grants; manual lists,
+blacklist precedence, recall exclusion and short expiry remain unchanged.
+Older one-message live acceptance below applies only to the previous policy.
+
+**本轮加载与核对**：北京时间2026-10-25 05:18:12在线读回，
+仅热重载旺商聊插件，PID4136450不变，接收账号在线，pending为0。
+三个正式群均启用且未暂停，自动授权来源日期为2026-10-24，所有自动条数均大于100；
+手动白名单各5人，黑名单、群业务规则、财务、活动及账号配置保护摘要无变化。
+保留线上独立修改的黑名单指引和运维历史，页面使用线上原有桥接脚本重新构建，不覆盖其他修复。
+离线后端两个互不重复文件集分别444和205项通过，共649项；前端与生成器109项通过，
+名单页320／390／1440px检查通过。旧浏览器路径失败后使用已安装Chromium复测通过。
+本轮没有拿真实成员试罚，不代表新的手机客户端或跨日实发验收通过。
 
 ## 2026-10-24 三账号真实验收结果
 
@@ -14064,6 +14580,41 @@ AstrBot侧前缀为`Cashier standalone`。旧公共`control.sock`已停用，这
 后台名片任务以任务 ID 为关联值；新确认消息与预览消息有不同的消息关联值。
 因此 `correlation` 不是跨全部会话、全部发送分片的全局调用链 ID。
 
+## 收件兼容分类与“没有积压但漏读”（2026-10-25）
+
+`pending=0`只表示当前没有待处理消息，不代表所有上游封包都已识别。
+官方3.7.3同时支持带认证标签及标记为0的明文封包；接入器不能把后者
+直接当成已验证的群管命令。`/api/platform/stats`的`receive_health`现区分：
+
+- `decoded_messages`：通过应用层认证及路由校验的消息。
+- `plaintext_notices`：由已知群的真实传输路由归档、格式为7／8的明文群通知／公告。
+  收件状态为`plaintext_notice`，只保留未验证的格式号及原因，不保存正文、昵称或声称的身份。
+- `unverified_messages`：其他可解析的无认证明文，状态为`unverified_message`，
+  以`error=message_unverified`告警，不进入关键词、AI、排行榜、处罚或财务处理。
+- `unverified_formats`：有界格式计数，未知大格式号统一计入`other`，不能作为权限依据。
+- `decode_failures`：损坏封包、认证失败等真正解码失败；不与上述两类重复累计。
+
+已认证但不支持的群消息也记录有界`format`和`reason`，不再保存无解释的空对象。
+已认证7／8格式仅归档为`application_notice`。这些应用层提示均不等于可信入群事件，
+不会替代原生成员通知、触发黑名单重入处罚或变更名单／财务。
+所有分类先提交收件记录再ACK，重复投递不重复建档，提交失败不ACK；
+计数按接收尝试累计，不等于独立消息条数。未知封包不打印／保存正文或密文，
+不自动重试、补读或重置成`pending`。旧记录没有原始正文时，不能据时间相关性补造分类。
+
+## 定时计划启用但未发送（2026-10-25）
+
+先区分已启用的配置、当前授权、调度游标和实际发送回执，不以启用勾选代替送达。
+仅修改审核词或防刷屏等群规时，当前有效的图文授权在同一事务随版本更新；
+管理员变更、暂停、成员代数变化、撤权或早已失效的授权不自动恢复。
+后台提示授权变化时，核对当前群和内容后重新预览确认，不能直接改数据库版本。
+
+计划读取的`schedules`附带`last_state`／`last_error`／`last_at`。
+`skipped`表示未提交；`business_rules_inactive`等为权限／版本校验失败，
+`advertisement_slot_expired`为排队／核验超过120秒，`advertisement_before_runtime`为启动前旧时段。
+均跳到未来边界、不补发。旧版本未记录发送前跳过，不能从历史无回执推断平台已拒绝。
+同机器人逐群串行，图后正文至少间隔1秒，群与群之间至少3秒；不承诺平台阈值，
+也不自动重试拒绝或未知结果。`delivery_unknown`／`partial_delivery`仍暂停核对。
+
 ## 定时图片为空白气泡，但文字正常
 
 2026-10-23确认定时图片外壳曾为`{"b": "..."}`，官方客户端精确识别的形状为
@@ -14252,6 +14803,16 @@ Published: wangshangliao-database.html
 | `cards.sqlite3` | 名片任务、稳定生成名、已处理成员 | 防止重复改名，保留未知任务供核查 |
 | `friend_approval.sqlite3` | 逐账号好友同意设置、读取退避、未知审批和欢迎观察 | 保留冷却及异常暂停，不能删除后自动重试 |
 | `private_interaction.sqlite3` | 首次私聊／好友欢迎认领、私聊咨询有效期、按群开通代次的引导认领 | 未确认投递仍保留认领，删除会使首次发送保护失效 |
+| `speech_activity.sqlite3` | 无正文的今日／昨日有效消息计数来源及增量游标 | 北京时间零点换日并清理早于昨日数据，不能用清空游标实现长期回补 |
+| `speech_report.json` | 可选的专门发言汇报名单与群范围，不存句数或聊天正文 | 绑定当前机器人账号和固定UID；不跨账号共享，不随统计换日清理配置 |
+
+专门发言汇报通过已登录总控的只读扩展入口`GET speech-report?bot_id=...`读取，
+每次异步查询都在前后核对机器人及所有指定群的启用范围。只汇总有效文字；统计内容和保留期不扩大。
+`speech_report.json`由运维在当前账号绑定的业务目录维护，结构为
+`{"account":"机器人UID","groups":[{"id":"群UID","name":"显示名"}],"members":[{"id":"成员UID","name":"显示名"}]}`。
+最多20群、30人，拒绝重复／无效UID、控制字符、符号链接及超过16KiB的配置；
+身份须先用真实群目录核对，不通过相似昵称猜人。未配置不展示专门汇报，任一群停用会阻断完整汇报，
+不能静默缩小统计范围。未读完的计数显示补齐状态，不作为完整汇总复制，不向群自动发出。
 
 表按功能首次使用逐步创建；没有某张表不一定是故障。账号与群通常还有表内联合键，
 目录隔离不能代替业务身份和授权校验。人格、知识库和 AstrBot 对话历史不属于这些库。

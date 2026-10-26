@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-24",
+  "updated": "2026-10-26",
   "mode": "integrated",
   "scope": [
     "当前公共合并模式的静态职责对照；实时状态与服务端鉴权另行核验。本群管理不等于 AstrBot 超管，AI 不执行操作。“允许”仅表示入口可用，不代表平台执行成功。",
@@ -250,11 +250,12 @@
       ],
       "files": [
         "astrbot/builtin_stars/wangshangliao_moderation/rankings.py",
+        "astrbot/builtin_stars/wangshangliao_moderation/speech_activity.py",
         "astrbot/builtin_stars/wangshangliao_moderation/automatic_whitelist.py"
       ],
       "responsibility": [
-        "北京时间当天有效文字计数、分页、原生 @；有效文字前30名短期自动白名单",
-        "Asia/Shanghai eligible text counts, pagination, native mentions and short-lived daily top30 exemptions"
+        "北京时间有效排行、分页、原生 @；独立每日群活跃与选定成员汇总仅保留今日和昨日；昨日前30名且昨日超过100条获得今天的自动白名单",
+        "Asia/Shanghai rankings, pagination and native mentions; independent group/member activity retains today and yesterday only; yesterday's top30 with more than100 texts qualify for today's exemptions"
       ],
       "boundary": [
         "仅统计本实例已收记录；排除机器人、命令及已撤回／撤回未知消息；不覆盖手动名单，黑名单优先，不自动派奖",
@@ -1457,7 +1458,7 @@
       ],
       "examples": [
         "管理 白名单",
-        "管理 添加白名单 成员名称",
+        "@一名真实成员 白名单",
         "管理 移除白名单 成员名称",
         "管理 选择白名单 1",
         "管理 确认白名单 PREVIEW_TOKEN"
@@ -1470,8 +1471,8 @@
       ],
       "grants": [],
       "rule": [
-        "仅本群授权管理且须原生群主或管理员；私聊先选授权群，按真实成员名称搜索、选人、预览后新消息确认；提交复查成员身份和版本；仅豁免本群发言处罚，不授予管理或AI权限",
-        "Authorized native owners/admins only; select an authorized group privately, search native member names, select, preview and confirm with a fresh message; recheck identities and versions at commit; speech-sanction exemption grants no management or AI authority"
+        "仅本群授权管理且须原生群主或管理员；群内真实@一名成员＋白名单直接加入，无需搜索、选择或确认，提交前复核结构化身份及版本；私信添加回目标群，旧添加命令只提示新方式，后台添加和移除仍预览确认。仅豁免本群发言处罚，不授予管理或AI权限；逐群开启仅白名单成员可发视频后，非白名单普通成员视频仅撤回，不因此警告或禁言，管理员和机器人受保护",
+        "Authorized native owners/admins only; genuinely mention exactly one member in the group and send 白名单 for immediate addition, without search/selection/confirmation. Recheck native identities and revisions before commit. Private addition redirects to the target group; dashboard additions and removals retain preview/confirmation. No management or AI authority is granted. The independent per-group whitelist-only video switch recalls ordinary non-whitelisted members' videos only, without video-only warnings or mutes; administrators and bots remain protected"
       ]
     },
     {

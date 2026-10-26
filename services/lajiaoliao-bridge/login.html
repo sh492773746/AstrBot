@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>辣椒聊 · 本地授权</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #fafbfc; color: #20242b; font: 15px/1.6 system-ui, sans-serif; }
+    header { border-bottom: 1px solid #dfe3e8; background: #fff; padding: 20px 24px; }
+    header div { max-width: 560px; margin: auto; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+    h1 { font-size: 22px; margin: 0; }
+    header span { color: #646c77; font-size: 13px; }
+    main { max-width: 560px; margin: 48px auto; padding: 0 24px; }
+    h2 { font-size: 18px; margin: 0 0 24px; }
+    label { display: block; font-weight: 600; margin-bottom: 8px; }
+    input { width: 100%; font: inherit; padding: 11px 12px; border: 1px solid #a7afb9; border-radius: 4px; margin-bottom: 22px; background: #fff; }
+    input:focus { outline: 2px solid #2578c9; outline-offset: 2px; }
+    button { border: 0; border-radius: 4px; padding: 12px 20px; background: #187647; color: white; font: inherit; font-weight: 600; cursor: pointer; min-height: 48px; }
+    button:disabled { opacity: .55; cursor: wait; }
+    #submit { width: 100%; }
+    #status { margin: 22px 0; overflow-wrap: anywhere; color: #4d5868; min-height: 48px; }
+    #status.error { color: #b22626; }
+    #status.success { color: #187647; }
+    #verification { position: fixed; inset: 0; z-index: 100; background: #f6f8fbee; }
+    #verification[hidden] { display: none; }
+    iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+    #cancel { position: absolute; top: 16px; right: 16px; z-index: 1; background: #424c59; }
+    @media (max-width: 480px) { main { margin-top: 28px; padding: 0 20px; } header { padding: 16px 20px; } }
+  </style>
+</head>
+<body>
+  <header><div><h1>辣椒聊</h1><span>本地授权 · Linux</span></div></header>
+  <main>
+    <h2>账号登录</h2>
+    <form id="login">
+      <label for="account">手机号</label>
+      <input id="account" inputmode="tel" autocomplete="username" required maxlength="14" pattern="(?:\+86)?1[0-9]{10}">
+      <label for="password">密码</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button id="submit" type="submit" disabled>验证并登录</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+  <div id="verification" hidden role="dialog" aria-label="官方人机验证" aria-modal="true">
+    <button id="cancel" type="button">取消验证</button>
+  </div>
+  <script>
+    'use strict';
+    const loginKey = new URLSearchParams(location.hash.slice(1)).get('authorization') || '';
+    if (loginKey) history.replaceState(null, '', location.pathname);
+    const form = document.getElementById('login');
+    const account = document.getElementById('account');
+    const password = document.getElementById('password');
+    const submit = document.getElementById('submit');
+    const status = document.getElementById('status');
+    const overlay = document.getElementById('verification');
+    const cancel = document.getElementById('cancel');
+    const errors = {
+      verification_cancelled: '验证已取消，未提交密码。',
+      verification_failed: '官方验证未完成或加载失败，未提交密码。',
+      verification_config_failed: '验证码配置加载失败，未提交密码。请检查端口转发后重试。',
+      verification_sdk_failed: '无法加载阿里云验证码脚本，未提交密码。请检查浏览器网络或拦截扩展。',
+      verification_init_failed: '官方验证码初始化失败，未提交密码。请使用系统浏览器重试。',
+      verification_frame_failed: '无法连接验证码页面，未提交密码。请检查 localhost 与 127.0.0.1 是否都能访问当前转发端口。',
+      verification_timeout: '验证已超时，未提交密码，请重试。',
+      lajiaoliao_captcha_required: '需要重新完成人机验证。',
+      lajiaoliao_verification_config_unavailable: '无法获取官方验证配置，未提交密码。',
+      lajiaoliao_verification_provider_unsupported: '官方验证配置暂不兼容，请使用官方客户端登录。',
+      lajiaoliao_device_confirmation_required: '官方要求新设备确认，当前页面尚不支持，请在官方客户端完成确认。',
+      lajiaoliao_login_failed: '官方未返回有效登录会话，请核对账号、密码及验证结果。',
+      lajiaoliao_im_token_refresh_failed: '未能获取可用的 IM 令牌，会话尚未保存。',
+      token_store_unavailable: '本地会话存储不可用，会话尚未保存。',
+      phone_account_required: '请输入有效的中国大陆手机号。',
+      request_failed: '请求失败或超时，请检查本地桥接服务状态。'
+    };
+    function show(text, kind = '') { status.textContent = text; status.className = kind; }
+    async function request(path, body) {
+      const response = await fetch(path, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: {
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          ...(loginKey ? { Authorization: `Bearer ${loginKey}` } : {})
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        cache: 'no-store', credentials: 'same-origin', signal: AbortSignal.timeout(65000)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'request_failed');
+      return result;
+    }
+    function verify(config) {
+      if (config.required === false) return Promise.resolve('');
+      if (config.required !== true || !config.region || !config.prefix || !config.scene_id) {
+        return Promise.reject(new Error('lajiaoliao_verification_config_unavailable'));
+      }
+      return new Promise((resolve, reject) => {
+        const frame = document.createElement('iframe');
+        frame.title = '官方人机验证';
+        frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-modals allow-same-origin');
+        const requestID = crypto.randomUUID();
+        const frameURL = new URL('/verify', location.origin);
+        frameURL.hostname = location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+        frameURL.hash = requestID;
+        let finished = false;
+        let ready = false;
+        const finish = (value, code) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          clearTimeout(loadTimer);
+          window.removeEventListener('message', receive);
+          document.removeEventListener('keydown', keydown);
+          cancel.removeEventListener('click', abort);
+          frame.remove();
+          overlay.hidden = true;
+          code ? reject(new Error(code)) : resolve(value);
+        };
+        const abort = () => finish('', 'verification_cancelled');
+        const keydown = event => { if (event.key === 'Escape') abort(); };
+        const receive = event => {
+          const data = event.data;
+          if (event.source !== frame.contentWindow || event.origin !== frameURL.origin ||
+              data?.source !== 'lajiao-aliyun-captcha' || data.requestID !== requestID) return;
+          if (data.type === 'ready') {
+            ready = true;
+            clearTimeout(loadTimer);
+            frame.contentWindow.postMessage({source:'lajiao-login',requestID,type:'configure',config}, frameURL.origin);
+          }
+          else if (data.type === 'retry') show('验证未通过，请在官方弹窗内重试；尚未提交密码。');
+          else if (data.type === 'success' && typeof data.value === 'string' && data.value.length > 0 && data.value.length < 48000) finish(data.value);
+          else if (data.type === 'cancelled') abort();
+          else if (data.type === 'failed') {
+            const allowed = ['verification_config_failed','verification_sdk_failed','verification_init_failed'];
+            finish('', allowed.includes(data.value) ? data.value : 'verification_failed');
+          }
+        };
+        const timer = setTimeout(() => finish('', 'verification_timeout'), 180000);
+        const loadTimer = setTimeout(() => { if (!ready) finish('', 'verification_frame_failed'); }, 15000);
+        window.addEventListener('message', receive);
+        document.addEventListener('keydown', keydown);
+        cancel.addEventListener('click', abort);
+        frame.src = frameURL.href;
+        frame.onerror = () => finish('', 'verification_frame_failed');
+        overlay.append(frame);
+        overlay.hidden = false;
+        cancel.focus();
+      });
+    }
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (submit.disabled) return;
+      submit.disabled = account.disabled = password.disabled = true;
+      try {
+        show('正在读取官方验证配置…');
+        const config = await request('/v1/session/challenge');
+        show(config.required ? '等待你完成官方人机验证…' : '正在登录…');
+        const proof = await verify(config);
+        show('正在登录并保存会话…');
+        const result = await request('/v1/session/login', {account:account.value.trim(),password:password.value,captcha_verify_param:proof});
+        if (result.status !== 'logged_in') throw new Error('request_failed');
+        show('会话已安全保存。可在 AstrBot 中选择已登录会话。', 'success');
+      } catch (err) {
+        show(errors[err.message] || errors.request_failed, 'error');
+      } finally {
+        password.value = '';
+        submit.disabled = account.disabled = password.disabled = false;
+        submit.focus();
+      }
+    });
+    submit.disabled = false;
+  </script>
+</body>
+</html>

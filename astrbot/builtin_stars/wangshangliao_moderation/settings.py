@@ -253,20 +253,21 @@ class BusinessSettings:
         if (
             policy.get("advertising_enabled") is not False
             and not policy.get("semantic", {}).get("enabled")
-            and payload["_dispatch_class"] != "command"
-        ):
-            from .content_rules import classify, keyword_category
+            or policy.get("video_whitelist_only") is True
+            and payload.get("kind") == "video"
+        ) and payload["_dispatch_class"] != "command":
+            from .content_rules import content_category
             from .policy import is_fresh_message
 
-            category = keyword_category(
-                payload.get("text", ""),
+            category = content_category(
+                payload,
                 {
                     **policy,
                     "custom_rules": config.get("_open_groups", {})
                     .get(group, {})
                     .get("custom_rules", []),
                 },
-            ) or classify(payload.get("text", ""), name=payload.get("name", ""))
+            )
             if category and is_fresh_message(payload, received_at):
                 payload["_ingress_content"] = {
                     "category": category,

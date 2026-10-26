@@ -1,6 +1,40 @@
 # Wangshangliao Beginner Guide
 
-## Current Starting Point (October 24, 2026)
+## In-Group Blacklist Release
+
+An administrator mentions one member using the real client selector, or replies
+to their verifiable same-group message, and sends `解除黑名单` (alias
+`移除黑名单`). The bot removes the entry and attempts to unmute, reporting both
+results. Private-chat and Dashboard removal only remove the entry; independent
+unmuting does not remove it. Do not retry an unknown outcome. Older dated
+removal-only notes do not describe this current in-group command.
+
+## Daily Speech Activity (October 26, 2026)
+
+Open **Wangshangliao Management → Groups → Speech Activity**, select the bot and
+group, then choose today or yesterday. Beijing midnight starts a new daily count;
+only the previous and current dates are retained, not a long-term activity history.
+Group totals include active members, message types, hourly distribution and top 30.
+Search a member name or UID and select the matching member for separate daily
+statistics. Recalled/violating messages, bots and commands do not count; the newest
+30 seconds await verification. Automatic whitelist eligibility is unchanged.
+The copy icon beside the ranking copies the selected date's top 30 with group
+name/ID, date, rank, member name/UID and message count. Empty or incomplete rankings
+cannot be copied. A browser denial displays an error, never a false success.
+
+Bots with a configured **Focused Speech Report** also show exact-UID member totals
+by configured group, per-member combined totals and the combined team total.
+The Today/Yesterday selection applies to this report; its copy icon includes the
+complete group breakdown. Only effective text counts as chat sentences: images,
+videos, forwards, recalled/violating messages, bots and commands are excluded.
+The newest 30 seconds await verification, and only today/yesterday are retained.
+Incomplete reports cannot be copied. A disabled configured group blocks the whole
+report rather than silently shrinking its scope. Reports do not post into groups
+or change whitelist/moderation settings.
+
+![Daily and member activity, 390px offline browser acceptance, not a live phone capture](/images/wangshangliao/speech-activity-mobile.png)
+
+## Current Starting Point (October 25, 2026)
 
 Current flood thresholds are five messages in three seconds, fifteen in ten
 seconds, or five identical texts in thirty seconds. Each penalty cycle gives
@@ -8,15 +42,18 @@ three recall warnings, then one-, three- and ten-minute mutes. Warning grace
 restarts only after the final ten-minute mute expires; unknown receipts do not
 reset the cycle or trigger retries. A continuous burst counts as one violation.
 `发言排行榜`, `发言排行` and `排名` show today's effective text ranking.
-The top30 receive separate automatic speech-whitelist grants, refreshed every
-30seconds and recalculated at Beijing midnight. Recalled or uncertain-recall
+Automatic speech-whitelist grants now require both a top30 position in yesterday's
+Beijing-day ranking and more than100 eligible texts (at least101) yesterday.
+Today's messages do not qualify a member today, and excluded positions are not
+filled from rank31 onward. Grants refresh every30seconds and recalculate from the
+new previous day at Beijing midnight. Recalled or uncertain-recall
 messages do not count; the most recent30seconds are not yet eligible for grants.
 Existing limits of one counted text per member per30seconds and identical-text
 deduplication over five minutes remain. Media-only messages and commands are not
 counted. Manual grants remain intact; blacklist entries take priority. An explicit
 removal suppresses automatic readdition for the rest of that Beijing day.
-See the [maintenance record](../../wangshangliao-maintenance.md) for the
-October24 deployment and offline coverage. No new real-user penalty-cycle trial
+See the [maintenance record](../../wangshangliao-maintenance.md) for dated
+deployment evidence and offline coverage. No new real-user penalty-cycle trial
 or official-phone acceptance is claimed.
 
 Configure features directly in the Wangshangliao plugin: **Group Management →
@@ -242,8 +279,16 @@ for five minutes. Falling below the top thirty or crossing midnight removes the 
 grant, never the manual whitelist. Explicit removal suppresses automatic re-entry for the day.
 Blacklist always takes precedence; no management role or automatic unmute is granted.
 
-There is no automatic removal. Ordinary images, stickers, videos and merged
-forwards are not recalled or muted solely for their media type.
+There is no automatic removal of group members. Authorized native administrators
+can genuinely mention one member and send `白名单` to add them immediately, without
+search/selection/confirmation. Private addition redirects to the target group;
+dashboard additions and removals retain preview and confirmation.
+**Groups → Rules → 仅白名单成员可发视频** is an independent per-group switch,
+defaulting off. When enabled, ordinary non-whitelisted members' real videos are
+recalled only, without a warning or mute. Manual/current automatic whitelist entries,
+native owners/administrators and managed bots are exempt.
+Ordinary images, stickers, merged forwards and videos in groups without this
+switch are not recalled or muted solely for their media type.
 Supported authenticated media messages count toward flood thresholds; media is not
 downloaded or interpreted, and text, voice and file names are not guessed to be
 images or videos. Administrators and protected bots remain

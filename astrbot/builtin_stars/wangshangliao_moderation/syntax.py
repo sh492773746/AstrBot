@@ -153,7 +153,7 @@ NO_ARGUMENT = {
     "本群知识范围",
 }
 WITH_ARGUMENT = {
-    *WHITELIST_COMMANDS - {"白名单"},
+    *WHITELIST_COMMANDS,
     *BLACKLIST_COMMANDS - {"黑名单列表"},
     "选择客服",
     "确认已付款",
@@ -204,6 +204,7 @@ ALIASES = {
     "定时发言": "定时广告",
     "完整菜单": "私聊菜单",
     "解除禁言": "解禁",
+    "解除黑名单": "移除黑名单",
     "我的额度": "我的套餐",
     "菜单": "私聊菜单",
     "群管帮助": "帮助",
@@ -350,12 +351,23 @@ def recognize_command(text: str) -> str:
     if text.startswith("群管") and text[2:3].isspace():
         text = text[2:].lstrip()
     if text.startswith("@"):
-        match = re.fullmatch(r"(@[^\r\n]{1,256}?)\s+(黑名单|移除黑名单)", text)
+        match = re.fullmatch(
+            r"(@[^\r\n]{1,256}?)\s+(黑名单|移除黑名单|解除黑名单|白名单)", text
+        )
         if match:
-            return match[2] + " " + match[1]
-    for action in ("禁言", "解禁", "解除禁言", "踢出", "黑名单", "移除黑名单"):
+            return ALIASES.get(match[2], match[2]) + " " + match[1]
+    for action in (
+        "禁言",
+        "解禁",
+        "解除禁言",
+        "踢出",
+        "黑名单",
+        "移除黑名单",
+        "解除黑名单",
+        "白名单",
+    ):
         if text.startswith(action + "@"):
-            text = action + " " + text[len(action) :]
+            text = ALIASES.get(action, action) + " " + text[len(action) :]
             break
     parts = text.split(maxsplit=1)
     if not parts:

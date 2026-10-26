@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from pydantic import ValidationError
 
+from astrbot.builtin_stars.wangshangliao_moderation import rule_replies
 from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import OpenCall, OpenRPC
 from astrbot.builtin_stars.wangshangliao_moderation.open_service import (
     recognize_integrated,
@@ -37,7 +38,9 @@ from tests.test_wangshangliao_public_hardening import chat_event
 
 
 @pytest.fixture
-def rules(tmp_path):
+def rules(tmp_path, monkeypatch):
+    monkeypatch.setattr(rule_replies, "ACCOUNT_AD_GAP_SECONDS", 0)
+    monkeypatch.setattr(rule_replies, "IMAGE_TEXT_GAP_SECONDS", 0)
     store = OpenStore(tmp_path)
     tenant(store)
     service = SimpleNamespace(
@@ -350,7 +353,8 @@ async def test_ads_never_replay_or_retry_unknown(rules, monkeypatch, case):
         "account": "99",
         "group_id": "5",
         "rule_id": "a",
-        "next_at": now - (20 if case == "missed" else 0.1),
+        "next_at": now
+        - (rule_replies.ADMISSION_WINDOW_SECONDS + 1 if case == "missed" else 0.1),
     }
     with rules.store.connect(write=True) as db:
         db.execute("UPDATE business_ad_cursors SET next_at=?", (cursor["next_at"],))

@@ -117,6 +117,12 @@
           @group-directory="directory => groupDirectoryNames[directory.instance] = directory.names"
           existing
         />
+        <LajiaoLiaoLogin
+          v-else-if="draft.type === 'lajiaoliao'"
+          :key="draft.id"
+          v-model="draft"
+          existing
+        />
         <AstrBotConfig
           v-else
           :iterable="draft"
@@ -442,6 +448,7 @@ import {
   sessionApi,
 } from "@/api/v1";
 import WangshangliaoLogin from "./WangshangliaoLogin.vue";
+import LajiaoLiaoLogin from "./LajiaoLiaoLogin.vue";
 import AstrBotConfig from "@/components/shared/AstrBotConfig.vue";
 import ConfigProfileDrawer from "@/components/config/ConfigProfileDrawer.vue";
 import UmoDisplay from "@/components/shared/UmoDisplay.vue";
@@ -524,6 +531,7 @@ const platformTemplates = computed(
 );
 
 const platformIcon = computed(() => {
+  if (draft.value.type === "lajiaoliao") return getPlatformIcon("lajiaoliao");
   const template = findPlatformTemplate(draft.value);
   if (template?.logo_token) {
     return fileApi.tokenUrl(template.logo_token);

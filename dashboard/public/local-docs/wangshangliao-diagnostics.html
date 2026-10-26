@@ -95,6 +95,36 @@ AstrBot侧前缀为<code>Cashier standalone</code>。旧公共<code>control.sock
 </table>
 <p>后台名片任务以任务 ID 为关联值；新确认消息与预览消息有不同的消息关联值。
 因此 <code>correlation</code> 不是跨全部会话、全部发送分片的全局调用链 ID。</p>
+<h2>收件兼容分类与“没有积压但漏读”（2026-10-25）</h2>
+<p><code>pending=0</code>只表示当前没有待处理消息，不代表所有上游封包都已识别。
+官方3.7.3同时支持带认证标签及标记为0的明文封包；接入器不能把后者
+直接当成已验证的群管命令。<code>/api/platform/stats</code>的<code>receive_health</code>现区分：</p>
+<ul>
+<li><code>decoded_messages</code>：通过应用层认证及路由校验的消息。</li>
+<li><code>plaintext_notices</code>：由已知群的真实传输路由归档、格式为7／8的明文群通知／公告。
+收件状态为<code>plaintext_notice</code>，只保留未验证的格式号及原因，不保存正文、昵称或声称的身份。</li>
+<li><code>unverified_messages</code>：其他可解析的无认证明文，状态为<code>unverified_message</code>，
+以<code>error=message_unverified</code>告警，不进入关键词、AI、排行榜、处罚或财务处理。</li>
+<li><code>unverified_formats</code>：有界格式计数，未知大格式号统一计入<code>other</code>，不能作为权限依据。</li>
+<li><code>decode_failures</code>：损坏封包、认证失败等真正解码失败；不与上述两类重复累计。</li>
+</ul>
+<p>已认证但不支持的群消息也记录有界<code>format</code>和<code>reason</code>，不再保存无解释的空对象。
+已认证7／8格式仅归档为<code>application_notice</code>。这些应用层提示均不等于可信入群事件，
+不会替代原生成员通知、触发黑名单重入处罚或变更名单／财务。
+所有分类先提交收件记录再ACK，重复投递不重复建档，提交失败不ACK；
+计数按接收尝试累计，不等于独立消息条数。未知封包不打印／保存正文或密文，
+不自动重试、补读或重置成<code>pending</code>。旧记录没有原始正文时，不能据时间相关性补造分类。</p>
+<h2>定时计划启用但未发送（2026-10-25）</h2>
+<p>先区分已启用的配置、当前授权、调度游标和实际发送回执，不以启用勾选代替送达。
+仅修改审核词或防刷屏等群规时，当前有效的图文授权在同一事务随版本更新；
+管理员变更、暂停、成员代数变化、撤权或早已失效的授权不自动恢复。
+后台提示授权变化时，核对当前群和内容后重新预览确认，不能直接改数据库版本。</p>
+<p>计划读取的<code>schedules</code>附带<code>last_state</code>／<code>last_error</code>／<code>last_at</code>。
+<code>skipped</code>表示未提交；<code>business_rules_inactive</code>等为权限／版本校验失败，
+<code>advertisement_slot_expired</code>为排队／核验超过120秒，<code>advertisement_before_runtime</code>为启动前旧时段。
+均跳到未来边界、不补发。旧版本未记录发送前跳过，不能从历史无回执推断平台已拒绝。
+同机器人逐群串行，图后正文至少间隔1秒，群与群之间至少3秒；不承诺平台阈值，
+也不自动重试拒绝或未知结果。<code>delivery_unknown</code>／<code>partial_delivery</code>仍暂停核对。</p>
 <h2>定时图片为空白气泡，但文字正常</h2>
 <p>2026-10-23确认定时图片外壳曾为<code>{&quot;b&quot;: &quot;...&quot;}</code>，官方客户端精确识别的形状为
 <code>{&quot;b&quot;:&quot;...&quot;}</code>。定时图片发送现已采用紧凑JSON，与现有文字及固定引导图一致。

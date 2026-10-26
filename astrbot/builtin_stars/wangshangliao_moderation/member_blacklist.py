@@ -1,6 +1,7 @@
 """Explicit group blacklists with durable, evidence-bound rejoin enforcement."""
 
 import asyncio
+import hashlib
 import json
 import re
 import secrets
@@ -17,6 +18,7 @@ from astrbot.core.platform.sources.wangshangliao.blacklist import (
     protected_target,
 )
 from astrbot.core.platform.sources.wangshangliao.database import account_guard
+from astrbot.core.platform.sources.wangshangliao.directory import muted_member_ids
 from astrbot.core.platform.sources.wangshangliao.event import is_managed_account
 from astrbot.core.platform.sources.wangshangliao.invitations import (
     latest_membership_events,
@@ -558,7 +560,7 @@ class MemberBlacklist:
                 }
             self.pending.pop(token, None)
         guard()
-        _, saved_entries = await asyncio.to_thread(
+        saved_version, saved_entries = await asyncio.to_thread(
             store.set_member,
             account,
             group,
@@ -584,6 +586,112 @@ class MemberBlacklist:
             result["enforcement"] = await self.mute_command(
                 adapter, group, event, store, entry, guard
             )
+        elif operation == "direct" and mode == "remove":
+            result["release"] = await self.unmute_command(
+                adapter, group, event, store, candidate, saved_version, guard
+            )
+        return result
+
+    async def unmute_command(
+        self, adapter, group, event, store, candidate, version, guard
+    ):
+        """Release the exact native removal target and verify current mute state.
+
+        Args:
+            adapter: Original receiving account.
+            group: Original authenticated group.
+            event: Original single-target native removal command.
+            store: Scoped durable blacklist.
+            candidate: Proven business and transport identities.
+            version: List version immediately after removal.
+            guard: Original management and lifecycle authorization.
+
+        Returns:
+            Independent release status without concealing a partial failure.
+        """
+        account, uid, peer = str(adapter.account), candidate["id"], candidate["peer"]
+        identity = event.actor_identity
+        message = str(event.message_obj.message_id)
+        attempted = False
+        result = {"status": "rejected", "verified": False, "submitted": False}
+
+        def release_guard():
+            guard()
+            live = self.service.member_evidence.get((account, group), {}).get(uid, {})
+            if (
+                event.actor_identity != identity
+                or str(event.message_obj.message_id) != message
+                or str(live.get("nimId", "")) != peer
+                or live.get("groupRole") != "GROUP_ROLE_MEMBER"
+                or protected_target(adapter, group, uid, peer)
+            ):
+                raise OpenError("blacklist_changed")
+
+        async def authorize():
+            release_guard()
+            fresh = await self.service.roster(adapter, group)
+            release_guard()
+            if await self.target(event, fresh) != (uid, peer):
+                raise OpenError("blacklist_changed")
+            current_version, entries = await asyncio.to_thread(
+                store.read, account, group
+            )
+            release_guard()
+            if current_version != version or any(
+                row["member"] == uid for row in entries
+            ):
+                raise OpenError("blacklist_changed")
+
+        try:
+            await authorize()
+            current = await muted_member_ids(
+                adapter, group, authorize=release_guard, expected_member=(uid, peer)
+            )
+            release_guard()
+            if uid not in current:
+                await authorize()
+                return {
+                    "status": "already_unmuted",
+                    "verified": True,
+                    "submitted": False,
+                }
+            digest = hashlib.sha256(
+                json.dumps(
+                    [account, group, uid, peer, identity.principal, message],
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            request = ActionRequest.bind(
+                adapter,
+                "blacklist-release/" + digest,
+                "unmute",
+                int(group),
+                member=int(uid),
+                expected_nim=peer,
+            )
+            attempted = True
+            receipt = await adapter.execute_action(request, authorize=authorize)
+            result = {
+                **(receipt if isinstance(receipt, dict) else {"status": "unknown"}),
+                "verified": False,
+            }
+            if result.get("status") in {"accepted", "verified"}:
+                current = await muted_member_ids(
+                    adapter, group, authorize=release_guard, expected_member=(uid, peer)
+                )
+                await authorize()
+                result["verified"] = uid not in current
+        except (OpenError, ProtocolError, OSError, TimeoutError) as exc:
+            if result.get("status") not in {"accepted", "verified"}:
+                result = {
+                    "status": "rejected"
+                    if not attempted or getattr(exc, "submitted", None) is False
+                    else "unknown",
+                    "verified": False,
+                    "submitted": getattr(exc, "submitted", None)
+                    if attempted
+                    else False,
+                }
         return result
 
     async def mute_command(self, adapter, group, event, store, entry, guard):
@@ -750,7 +858,8 @@ class MemberBlacklist:
                     f"\n仅当前机器人和本群有效；群内真实@或回复成员消息发送「黑名单」，加入后立即禁言{result['mute_minutes']}分钟。每次可信真实重新入群也按本群时长禁言，不踢人。"
                     "\n可「黑名单禁言时长 N分钟／小时／天」预览后本人确认，范围1—41760整分钟，默认41760分钟（29天）。"
                     "\n修改时长不追罚旧名单或重设已有禁言，仅影响之后的群内拉黑和真实重入；普通禁言24小时上限不变。"
-                    "\n移除不自动解禁；解禁不会移除黑名单。私信选群后可「添加黑名单 名称」。"
+                    "\n群内真实@或回复发送「解除黑名单」（兼容「移除黑名单」），移出名单并解禁；结果分别反馈。"
+                    "私信或后台移除仍只移出名单，单独解禁不会移除黑名单。私信选群后可「添加黑名单 名称」。"
                     if operation == "read"
                     else "\n发送「选择黑名单 序号」，核对后确认。"
                 )
@@ -783,9 +892,28 @@ class MemberBlacklist:
                 "duplicate_or_unresolved": "该命令已处理或已有待核对处罚，本次未重复提交；请查看处罚记录。",
             }.get(status, "禁言结果待核对，未自动重试；请查看处罚记录。")
             return (
-                f"已加入本群黑名单：{result['member']}。{outcome}"
-                "以后真实重新入群也按本群时长禁言，不踢人。移除黑名单不会自动解禁。"
+                f"已将{result['member']}拉入黑名单。\n{outcome}"
+                "以后真实重新入群也按本群时长禁言，不踢人。"
+                "群内真实@或回复发送「解除黑名单」可移出名单并解禁。"
             )
+        if result["mode"] == "remove" and operation == "direct":
+            release = result["release"]
+            if release.get("verified"):
+                outcome = (
+                    "已核实当前未被禁言，无需重复解禁。"
+                    if release["status"] == "already_unmuted"
+                    else "已解除禁言，恢复发言。"
+                )
+            else:
+                outcome = {
+                    "accepted": "平台已受理解禁，但尚未核实恢复发言；请查看正在禁言名单。",
+                    "verified": "平台返回解禁完成，但尚未核实恢复发言；请查看正在禁言名单。",
+                    "rejected": "本次解禁未成功；请检查机器人管理权限、目标身份及正在禁言名单。",
+                }.get(
+                    release.get("status"),
+                    "解禁结果待核对，未自动重试；请查看正在禁言名单。",
+                )
+            return f"已移出本群黑名单：{result['member']}。\n{outcome}"
         return (
             f"已{'加入' if result['mode'] == 'add' else '移出'}本群黑名单：{result['member']}。"
             + (

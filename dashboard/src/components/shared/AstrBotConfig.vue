@@ -4,6 +4,7 @@ import { ref, computed } from 'vue'
 import ConfigItemRenderer from './ConfigItemRenderer.vue'
 import ConfigDefaultReset from './ConfigDefaultReset.vue'
 import TemplateListEditor from './TemplateListEditor.vue'
+import GroupAllowlistControl from './GroupAllowlistControl.vue'
 import { useI18n, useModuleI18n } from '@/i18n/composables'
 import { useConfigTextResolver } from '@/composables/useConfigTextResolver'
 import { useToast } from '@/utils/toast'
@@ -213,8 +214,14 @@ function hasVisibleItemsAfter(items, currentIndex) {
       </v-alert>
 
       <div v-for="(val, key, index) in filteredIterable" :key="key" class="config-item">
+        <GroupAllowlistControl
+          v-if="key === 'message_policy' && iterable.type === 'lajiaoliao'"
+          v-model="iterable[key]"
+          :session-ref="iterable.session_ref || ''"
+          directory-api="/api/v1/plugins/extensions/astrbot_plugin_lajiaoliao/groups"
+        />
         <!-- Nested Object -->
-        <div v-if="metadata[metadataKey].items[key]?.type === 'object'" class="nested-object">
+        <div v-else-if="metadata[metadataKey].items[key]?.type === 'object'" class="nested-object">
           <div v-if="metadata[metadataKey].items[key] && !metadata[metadataKey].items[key]?.invisible && shouldShowItem(metadata[metadataKey].items[key], key)" class="nested-container">
             <v-expand-transition>
               <AstrBotConfig

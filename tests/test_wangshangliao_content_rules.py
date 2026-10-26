@@ -482,6 +482,9 @@ AD_KEYWORDS = [
     "直播打狗中",
     "58",
     "小额",
+    "的来",
+    "私我",
+    "大秀",
 ]
 
 
@@ -490,7 +493,7 @@ def test_requested_ad_keywords_are_unique_persistent_defaults():
         Path(rules.__file__).with_name("keyword_defaults.json").read_text()
     )
     assert set(AD_KEYWORDS) <= set(policy["mute_keywords"])
-    assert len(policy["mute_keywords"]) == 36
+    assert len(policy["mute_keywords"]) == 39
     assert len(policy["mute_keywords"]) == len(set(policy["mute_keywords"]))
     assert policy["kick_keywords"] == []
 
@@ -516,6 +519,9 @@ def test_requested_ad_keywords_are_unique_persistent_defaults():
         ("直播打狗中", "直播打狗中"),
         ("58", "58小额上分"),
         ("小额", "小额上分"),
+        ("的来", "想接单的来"),
+        ("私我", "需要的私我"),
+        ("大秀", "今晚大秀"),
     ],
 )
 def test_requested_keywords_recognize_promotion_variants(word, text):

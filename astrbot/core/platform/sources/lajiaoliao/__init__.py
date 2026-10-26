@@ -1,0 +1,1 @@
+"""Lajiao Chat platform adapter."""

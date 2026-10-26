@@ -31,6 +31,7 @@ data_v3.db
 !/data/plugins/astrbot_plugin_rebo_live/
 !/data/plugins/astrbot_plugin_tenant_control/
 !/data/plugins/astrbot_plugin_domain_analytics/
+!/data/plugins/astrbot_plugin_lajiaoliao/
 configs/session
 configs/config.yaml
 cmd_config.json
@@ -96,6 +97,12 @@ dashboard/bun.lock
 !astrbot/builtin_stars/wangshangliao_moderation/.astrbot-plugin/
 astrbot/builtin_stars/wangshangliao_moderation/.astrbot-plugin/*
 !astrbot/builtin_stars/wangshangliao_moderation/.astrbot-plugin/i18n/
+!data/plugins/astrbot_plugin_lajiaoliao/.astrbot-plugin/
+data/plugins/astrbot_plugin_lajiaoliao/.astrbot-plugin/*
+!data/plugins/astrbot_plugin_lajiaoliao/.astrbot-plugin/i18n/
+services/lajiaoliao-bridge/bin/
+services/lajiaoliao-bridge/data/
+services/lajiaoliao-bridge/releases/
 integrations/**/var/
 integrations/**/data/
 integrations/**/dist/

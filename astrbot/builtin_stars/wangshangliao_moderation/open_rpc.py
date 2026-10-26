@@ -642,8 +642,14 @@ class OpenRPC:
                     result["schedules"] = [
                         dict(row)
                         for row in db.execute(
-                            "SELECT rule_id,next_at,blocked FROM business_ad_cursors "
-                            "WHERE account=? AND group_id=?",
+                            "SELECT c.rule_id,c.next_at,c.blocked,s.state AS last_state,"
+                            "s.error AS last_error,s.created AS last_at "
+                            "FROM business_ad_cursors c LEFT JOIN business_rule_sends s "
+                            "ON s.operation=(SELECT operation FROM business_rule_sends "
+                            "WHERE account=c.account AND group_id=c.group_id "
+                            "AND rule_id=c.rule_id AND kind='advertisement' "
+                            "ORDER BY created DESC LIMIT 1) "
+                            "WHERE c.account=? AND c.group_id=?",
                             (account, group),
                         )
                     ]

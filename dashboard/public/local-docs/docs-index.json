@@ -30,8 +30,8 @@
       "html": "wangshangliao-ai-index.html",
       "markdown": "wangshangliao-ai-index.md",
       "aggregate": "llms-full.txt",
-      "sha256": "92d0a7a6b63f3e8cdde76c3b2f899e05db5a573090ff3ea2ccbbe5601b55849a",
-      "line_count": 334,
+      "sha256": "679c9e487efeb63c67c4df6d6ceb3965c53d88a5f48874bc9c4741b1dbc521a1",
+      "line_count": 349,
       "headings": [
         {
           "level": 1,
@@ -47,63 +47,69 @@
         },
         {
           "level": 2,
-          "title": "刷屏循环与自动白名单（2026-10-24）",
+          "title": "黑名单重入隔离（2026-10-26）",
           "line": 21,
-          "end_line": 29
+          "end_line": 28
+        },
+        {
+          "level": 2,
+          "title": "刷屏循环与自动白名单（2026-10-25）",
+          "line": 29,
+          "end_line": 44
         },
         {
           "level": 2,
           "title": "最新真实 @ 验收与收尾（2026-10-24）",
-          "line": 30,
-          "end_line": 39
+          "line": 45,
+          "end_line": 54
         },
         {
           "level": 2,
           "title": "最新操作与源码发布入口（2026-10-23 23:39）",
-          "line": 40,
-          "end_line": 49
-        },
-        {
-          "level": 2,
-          "title": "资料类别与冲突",
-          "line": 50,
+          "line": 55,
           "end_line": 64
         },
         {
           "level": 2,
-          "title": "名单互斥与移除补修（2026-10-23 22:59:23已加载）",
+          "title": "资料类别与冲突",
           "line": 65,
-          "end_line": 92
+          "end_line": 79
+        },
+        {
+          "level": 2,
+          "title": "名单互斥与移除补修（2026-10-23 22:59:23已加载）",
+          "line": 80,
+          "end_line": 107
         },
         {
           "level": 2,
           "title": "黑名单时长基线（2026-10-23，已加载证据不覆盖本轮名单补修）",
-          "line": 93,
-          "end_line": 125
+          "line": 108,
+          "end_line": 140
         },
         {
           "level": 2,
           "title": "按任务查找",
-          "line": 126,
-          "end_line": 144
+          "line": 141,
+          "end_line": 159
         },
         {
           "level": 2,
           "title": "最近部署证据的定位",
-          "line": 145,
-          "end_line": 294
+          "line": 160,
+          "end_line": 309
         },
         {
           "level": 2,
           "title": "机器入口与按需读取",
-          "line": 295,
-          "end_line": 314
+          "line": 310,
+          "end_line": 329
         },
         {
           "level": 2,
           "title": "更新与安全边界",
-          "line": 315,
-          "end_line": 334
+          "line": 330,
+          "end_line": 349
         }
       ]
     },
@@ -254,8 +260,8 @@
       "html": "wangshangliao-rules-ai.html",
       "markdown": "wangshangliao-rules-ai.md",
       "aggregate": "llms-full.txt",
-      "sha256": "486c0e3c6b90ac00be69162d4d3826788151b20d86d3364a2fa4a9fc1cf47706",
-      "line_count": 533,
+      "sha256": "dc3c36253bb36fdbf811bccc7ca4acace09172113838591b3268dbb8b5278c4d",
+      "line_count": 626,
       "headings": [
         {
           "level": 1,
@@ -265,153 +271,189 @@
         },
         {
           "level": 2,
-          "title": "群内黑名单立即禁言（2026-10-24）",
+          "title": "当前群内解除黑名单",
           "line": 3,
-          "end_line": 21
+          "end_line": 11
+        },
+        {
+          "level": 2,
+          "title": "黑名单真实重入与未知回执隔离（2026-10-26）",
+          "line": 12,
+          "end_line": 25
+        },
+        {
+          "level": 2,
+          "title": "每日群与成员发言统计（2026-10-26）",
+          "line": 26,
+          "end_line": 45
+        },
+        {
+          "level": 2,
+          "title": "管理授权变更与定时发言（2026-10-26）",
+          "line": 46,
+          "end_line": 58
+        },
+        {
+          "level": 2,
+          "title": "名单指令清理与新增关键词（2026-10-25）",
+          "line": 59,
+          "end_line": 72
+        },
+        {
+          "level": 2,
+          "title": "群内黑名单立即禁言（2026-10-24）",
+          "line": 73,
+          "end_line": 91
         },
         {
           "level": 2,
           "title": "最新配置操作说明（2026-10-23 23:39）",
-          "line": 22,
-          "end_line": 35
+          "line": 92,
+          "end_line": 105
         },
         {
           "level": 2,
           "title": "名单互斥与退群成员移除（2026-10-23 22:59:23已加载）",
-          "line": 36,
-          "end_line": 54
+          "line": 106,
+          "end_line": 124
         },
         {
           "level": 2,
           "title": "本群黑名单：当前流程与边界（2026-10-23）",
-          "line": 55,
-          "end_line": 91
+          "line": 125,
+          "end_line": 162
         },
         {
           "level": 3,
           "title": "旧规则到新规则",
-          "line": 92,
-          "end_line": 127
+          "line": 163,
+          "end_line": 198
         },
         {
           "level": 2,
           "title": "关键词配图与三条错峰（2026-10-23）",
-          "line": 128,
-          "end_line": 161
+          "line": 199,
+          "end_line": 240
         },
         {
           "level": 2,
           "title": "定时图片与私信入口（2026-10-22）",
-          "line": 162,
-          "end_line": 187
+          "line": 241,
+          "end_line": 266
         },
         {
           "level": 2,
           "title": "配置归属",
-          "line": 188,
-          "end_line": 212
+          "line": 267,
+          "end_line": 291
         },
         {
           "level": 3,
           "title": "固定配置与页面范围",
-          "line": 213,
-          "end_line": 224
+          "line": 292,
+          "end_line": 303
         },
         {
           "level": 3,
           "title": "管理员指引资料",
-          "line": 225,
-          "end_line": 241
+          "line": 304,
+          "end_line": 320
         },
         {
           "level": 3,
           "title": "客服咨询运行链路",
-          "line": 242,
-          "end_line": 268
+          "line": 321,
+          "end_line": 347
         },
         {
           "level": 2,
           "title": "规则先于 AI",
-          "line": 269,
-          "end_line": 270
+          "line": 348,
+          "end_line": 349
         },
         {
           "level": 3,
           "title": "审核不等待聊天限流",
-          "line": 271,
-          "end_line": 279
+          "line": 350,
+          "end_line": 358
         },
         {
           "level": 3,
           "title": "新群默认规则模板",
-          "line": 280,
-          "end_line": 298
+          "line": 359,
+          "end_line": 377
         },
         {
           "level": 3,
           "title": "仅规则开通",
-          "line": 299,
-          "end_line": 331
+          "line": 378,
+          "end_line": 410
         },
         {
           "level": 3,
           "title": "升级正式 AI 准入",
-          "line": 332,
-          "end_line": 352
+          "line": 411,
+          "end_line": 431
         },
         {
           "level": 3,
           "title": "本群发言白名单",
-          "line": 353,
-          "end_line": 393
+          "line": 432,
+          "end_line": 473
+        },
+        {
+          "level": 3,
+          "title": "仅白名单成员可发视频",
+          "line": 474,
+          "end_line": 486
         },
         {
           "level": 2,
           "title": "群内命令",
-          "line": 394,
-          "end_line": 419
+          "line": 487,
+          "end_line": 512
         },
         {
           "level": 2,
           "title": "私信命令",
-          "line": 420,
-          "end_line": 448
+          "line": 513,
+          "end_line": 541
         },
         {
           "level": 2,
           "title": "广告发送",
-          "line": 449,
-          "end_line": 459
+          "line": 542,
+          "end_line": 552
         },
         {
           "level": 2,
           "title": "加拿大28只读工具",
-          "line": 460,
-          "end_line": 492
+          "line": 553,
+          "end_line": 585
         },
         {
           "level": 2,
           "title": "验收与回滚",
-          "line": 493,
-          "end_line": 499
+          "line": 586,
+          "end_line": 592
         },
         {
           "level": 3,
           "title": "真实对话实验",
-          "line": 500,
-          "end_line": 512
+          "line": 593,
+          "end_line": 605
         },
         {
           "level": 3,
           "title": "2026-10-20 现场预检",
-          "line": 513,
-          "end_line": 525
+          "line": 606,
+          "end_line": 618
         },
         {
           "level": 3,
           "title": "2026-10-20 历史发布结果",
-          "line": 526,
-          "end_line": 533
+          "line": 619,
+          "end_line": 626
         }
       ]
     },
@@ -430,8 +472,8 @@
       "html": "wangshangliao-rules-ai-en.html",
       "markdown": "wangshangliao-rules-ai-en.md",
       "aggregate": "llms-full.txt",
-      "sha256": "6757064e70b4c6adc018820e83a4b99d452482a0239135b0ab335a702b159ca0",
-      "line_count": 732,
+      "sha256": "fdc66c561e4a2450322b8cf9f4f5e4a8587e5d62230629b1bb29585bba0968bf",
+      "line_count": 851,
       "headings": [
         {
           "level": 1,
@@ -441,159 +483,195 @@
         },
         {
           "level": 2,
-          "title": "Immediate Native Blacklist Mutes (October 24, 2026)",
+          "title": "Current In-Group Blacklist Release",
           "line": 3,
-          "end_line": 31
+          "end_line": 12
+        },
+        {
+          "level": 2,
+          "title": "Real Rejoins And Unknown Receipt Isolation (October 26, 2026)",
+          "line": 13,
+          "end_line": 30
+        },
+        {
+          "level": 2,
+          "title": "Daily Group And Member Activity (October 26, 2026)",
+          "line": 31,
+          "end_line": 55
+        },
+        {
+          "level": 2,
+          "title": "Management Changes And Scheduled Messages (October 26, 2026)",
+          "line": 56,
+          "end_line": 71
+        },
+        {
+          "level": 2,
+          "title": "Command Cleanup And Added Keywords (October 25, 2026)",
+          "line": 72,
+          "end_line": 86
+        },
+        {
+          "level": 2,
+          "title": "Immediate Native Blacklist Mutes (October 24, 2026)",
+          "line": 87,
+          "end_line": 115
         },
         {
           "level": 2,
           "title": "Latest Configuration Record (October 23, 2026; 23:39 Beijing Time)",
-          "line": 32,
-          "end_line": 51
+          "line": 116,
+          "end_line": 135
         },
         {
           "level": 2,
           "title": "List Exclusivity And Departed-Member Removal (October 23, 2026; Loaded At 22:59:23)",
-          "line": 52,
-          "end_line": 83
+          "line": 136,
+          "end_line": 167
         },
         {
           "level": 2,
           "title": "Current Group Blacklist Flow (October 23, 2026)",
-          "line": 84,
-          "end_line": 143
+          "line": 168,
+          "end_line": 229
         },
         {
           "level": 3,
           "title": "Old-To-New Mapping",
-          "line": 144,
-          "end_line": 192
+          "line": 230,
+          "end_line": 278
         },
         {
           "level": 2,
           "title": "Keyword Images And Three-Message Timing (October 23, 2026)",
-          "line": 193,
-          "end_line": 235
+          "line": 279,
+          "end_line": 334
         },
         {
           "level": 2,
           "title": "Scheduled Images And Direct DMs (October 22, 2026)",
-          "line": 236,
-          "end_line": 272
+          "line": 335,
+          "end_line": 371
         },
         {
           "level": 2,
           "title": "Ownership",
-          "line": 273,
-          "end_line": 305
+          "line": 372,
+          "end_line": 404
         },
         {
           "level": 3,
           "title": "Fixed Bindings And Page Scope",
-          "line": 306,
-          "end_line": 323
+          "line": 405,
+          "end_line": 422
         },
         {
           "level": 3,
           "title": "Administrator Manual",
-          "line": 324,
-          "end_line": 345
-        },
-        {
-          "level": 3,
-          "title": "Customer Consultation Runtime",
-          "line": 346,
-          "end_line": 379
-        },
-        {
-          "level": 2,
-          "title": "Deterministic Routing",
-          "line": 380,
-          "end_line": 381
-        },
-        {
-          "level": 3,
-          "title": "Moderation Does Not Wait For Chat Throttling",
-          "line": 382,
-          "end_line": 394
-        },
-        {
-          "level": 3,
-          "title": "Default Rules For New Groups",
-          "line": 395,
-          "end_line": 420
-        },
-        {
-          "level": 3,
-          "title": "Rules-Only Admission",
-          "line": 421,
+          "line": 423,
           "end_line": 444
         },
         {
           "level": 3,
-          "title": "Upgrade To Full AI Admission",
+          "title": "Customer Consultation Runtime",
           "line": 445,
-          "end_line": 472
+          "end_line": 478
+        },
+        {
+          "level": 2,
+          "title": "Deterministic Routing",
+          "line": 479,
+          "end_line": 480
+        },
+        {
+          "level": 3,
+          "title": "Moderation Does Not Wait For Chat Throttling",
+          "line": 481,
+          "end_line": 493
+        },
+        {
+          "level": 3,
+          "title": "Default Rules For New Groups",
+          "line": 494,
+          "end_line": 519
+        },
+        {
+          "level": 3,
+          "title": "Rules-Only Admission",
+          "line": 520,
+          "end_line": 543
+        },
+        {
+          "level": 3,
+          "title": "Upgrade To Full AI Admission",
+          "line": 544,
+          "end_line": 571
         },
         {
           "level": 3,
           "title": "Group Speech Whitelist",
-          "line": 473,
-          "end_line": 533
+          "line": 572,
+          "end_line": 615
+        },
+        {
+          "level": 3,
+          "title": "Whitelist-Only Videos",
+          "line": 616,
+          "end_line": 652
         },
         {
           "level": 3,
           "title": "Explicit Private Guidance Trial",
-          "line": 534,
-          "end_line": 550
+          "line": 653,
+          "end_line": 669
         },
         {
           "level": 2,
           "title": "Group Commands",
-          "line": 551,
-          "end_line": 578
+          "line": 670,
+          "end_line": 697
         },
         {
           "level": 2,
           "title": "Private Commands",
-          "line": 579,
-          "end_line": 611
+          "line": 698,
+          "end_line": 730
         },
         {
           "level": 2,
           "title": "Durable Advertisements",
-          "line": 612,
-          "end_line": 627
+          "line": 731,
+          "end_line": 746
         },
         {
           "level": 2,
           "title": "Read-Only Canada28 Tool",
-          "line": 628,
-          "end_line": 674
+          "line": 747,
+          "end_line": 793
         },
         {
           "level": 2,
           "title": "Acceptance And Rollback",
-          "line": 675,
-          "end_line": 683
+          "line": 794,
+          "end_line": 802
         },
         {
           "level": 3,
           "title": "Real Conversation Experiments",
-          "line": 684,
-          "end_line": 700
+          "line": 803,
+          "end_line": 819
         },
         {
           "level": 3,
           "title": "October 20, 2026 Preflight",
-          "line": 701,
-          "end_line": 719
+          "line": 820,
+          "end_line": 838
         },
         {
           "level": 3,
           "title": "October 20, 2026 Release Result (Historical)",
-          "line": 720,
-          "end_line": 732
+          "line": 839,
+          "end_line": 851
         }
       ]
     },
@@ -857,8 +935,8 @@
       "html": "wangshangliao-start.html",
       "markdown": "wangshangliao-start.md",
       "aggregate": "llms-full.txt",
-      "sha256": "5498838e83e2fcabbbdac7b298635d61ef5e2aa7a2b47d5228df516db82e2a2a",
-      "line_count": 419,
+      "sha256": "bcb42abe6a1b59266ab7f0ab6ccb96acce1c220283828ec9820f491b6980dd4f",
+      "line_count": 456,
       "headings": [
         {
           "level": 1,
@@ -868,81 +946,99 @@
         },
         {
           "level": 2,
-          "title": "现在从这里操作（2026-10-22）",
+          "title": "群内解除黑名单",
           "line": 3,
-          "end_line": 56
+          "end_line": 9
+        },
+        {
+          "level": 2,
+          "title": "每日发言统计（2026-10-26）",
+          "line": 10,
+          "end_line": 27
+        },
+        {
+          "level": 2,
+          "title": "自动白名单（2026-10-25）",
+          "line": 28,
+          "end_line": 34
+        },
+        {
+          "level": 2,
+          "title": "现在从这里操作（2026-10-22）",
+          "line": 35,
+          "end_line": 88
         },
         {
           "level": 2,
           "title": "1. 登录机器人",
-          "line": 57,
-          "end_line": 75
+          "line": 89,
+          "end_line": 107
         },
         {
           "level": 3,
           "title": "管理页入口调整（2026-10-22）",
-          "line": 76,
-          "end_line": 114
+          "line": 108,
+          "end_line": 146
         },
         {
           "level": 2,
           "title": "2. 开通一个群",
-          "line": 115,
-          "end_line": 130
+          "line": 147,
+          "end_line": 162
         },
         {
           "level": 2,
           "title": "3. 菜单和命令",
-          "line": 131,
-          "end_line": 157
+          "line": 163,
+          "end_line": 189
         },
         {
           "level": 2,
           "title": "4. 授权与审核",
-          "line": 158,
-          "end_line": 192
+          "line": 190,
+          "end_line": 229
         },
         {
           "level": 3,
           "title": "黑名单：当前使用流程（2026-10-23）",
-          "line": 193,
-          "end_line": 261
+          "line": 230,
+          "end_line": 298
         },
         {
           "level": 2,
           "title": "5. 普通私聊、好友与AI",
-          "line": 262,
-          "end_line": 286
+          "line": 299,
+          "end_line": 323
         },
         {
           "level": 3,
           "title": "好友异常暂停：先核对，不直接重开",
-          "line": 287,
-          "end_line": 304
+          "line": 324,
+          "end_line": 341
         },
         {
           "level": 3,
           "title": "AI说明与实际权限",
-          "line": 305,
-          "end_line": 366
+          "line": 342,
+          "end_line": 403
         },
         {
           "level": 3,
           "title": "管理员指引独立配置与权限分流",
-          "line": 367,
-          "end_line": 390
+          "line": 404,
+          "end_line": 427
         },
         {
           "level": 2,
           "title": "6. 权限与财务不是一回事",
-          "line": 391,
-          "end_line": 406
+          "line": 428,
+          "end_line": 443
         },
         {
           "level": 2,
           "title": "7. 离群和排障",
-          "line": 407,
-          "end_line": 419
+          "line": 444,
+          "end_line": 456
         }
       ]
     },
@@ -960,8 +1056,8 @@
       "html": "wangshangliao-start-en.html",
       "markdown": "wangshangliao-start-en.md",
       "aggregate": "llms-full.txt",
-      "sha256": "59fd3d27a3df072823c4d979f131cb665505362054b9e10ba3e67b1b72fe1e4d",
-      "line_count": 648,
+      "sha256": "86cb98582a9b685d1808f4cf2e15a28f38b91eaa7b4b07fc4a52090f60f582b3",
+      "line_count": 693,
       "headings": [
         {
           "level": 1,
@@ -971,81 +1067,93 @@
         },
         {
           "level": 2,
-          "title": "Current Starting Point (October 24, 2026)",
+          "title": "In-Group Blacklist Release",
           "line": 3,
-          "end_line": 93
+          "end_line": 11
+        },
+        {
+          "level": 2,
+          "title": "Daily Speech Activity (October 26, 2026)",
+          "line": 12,
+          "end_line": 36
+        },
+        {
+          "level": 2,
+          "title": "Current Starting Point (October 25, 2026)",
+          "line": 37,
+          "end_line": 130
         },
         {
           "level": 2,
           "title": "1. Sign In",
-          "line": 94,
-          "end_line": 116
+          "line": 131,
+          "end_line": 153
         },
         {
           "level": 3,
           "title": "Dashboard Navigation Changes (October 22, 2026)",
-          "line": 117,
-          "end_line": 167
+          "line": 154,
+          "end_line": 204
         },
         {
           "level": 2,
           "title": "2. Activate A Group",
-          "line": 168,
-          "end_line": 184
+          "line": 205,
+          "end_line": 221
         },
         {
           "level": 2,
           "title": "3. Navigate And Send Commands",
-          "line": 185,
-          "end_line": 215
+          "line": 222,
+          "end_line": 252
         },
         {
           "level": 2,
           "title": "4. Manage Rules And Activities",
-          "line": 216,
-          "end_line": 274
+          "line": 253,
+          "end_line": 319
         },
         {
           "level": 3,
           "title": "Current Blacklist Workflow (October 23, 2026)",
-          "line": 275,
-          "end_line": 378
+          "line": 320,
+          "end_line": 423
         },
         {
           "level": 2,
           "title": "5. Private Messages And Friends",
-          "line": 379,
-          "end_line": 417
+          "line": 424,
+          "end_line": 462
         },
         {
           "level": 3,
           "title": "Review A Friend-Approval Safety Pause",
-          "line": 418,
-          "end_line": 445
+          "line": 463,
+          "end_line": 490
         },
         {
           "level": 2,
           "title": "6. Read-Only AI And Financial Boundaries",
-          "line": 446,
-          "end_line": 529
+          "line": 491,
+          "end_line": 574
         },
         {
           "level": 3,
           "title": "Independent Administrator Guidance",
-          "line": 530,
-          "end_line": 580
+          "line": 575,
+          "end_line": 625
         },
         {
           "level": 3,
           "title": "Isolated Native Warm-Group Acceptance",
-          "line": 581,
-          "end_line": 631
+          "line": 626,
+          "end_line": 676
         },
         {
           "level": 2,
           "title": "7. Lifecycle And Troubleshooting",
-          "line": 632,
-          "end_line": 648
+          "line": 677,
+          "end_line": 693
         }
       ]
     },
@@ -1062,8 +1170,8 @@
       "html": "wangshangliao-command-tree.html",
       "markdown": "wangshangliao-command-tree.md",
       "aggregate": "llms-full.txt",
-      "sha256": "6b43ec3fdd5a7890169d46c0f10feac1eb88def91d2403012dbf4dc62047b524",
-      "line_count": 484,
+      "sha256": "a3f3dcdc4fa0b7aaa96c7bc9d3e4e3abd9f9c23d1b2da499195089a6b3ffbc9d",
+      "line_count": 493,
       "headings": [
         {
           "level": 1,
@@ -1073,33 +1181,39 @@
         },
         {
           "level": 2,
-          "title": "当前直接命令流程（2026-10-23）",
+          "title": "当前群内解封命令",
           "line": 3,
-          "end_line": 64
+          "end_line": 10
+        },
+        {
+          "level": 2,
+          "title": "当前直接命令流程（2026-10-23）",
+          "line": 11,
+          "end_line": 72
         },
         {
           "level": 2,
           "title": "当前默认：常用操作（2026-10-22）",
-          "line": 65,
-          "end_line": 314
+          "line": 73,
+          "end_line": 322
         },
         {
           "level": 2,
           "title": "套餐与扣费确认",
-          "line": 315,
-          "end_line": 329
+          "line": 323,
+          "end_line": 337
         },
         {
           "level": 2,
           "title": "活动、名片与后台入口",
-          "line": 330,
-          "end_line": 363
+          "line": 338,
+          "end_line": 372
         },
         {
           "level": 2,
           "title": "私聊财务树与历史验收（2026-10-17北京时间）",
-          "line": 364,
-          "end_line": 484
+          "line": 373,
+          "end_line": 493
         }
       ]
     },
@@ -1116,8 +1230,8 @@
       "html": "wangshangliao-command-tree-en.html",
       "markdown": "wangshangliao-command-tree-en.md",
       "aggregate": "llms-full.txt",
-      "sha256": "c874c0afd7d83ae2239adf8558b0761f0035b9a2c3300893bc444b627578456c",
-      "line_count": 598,
+      "sha256": "518a8c4cf30ef865f9c17f22a08debaeadf65c9574bbf1e6ecc2a4fa87eeae7e",
+      "line_count": 611,
       "headings": [
         {
           "level": 1,
@@ -1127,27 +1241,33 @@
         },
         {
           "level": 2,
-          "title": "Current Direct Workflows (October 23, 2026)",
+          "title": "Current In-Group Release Command",
           "line": 3,
-          "end_line": 88
+          "end_line": 12
+        },
+        {
+          "level": 2,
+          "title": "Current Direct Workflows (October 23, 2026)",
+          "line": 13,
+          "end_line": 98
         },
         {
           "level": 2,
           "title": "Default Shortcuts (October 22, 2026)",
-          "line": 89,
-          "end_line": 400
+          "line": 99,
+          "end_line": 410
         },
         {
           "level": 2,
           "title": "Activities, Cards and Navigation",
-          "line": 401,
-          "end_line": 445
+          "line": 411,
+          "end_line": 458
         },
         {
           "level": 2,
           "title": "Private Finance Tree and Historical Acceptance (October 17 Beijing)",
-          "line": 446,
-          "end_line": 598
+          "line": 459,
+          "end_line": 611
         }
       ]
     },
@@ -3891,92 +4011,92 @@
       "html": "wangshangliao-plugin.html",
       "markdown": "wangshangliao-plugin.md",
       "aggregate": "llms-full.txt",
-      "sha256": "551a93b512e92d768b8adcc8fbc46cdeded0a342d8cbaaf87d06996daca4a394",
-      "line_count": 534,
+      "sha256": "4c653c71747dbc41217c3230c8c922efe311a62269b7313e8d2c54571931fc21",
+      "line_count": 548,
       "headings": [
         {
           "level": 1,
           "title": "旺商聊群管",
           "line": 1,
-          "end_line": 37
+          "end_line": 44
         },
         {
           "level": 2,
           "title": "当前黑名单命令（2026-10-24）",
-          "line": 38,
-          "end_line": 53
+          "line": 45,
+          "end_line": 60
         },
         {
           "level": 2,
           "title": "本群黑名单历史流程（2026-10-23）",
-          "line": 54,
-          "end_line": 151
+          "line": 61,
+          "end_line": 158
         },
         {
           "level": 2,
           "title": "2026-10-22 管理入口与红包抽奖",
-          "line": 152,
-          "end_line": 171
+          "line": 159,
+          "end_line": 178
         },
         {
           "level": 2,
           "title": "阅读入口",
-          "line": 172,
-          "end_line": 190
+          "line": 179,
+          "end_line": 197
         },
         {
           "level": 2,
           "title": "开通与使用",
-          "line": 191,
-          "end_line": 213
+          "line": 198,
+          "end_line": 220
         },
         {
           "level": 2,
           "title": "完整命令索引",
-          "line": 214,
-          "end_line": 255
+          "line": 221,
+          "end_line": 262
         },
         {
           "level": 3,
           "title": "数值范围",
-          "line": 256,
-          "end_line": 270
+          "line": 263,
+          "end_line": 277
         },
         {
           "level": 2,
           "title": "审核与执行",
-          "line": 271,
-          "end_line": 312
+          "line": 278,
+          "end_line": 326
         },
         {
           "level": 2,
           "title": "私聊、好友与AI",
-          "line": 313,
-          "end_line": 431
+          "line": 327,
+          "end_line": 445
         },
         {
           "level": 3,
           "title": "个人与群知识空间",
-          "line": 432,
-          "end_line": 478
+          "line": 446,
+          "end_line": 492
         },
         {
           "level": 2,
           "title": "财务边界",
-          "line": 479,
-          "end_line": 488
+          "line": 493,
+          "end_line": 502
         },
         {
           "level": 2,
           "title": "代码结构",
-          "line": 489,
-          "end_line": 512
+          "line": 503,
+          "end_line": 526
         },
         {
           "level": 2,
           "title": "验证与发布",
-          "line": 513,
-          "end_line": 534
+          "line": 527,
+          "end_line": 548
         }
       ]
     },
@@ -4086,8 +4206,8 @@
       "html": "wangshangliao-testing.html",
       "markdown": "wangshangliao-testing.md",
       "aggregate": "llms-full.txt",
-      "sha256": "de1bb972a5c4a43caac7f61440002b4975e1d25cee19f4a5e0d031be03bbb115",
-      "line_count": 628,
+      "sha256": "03cdeb13c44cd60bad8ab89f5d7fff8ca12072f2ae51dec7f78ac703a028d84d",
+      "line_count": 637,
       "headings": [
         {
           "level": 1,
@@ -4097,153 +4217,159 @@
         },
         {
           "level": 2,
-          "title": "2026-10-24：刷屏循环与每日前三十名白名单",
+          "title": "2026-10-25：昨日达标自动白名单",
           "line": 11,
-          "end_line": 35
+          "end_line": 19
+        },
+        {
+          "level": 2,
+          "title": "2026-10-24：刷屏循环与每日前三十名白名单",
+          "line": 20,
+          "end_line": 44
         },
         {
           "level": 2,
           "title": "2026-10-24：真实 @ 黑名单禁言联测与失败收尾",
-          "line": 36,
-          "end_line": 60
+          "line": 45,
+          "end_line": 69
         },
         {
           "level": 2,
           "title": "黑名单直接禁言：代码已加载／在线配置通过／真实重入未测（2026-10-23）",
-          "line": 61,
-          "end_line": 97
+          "line": 70,
+          "end_line": 106
         },
         {
           "level": 2,
           "title": "黑名单与最新图文：本轮验收状态（2026-10-23）",
-          "line": 98,
-          "end_line": 127
+          "line": 107,
+          "end_line": 136
         },
         {
           "level": 2,
           "title": "2026-10-23 定时发言先图后文补验",
-          "line": 128,
-          "end_line": 141
+          "line": 137,
+          "end_line": 150
         },
         {
           "level": 2,
           "title": "2026-10-22 管理员超时与账本启停补验方法",
-          "line": 142,
-          "end_line": 160
+          "line": 151,
+          "end_line": 169
         },
         {
           "level": 2,
           "title": "2026-10-22 定时图片与入口退役验收方法",
-          "line": 161,
-          "end_line": 177
+          "line": 170,
+          "end_line": 186
         },
         {
           "level": 2,
           "title": "2026-10-20 证据更新",
-          "line": 178,
-          "end_line": 193
+          "line": 187,
+          "end_line": 202
         },
         {
           "level": 3,
           "title": "群@路由与历史的现行验收口径",
-          "line": 194,
-          "end_line": 206
+          "line": 203,
+          "end_line": 215
         },
         {
           "level": 3,
           "title": "警告姓名与12秒撤回：三账号实测通过",
-          "line": 207,
-          "end_line": 234
+          "line": 216,
+          "end_line": 243
         },
         {
           "level": 2,
           "title": "保护边界",
-          "line": 235,
-          "end_line": 245
+          "line": 244,
+          "end_line": 254
         },
         {
           "level": 2,
           "title": "分层验证",
-          "line": 246,
-          "end_line": 256
+          "line": 255,
+          "end_line": 265
         },
         {
           "level": 3,
           "title": "离线回归",
-          "line": 257,
-          "end_line": 318
+          "line": 266,
+          "end_line": 327
         },
         {
           "level": 3,
           "title": "部署与资源边界",
-          "line": 319,
-          "end_line": 348
+          "line": 328,
+          "end_line": 357
         },
         {
           "level": 3,
           "title": "财务保护",
-          "line": 349,
-          "end_line": 358
+          "line": 358,
+          "end_line": 367
         },
         {
           "level": 2,
           "title": "真实受控测试",
-          "line": 359,
-          "end_line": 360
+          "line": 368,
+          "end_line": 369
         },
         {
           "level": 3,
           "title": "指引与热群对话",
-          "line": 361,
-          "end_line": 366
+          "line": 370,
+          "end_line": 375
         },
         {
           "level": 4,
           "title": "隔离热群原生窗口",
-          "line": 367,
-          "end_line": 457
+          "line": 376,
+          "end_line": 466
         },
         {
           "level": 3,
           "title": "已授权的旧测试群归零",
-          "line": 458,
-          "end_line": 555
+          "line": 467,
+          "end_line": 564
         },
         {
           "level": 3,
           "title": "本地工具日志与重启记录",
-          "line": 556,
-          "end_line": 569
+          "line": 565,
+          "end_line": 578
         },
         {
           "level": 2,
           "title": "性能门槛",
-          "line": 570,
-          "end_line": 590
+          "line": 579,
+          "end_line": 599
         },
         {
           "level": 2,
           "title": "当前证据与缺项",
-          "line": 591,
-          "end_line": 594
+          "line": 600,
+          "end_line": 603
         },
         {
           "level": 3,
           "title": "2026-10-15 资料与代码清理（历史）",
-          "line": 595,
-          "end_line": 604
+          "line": 604,
+          "end_line": 613
         },
         {
           "level": 3,
           "title": "之前的功能轮次",
-          "line": 605,
-          "end_line": 622
+          "line": 614,
+          "end_line": 631
         },
         {
           "level": 2,
           "title": "历史记录",
-          "line": 623,
-          "end_line": 628
+          "line": 632,
+          "end_line": 637
         }
       ]
     },
@@ -4665,8 +4791,8 @@
       "html": "wangshangliao-content-rules.html",
       "markdown": "wangshangliao-content-rules.md",
       "aggregate": "llms-full.txt",
-      "sha256": "5190487f97c3a705a3254da9209d72ab80d7752cfcb7d222802592a531f63d59",
-      "line_count": 432,
+      "sha256": "12e4962598de1a37c06626343a64cd779db1a797b83a1914bab472fe9046511b",
+      "line_count": 451,
       "headings": [
         {
           "level": 1,
@@ -4682,87 +4808,93 @@
         },
         {
           "level": 2,
-          "title": "今日发言排行与自动白名单",
+          "title": "白名单快捷添加与视频限制（2026-10-25）",
           "line": 53,
-          "end_line": 67
+          "end_line": 65
+        },
+        {
+          "level": 2,
+          "title": "发言排行与昨日达标自动白名单",
+          "line": 66,
+          "end_line": 85
         },
         {
           "level": 2,
           "title": "普通审核仅手动踢出",
-          "line": 68,
-          "end_line": 81
+          "line": 86,
+          "end_line": 99
         },
         {
           "level": 2,
           "title": "独立审核与历史模型配置",
-          "line": 82,
-          "end_line": 121
+          "line": 100,
+          "end_line": 139
         },
         {
           "level": 2,
           "title": "递进禁言与强制撤回",
-          "line": 122,
-          "end_line": 129
+          "line": 140,
+          "end_line": 147
         },
         {
           "level": 3,
           "title": "撤回与禁言的判定边界",
-          "line": 130,
-          "end_line": 203
+          "line": 148,
+          "end_line": 222
         },
         {
           "level": 3,
           "title": "2026-10-20 警告姓名与撤回修正（已加载并完成限定实测）",
-          "line": 204,
-          "end_line": 232
+          "line": 223,
+          "end_line": 251
         },
         {
           "level": 2,
           "title": "刷屏整批处理",
-          "line": 233,
-          "end_line": 270
+          "line": 252,
+          "end_line": 289
         },
         {
           "level": 2,
           "title": "规则兜底与有效时间",
-          "line": 271,
-          "end_line": 277
+          "line": 290,
+          "end_line": 296
         },
         {
           "level": 3,
           "title": "管理员撤回样本补充",
-          "line": 278,
-          "end_line": 317
+          "line": 297,
+          "end_line": 336
         },
         {
           "level": 3,
           "title": "拆分发送的联系方式",
-          "line": 318,
-          "end_line": 339
+          "line": 337,
+          "end_line": 358
         },
         {
           "level": 3,
           "title": "本群管理员录入与修改",
-          "line": 340,
-          "end_line": 387
+          "line": 359,
+          "end_line": 406
         },
         {
           "level": 2,
           "title": "旧自动踢出配置",
-          "line": 388,
-          "end_line": 398
+          "line": 407,
+          "end_line": 417
         },
         {
           "level": 2,
           "title": "人工踢出",
-          "line": 399,
-          "end_line": 415
+          "line": 418,
+          "end_line": 434
         },
         {
           "level": 2,
           "title": "配置、审计与维护",
-          "line": 416,
-          "end_line": 432
+          "line": 435,
+          "end_line": 451
         }
       ]
     },
@@ -4838,8 +4970,8 @@
       "html": "wangshangliao-maintenance.html",
       "markdown": "wangshangliao-maintenance.md",
       "aggregate": "llms-full.txt",
-      "sha256": "a3833142895946a98572ba808151641cfb367635777b1feccbb822ffd6c2c7db",
-      "line_count": 1413,
+      "sha256": "86079753f1e27b4c8fc7f51b8b2f0458677b3058e39bbd8046e9c3c1ab4790e2",
+      "line_count": 1556,
       "headings": [
         {
           "level": 1,
@@ -4849,267 +4981,297 @@
         },
         {
           "level": 2,
-          "title": "2026-10-24 三账号真实验收结果",
+          "title": "2026-10-26 黑名单重入被历史未知回执阻断",
           "line": 7,
-          "end_line": 32
+          "end_line": 42
+        },
+        {
+          "level": 2,
+          "title": "2026-10-25 接收封包分类与空异常记录修复",
+          "line": 43,
+          "end_line": 69
+        },
+        {
+          "level": 2,
+          "title": "2026-10-25 视频白名单与群内直接加入",
+          "line": 70,
+          "end_line": 101
+        },
+        {
+          "level": 2,
+          "title": "2026-10-25 轮播授权联动与同账号排队",
+          "line": 102,
+          "end_line": 120
+        },
+        {
+          "level": 2,
+          "title": "2026-10-25 自动白名单改用昨日达标榜",
+          "line": 121,
+          "end_line": 149
+        },
+        {
+          "level": 2,
+          "title": "2026-10-24 三账号真实验收结果",
+          "line": 150,
+          "end_line": 175
         },
         {
           "level": 2,
           "title": "2026-10-24 刷屏循环、每日自动白名单与受控验收",
-          "line": 33,
-          "end_line": 64
+          "line": 176,
+          "end_line": 207
         },
         {
           "level": 2,
           "title": "2026-10-24 群内黑名单立即禁言与排队修复",
-          "line": 65,
-          "end_line": 107
+          "line": 208,
+          "end_line": 250
         },
         {
           "level": 3,
           "title": "GitHub CI compatibility and maintenance confirmation tokens",
-          "line": 108,
-          "end_line": 118
+          "line": 251,
+          "end_line": 261
         },
         {
           "level": 2,
           "title": "2026-10-23 23:39 名单移除与群管规则对齐",
-          "line": 119,
-          "end_line": 162
+          "line": 262,
+          "end_line": 305
         },
         {
           "level": 2,
           "title": "2026-10-23 22:59 名单互斥与退群成员移除已加载",
-          "line": 163,
-          "end_line": 215
+          "line": 306,
+          "end_line": 358
         },
         {
           "level": 2,
           "title": "2026-10-23 黑名单代码加载、在线配置与保护摘要复核",
-          "line": 216,
-          "end_line": 297
+          "line": 359,
+          "end_line": 440
         },
         {
           "level": 2,
           "title": "2026-10-23 黑名单教程与离线产物生成（未发布）",
-          "line": 298,
-          "end_line": 370
+          "line": 441,
+          "end_line": 513
         },
         {
           "level": 2,
           "title": "2026-10-23 黑名单直接禁言新契约与手机确认（待当前验证）",
-          "line": 371,
-          "end_line": 419
+          "line": 514,
+          "end_line": 562
         },
         {
           "level": 2,
           "title": "2026-10-23 本群黑名单、私有图片去重与管理页更新",
-          "line": 420,
-          "end_line": 483
+          "line": 563,
+          "end_line": 626
         },
         {
           "level": 2,
           "title": "2026-10-23 关键词配图与三条定时错峰",
-          "line": 484,
-          "end_line": 507
+          "line": 627,
+          "end_line": 650
         },
         {
           "level": 2,
           "title": "2026-10-23 用户手机确认与图片试点清理",
-          "line": 508,
-          "end_line": 528
+          "line": 651,
+          "end_line": 671
         },
         {
           "level": 2,
           "title": "2026-10-23 定时图片空白气泡的包装格式修复",
-          "line": 529,
-          "end_line": 566
+          "line": 672,
+          "end_line": 709
         },
         {
           "level": 2,
           "title": "2026-10-23 定时发言先图后文与测试群补验",
-          "line": 567,
-          "end_line": 597
+          "line": 710,
+          "end_line": 740
         },
         {
           "level": 2,
           "title": "2026-10-23 红包到时公布与结果排序",
-          "line": 598,
-          "end_line": 614
+          "line": 741,
+          "end_line": 757
         },
         {
           "level": 3,
           "title": "验证与加载",
-          "line": 615,
-          "end_line": 632
+          "line": 758,
+          "end_line": 775
         },
         {
           "level": 2,
           "title": "2026-10-22 三秒三条刷屏阈值热重载",
-          "line": 633,
-          "end_line": 649
+          "line": 776,
+          "end_line": 792
         },
         {
           "level": 2,
           "title": "2026-10-22 深度审查：长规则回复与异步活动边界",
-          "line": 650,
-          "end_line": 677
+          "line": 793,
+          "end_line": 820
         },
         {
           "level": 3,
           "title": "验证与加载",
-          "line": 678,
-          "end_line": 699
+          "line": 821,
+          "end_line": 842
         },
         {
           "level": 2,
           "title": "2026-10-22 固定红包份额、未领取金额与活动备注",
-          "line": 700,
-          "end_line": 720
+          "line": 843,
+          "end_line": 863
         },
         {
           "level": 3,
           "title": "验证与加载",
-          "line": 721,
-          "end_line": 739
+          "line": 864,
+          "end_line": 882
         },
         {
           "level": 2,
           "title": "2026-10-22 图片上传等待恢复与管理员私信录图",
-          "line": 740,
-          "end_line": 762
+          "line": 883,
+          "end_line": 905
         },
         {
           "level": 3,
           "title": "加载与验证边界",
-          "line": 763,
-          "end_line": 782
+          "line": 906,
+          "end_line": 925
         },
         {
           "level": 2,
           "title": "2026-10-22 管理员AI超时与账本关闭竞态补修",
-          "line": 783,
-          "end_line": 801
+          "line": 926,
+          "end_line": 944
         },
         {
           "level": 3,
           "title": "本次部署与复验",
-          "line": 802,
-          "end_line": 828
+          "line": 945,
+          "end_line": 971
         },
         {
           "level": 2,
           "title": "2026-10-22 旧站退役、定时图片与最新管理员指引",
-          "line": 829,
-          "end_line": 861
+          "line": 972,
+          "end_line": 1004
         },
         {
           "level": 3,
           "title": "本轮验证与未通过项",
-          "line": 862,
-          "end_line": 895
+          "line": 1005,
+          "end_line": 1038
         },
         {
           "level": 2,
           "title": "2026-10-22 结账入口合并与常用对话简化（早先阶段）",
-          "line": 896,
-          "end_line": 934
+          "line": 1039,
+          "end_line": 1077
         },
         {
           "level": 2,
           "title": "2026-10-22 抽奖拆分、当前禁言与受控试点",
-          "line": 935,
-          "end_line": 993
+          "line": 1078,
+          "end_line": 1136
         },
         {
           "level": 2,
           "title": "2026-10-22 媒体误罚修复与更正",
-          "line": 994,
-          "end_line": 1020
+          "line": 1137,
+          "end_line": 1163
         },
         {
           "level": 2,
           "title": "2026-10-22 仅规则群升级入口",
-          "line": 1021,
-          "end_line": 1049
+          "line": 1164,
+          "end_line": 1192
         },
         {
           "level": 2,
           "title": "2026-10-22 江哥群 AI 与 PC28 展示",
-          "line": 1050,
-          "end_line": 1082
+          "line": 1193,
+          "end_line": 1225
         },
         {
           "level": 2,
           "title": "2026-10-22 防误罚与取消边界",
-          "line": 1083,
-          "end_line": 1114
+          "line": 1226,
+          "end_line": 1257
         },
         {
           "level": 2,
           "title": "调度与持久化",
-          "line": 1115,
-          "end_line": 1126
+          "line": 1258,
+          "end_line": 1269
         },
         {
           "level": 2,
           "title": "正文保留",
-          "line": 1127,
-          "end_line": 1149
+          "line": 1270,
+          "end_line": 1292
         },
         {
           "level": 2,
           "title": "发布与恢复",
-          "line": 1150,
-          "end_line": 1185
+          "line": 1293,
+          "end_line": 1328
         },
         {
           "level": 2,
           "title": "排障",
-          "line": 1186,
-          "end_line": 1187
+          "line": 1329,
+          "end_line": 1330
         },
         {
           "level": 3,
           "title": "公共模式维护窗口",
-          "line": 1188,
-          "end_line": 1274
+          "line": 1331,
+          "end_line": 1417
         },
         {
           "level": 2,
           "title": "文档、页面与代码更新",
-          "line": 1275,
-          "end_line": 1276
+          "line": 1418,
+          "end_line": 1419
         },
         {
           "level": 3,
           "title": "聚合与 AI 索引",
-          "line": 1277,
-          "end_line": 1292
+          "line": 1420,
+          "end_line": 1435
         },
         {
           "level": 3,
           "title": "代码清理边界",
-          "line": 1293,
-          "end_line": 1353
+          "line": 1436,
+          "end_line": 1496
         },
         {
           "level": 2,
           "title": "2026-10-23审核排队修复",
-          "line": 1354,
-          "end_line": 1379
+          "line": 1497,
+          "end_line": 1522
         },
         {
           "level": 2,
           "title": "无回复排查",
-          "line": 1380,
-          "end_line": 1396
+          "line": 1523,
+          "end_line": 1539
         },
         {
           "level": 3,
           "title": "旧AI工具模式（历史排障，不适用于公共合并模式）",
-          "line": 1397,
-          "end_line": 1413
+          "line": 1540,
+          "end_line": 1556
         }
       ]
     },
@@ -5187,8 +5349,8 @@
       "html": "wangshangliao-diagnostics.html",
       "markdown": "wangshangliao-diagnostics.md",
       "aggregate": "llms-full.txt",
-      "sha256": "5376c000cf003e3e1e20425d41531b3358a9aed160ef2df299b739bb1b7fd37b",
-      "line_count": 205,
+      "sha256": "03fe5aa8a1253ea0272e14d2f5850c3767822b8a996bd270396370b5a88406bb",
+      "line_count": 240,
       "headings": [
         {
           "level": 1,
@@ -5210,39 +5372,51 @@
         },
         {
           "level": 2,
-          "title": "定时图片为空白气泡，但文字正常",
+          "title": "收件兼容分类与“没有积压但漏读”（2026-10-25）",
           "line": 58,
-          "end_line": 68
+          "end_line": 78
+        },
+        {
+          "level": 2,
+          "title": "定时计划启用但未发送（2026-10-25）",
+          "line": 79,
+          "end_line": 92
+        },
+        {
+          "level": 2,
+          "title": "定时图片为空白气泡，但文字正常",
+          "line": 93,
+          "end_line": 103
         },
         {
           "level": 2,
           "title": "常见问题定位",
-          "line": 69,
-          "end_line": 132
+          "line": 104,
+          "end_line": 167
         },
         {
           "level": 2,
           "title": "状态不能混淆",
-          "line": 133,
-          "end_line": 151
+          "line": 168,
+          "end_line": 186
         },
         {
           "level": 2,
           "title": "隐私边界",
-          "line": 152,
-          "end_line": 163
+          "line": 187,
+          "end_line": 198
         },
         {
           "level": 2,
           "title": "已知接收与后台限制",
-          "line": 164,
-          "end_line": 178
+          "line": 199,
+          "end_line": 213
         },
         {
           "level": 2,
           "title": "2026-10-20运行快照",
-          "line": 179,
-          "end_line": 205
+          "line": 214,
+          "end_line": 240
         }
       ]
     },
@@ -5259,8 +5433,8 @@
       "html": "wangshangliao-database.html",
       "markdown": "wangshangliao-database.md",
       "aggregate": "llms-full.txt",
-      "sha256": "89fdf45afcc9bd95629de5f03b52857d7553c537e1fbb9ceb0bdd0f4a9b50a29",
-      "line_count": 231,
+      "sha256": "64f7916524ea0c87cfb1d7e930fc22a368d118f3dce589264bb09c7f77a48ea7",
+      "line_count": 241,
       "headings": [
         {
           "level": 1,
@@ -5272,61 +5446,61 @@
           "level": 2,
           "title": "数据放在哪里",
           "line": 6,
-          "end_line": 45
+          "end_line": 55
         },
         {
           "level": 3,
           "title": "2026-10-20 隔离实测与死代码清理",
-          "line": 46,
-          "end_line": 56
+          "line": 56,
+          "end_line": 66
         },
         {
           "level": 3,
           "title": "离群清理与保留的区别",
-          "line": 57,
-          "end_line": 66
+          "line": 67,
+          "end_line": 76
         },
         {
           "level": 2,
           "title": "已有索引与连接优化",
-          "line": 67,
-          "end_line": 98
+          "line": 77,
+          "end_line": 108
         },
         {
           "level": 2,
           "title": "结账台读取优化（2026-10-14）",
-          "line": 99,
-          "end_line": 133
+          "line": 109,
+          "end_line": 143
         },
         {
           "level": 3,
           "title": "哪些规则没有改变",
-          "line": 134,
-          "end_line": 144
+          "line": 144,
+          "end_line": 154
         },
         {
           "level": 2,
           "title": "离线基准及限制",
-          "line": 145,
-          "end_line": 171
+          "line": 155,
+          "end_line": 181
         },
         {
           "level": 2,
           "title": "安全升级",
-          "line": 172,
-          "end_line": 208
+          "line": 182,
+          "end_line": 218
         },
         {
           "level": 2,
           "title": "验收与回滚",
-          "line": 209,
-          "end_line": 222
+          "line": 219,
+          "end_line": 232
         },
         {
           "level": 3,
           "title": "仍需关注",
-          "line": 223,
-          "end_line": 231
+          "line": 233,
+          "end_line": 241
         }
       ]
     },

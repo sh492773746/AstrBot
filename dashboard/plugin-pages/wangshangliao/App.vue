@@ -28,6 +28,7 @@ import GroupManagers from "./GroupManagers.vue";
 import OpenService from "./OpenService.vue";
 import CommandHelp from "./CommandHelp.vue";
 import CurrentMutesPanel from "./CurrentMutesPanel.vue";
+import SpeechActivityPanel from "./SpeechActivityPanel.vue";
 import { getPlatformInstanceName } from "../../src/utils/platformInstanceName.mjs";
 
 type Policy = Record<string, any>;
@@ -191,6 +192,7 @@ const tabs = computed(() => [
   { id: "rules", name: t("规则", "Rules"), icon: ShieldCheck },
   { id: "business", name: t("群聊与运行", "Groups & Runtime"), icon: Settings2 },
   { id: "friend-approval", name: t("好友申请", "Friend Requests"), icon: Users },
+  { id: "speech-activity", name: t("发言统计", "Speech Activity"), icon: MessageSquareText },
   { id: "settings", name: t("审核配置", "Moderation"), icon: Settings2 },
   { id: "permissions", name: t("群授权", "Group Grants"), icon: ShieldCheck },
   { id: "activities", name: t("玩家福利抽奖", "Player Lottery"), icon: Gift },
@@ -217,7 +219,7 @@ const tabs = computed(() => [
   { id: "open-audit", name: t("群管审计", "Management Audit"), icon: ClipboardList },
 ].filter(item => integrated.value ? !["business", "settings"].includes(item.id) : item.id !== "rules"));
 const sections = computed(() => [
-  { id: "groups", name: t("群管理", "Groups"), icon: Network, tabs: ["open", "rules", "business", "settings", "permissions", "friend-approval"] },
+  { id: "groups", name: t("群管理", "Groups"), icon: Network, tabs: ["open", "rules", "business", "settings", "permissions", "friend-approval", "speech-activity"] },
   { id: "ai", name: t("AI服务", "AI"), icon: MessageSquareText, tabs: ["consultation", "admin-guidance", "group-ai", "plans", "model"] },
   { id: "finance", name: t("活动与财务", "Activities & Finance"), icon: Wallet, tabs: ["activities", "invite-rewards", "cashback", "finance"] },
   { id: "runtime", name: t("运行与日志", "Runtime & Logs"), icon: CalendarClock, tabs: ["runtime", "schedule", "audit", "operations", "open-audit"] },
@@ -875,6 +877,9 @@ onBeforeUnmount(() => {
           <BusinessControls v-if="tab === 'business' && bridge && bot.business_active !== undefined" id="panel-business" role="tabpanel" aria-labelledby="tab-business" :bot="bot" :form="form" :group-id="groupId" :bridge="bridge" :t="t" />
           <FriendApproval v-if="tab === 'friend-approval' && bridge" id="panel-friend-approval" role="tabpanel" aria-labelledby="tab-friend-approval" :bot="bot" :bridge="bridge" :t="t" />
           <OperationsLog v-if="tab === 'operations' && bridge && bot.business_active !== undefined" id="panel-operations" role="tabpanel" aria-labelledby="tab-operations" :bot-id="botId" :bridge="bridge" :t="t" />
+          <SpeechActivityPanel v-if="tab === 'speech-activity' && bridge" id="panel-speech-activity"
+            role="tabpanel" aria-labelledby="tab-speech-activity" :bot-id="botId" :group-id="groupId"
+            :group-name="bot.group_names?.[groupId]" :bridge="bridge" />
           <section
             v-if="tab === 'settings'"
             id="panel-settings"

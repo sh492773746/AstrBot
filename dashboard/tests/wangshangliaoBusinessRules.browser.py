@@ -51,7 +51,7 @@ async def main():
                     if server.returncode is not None:
                         raise RuntimeError("Fixture server exited")
                     await asyncio.sleep(0.1)
-                for width in (390, 1440):
+                for width in (320, 390, 1440):
                     page = await browser.new_page(
                         viewport={"width": width, "height": 1000}
                     )
@@ -165,7 +165,20 @@ async def main():
                     )
                     await page.locator("#section-groups").click()
                     await page.get_by_label("群聊", exact=True).select_option("1/5")
-                    rules = page.get_by_role("region", name="群关键词回复与定时广告")
+                    await page.get_by_role("tab", name="规则", exact=True).click()
+                    video = page.get_by_role(
+                        "checkbox", name="仅白名单成员可发视频", exact=True
+                    )
+                    await expect(video).not_to_be_checked()
+                    await video.check()
+                    await expect(video).to_be_checked()
+                    await video.uncheck()
+                    await video.scroll_into_view_if_needed()
+                    await page.screenshot(
+                        path=str(args.output / f"video-whitelist-{width}.png"),
+                        full_page=True,
+                    )
+                    rules = page.get_by_role("region", name="群关键词回复与定时发言")
                     await rules.get_by_role(
                         "button", name="添加关键词回复", exact=True
                     ).click()
@@ -181,7 +194,7 @@ async def main():
                         item.get_by_label("启用", exact=True)
                     ).not_to_be_checked()
                     await rules.get_by_role(
-                        "button", name="添加广告计划", exact=True
+                        "button", name="添加发言计划", exact=True
                     ).click()
                     ad = rules.locator("article").last
                     await ad.get_by_label("名称", exact=True).fill("测试广告")
@@ -215,6 +228,9 @@ async def main():
                     await expect(rules.locator("article")).to_have_count(0)
                     await page.locator("#section-help").click()
                     help_panel = page.get_by_role("region", name="命令能力目录")
+                    await help_panel.get_by_role(
+                        "checkbox", name="全部兼容命令", exact=True
+                    ).check()
                     await help_panel.get_by_role("tab", name="私信规则命令").click()
                     await expect(help_panel).to_contain_text("专属客服所有者")
                     await help_panel.get_by_role("tab", name="服务端专属设置").click()
@@ -246,7 +262,7 @@ async def main():
                     assert not errors, errors
                     await page.close()
                 print(
-                    "PASS compiled 390/1440px support and business-rule previews, confirmations, default-off and cross-group isolation; no live APIs."
+                    "PASS compiled 320/390/1440px video checkbox, support and business-rule previews, confirmations, default-off and cross-group isolation; no live APIs."
                 )
             finally:
                 await browser.close()

@@ -1,0 +1,6 @@
+name: astrbot_plugin_lajiaoliao
+display_name: 辣椒聊群管
+desc: 自动化群管、隔离人格与配额、人工套餐及共享 AI 积分；登录仍在创建机器人。
+version: v0.8.3
+author: local
+astrbot_version: "==4.28.1"

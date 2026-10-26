@@ -2603,9 +2603,11 @@ class OpenService:
             return (
                 f"广告审核：{'开启' if rules['advertising'] else '关闭'}\n"
                 f"防刷屏：{'开启' if rules['flood'] else '关闭'}\n"
+                f"仅白名单成员可发视频：{'开启' if rules.get('video_whitelist_only') else '关闭'}\n"
                 "广告和刷屏每轮前三次撤回警告，后续禁言1/3/10分钟；10分钟结束后重新累计，不自动踢人。\n"
                 "防刷屏：3秒5条、10秒15条，或30秒同文5条，撤回对应消息。\n"
-                "每日有效发言前30名自动发言白名单；撤回消息不计数，黑名单优先。\n关键词：\n"
+                "昨天有效发言前30名且超过100条自动获得今天的白名单；撤回消息不计数，黑名单优先。\n"
+                "添加白名单：群内真正@一名成员并发送「白名单」，无需搜索或确认。\n关键词：\n"
                 + (
                     "\n".join(f"{i}. {w}" for i, w in enumerate(rules["keywords"], 1))
                     or "未设置"
@@ -3204,14 +3206,15 @@ class OpenService:
                     "custom_rules_redundant": "未保存。组合词不能互相包含，例如「收款」和「收款截图」只算一个条件，请换成不同的条件。",
                     "custom_rule_index": "没有这个规则序号，请发送「规则」查看最新列表。",
                     "keyword_index": "没有这个关键词序号，请发送「规则」查看最新列表。",
-                    "member_whitelist_permission": "只能管理本人获授权群的发言白名单；私聊请先选择群。",
+                    "member_whitelist_permission": "未执行：需要同时具备本群原生群管身份和机器人管理授权；请联系机器人负责人检查本群授权。私信先选择群。",
+                    "member_whitelist_target": "未加入：请在本群用客户端真正@一名成员并发送「白名单」；不要手打昵称，不要同时@多人，回复对象也不能与@对象冲突。",
                     "member_whitelist_query": "请输入1—64字的成员名称，仅搜索当前群。",
                     "member_whitelist_narrow": "同名或匹配成员超过20位，请输入更完整的名称缩小搜索。",
                     "member_list_conflict": "名单未修改：该成员已在本群另一份名单中，请先移除另一名单，再重新添加；不会自动删除已有记录。",
                     "member_whitelist_changed": "成员、白名单、群设置或权限已变化，请重新搜索、选择并确认。",
                     "member_whitelist_selection": "请从本次本群搜索结果中选择有效序号，不能直接输入账号添加。",
                     "member_whitelist_confirmation": "请用一条新消息确认本次白名单预览。",
-                    "blacklist_permission": "未执行：仅本群获授权的原生群主或管理员可管理黑名单；私信先选择群。",
+                    "blacklist_permission": "未执行：需要同时具备本群原生群管身份和机器人管理授权；请联系机器人负责人检查本群授权。私信先选择群。",
                     "blacklist_target": "未执行：请回复该成员原消息，或从客户端真正@一名成员，发送「黑名单」；不要手打昵称。",
                     "blacklist_quote": "未执行：无法从同群原始消息核实回复对象，或回复与@对象冲突。请真正@一名成员重试。",
                     "blacklist_protected": "未执行：群主、管理员、机器人及身份已变化的成员不能加入黑名单。",

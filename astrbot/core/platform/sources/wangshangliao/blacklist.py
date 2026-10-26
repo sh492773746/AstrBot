@@ -204,6 +204,9 @@ class BlacklistStore:
                 """CREATE TABLE IF NOT EXISTS blacklist_audit(
                     id INTEGER PRIMARY KEY,recorded REAL NOT NULL,kind TEXT NOT NULL,
                     account TEXT NOT NULL,group_id TEXT NOT NULL,payload TEXT NOT NULL)""",
+                """CREATE INDEX IF NOT EXISTS blacklist_completion
+                    ON blacklist_audit(account,group_id,json_extract(payload,'$.intent'),
+                    recorded) WHERE kind='done'""",
                 """CREATE TRIGGER IF NOT EXISTS blacklist_audit_no_update
                     BEFORE UPDATE ON blacklist_audit BEGIN
                     SELECT RAISE(ABORT,'immutable blacklist audit'); END""",
@@ -794,10 +797,29 @@ class BlacklistStore:
                 return None
             if db.execute(
                 "SELECT 1 FROM blacklist_intents WHERE account=? AND group_id=? "
-                "AND member=? AND (join_id=? OR status='unknown' "
-                "OR status='accepted' AND action='kick')",
+                "AND member=? AND (join_id=? OR status='accepted' AND action='kick')",
                 (account, group, member, join_id),
             ).fetchone():
+                return None
+            unresolved = db.execute(
+                "SELECT i.action,i.finished,"
+                "(SELECT MAX(a.recorded) FROM blacklist_audit a "
+                "WHERE a.account=i.account AND a.group_id=i.group_id AND a.kind='done' "
+                "AND json_extract(a.payload,'$.intent')=i.id) AS completed_at "
+                "FROM blacklist_intents i WHERE i.account=? AND i.group_id=? "
+                "AND i.member=? AND i.status='unknown'",
+                (account, group, member),
+            ).fetchall()
+            # A later verified admission is new work, not a replay of an unknown write.
+            # Commands, in-flight writes and delayed old notices must still fail closed.
+            if any(
+                trigger != "join"
+                or row["action"] != "mute"
+                or row["finished"] != 1
+                or row["completed_at"] is None
+                or event_at <= row["completed_at"]
+                for row in unresolved
+            ):
                 return None
             policy = db.execute(
                 "SELECT mute_minutes,policy_version,effective_at FROM blacklist_settings "

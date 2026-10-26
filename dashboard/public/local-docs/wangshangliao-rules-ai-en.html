@@ -7,6 +7,75 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 @page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
 </style></head>
 <body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">Documentation</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a><a href="wangshangliao-rules-ai-en.pdf" download>Download PDF</a><button onclick="window.print()">Print</button></nav><h1>Wangshangliao Rules And AI Ownership</h1>
+<h2>Current In-Group Blacklist Release</h2>
+<p>A verified administrator uses one actual mention or a verifiable same-group
+reply with <code>解除黑名单</code> (alias <code>移除黑名单</code>). This removes the entry and attempts
+to unmute, with separate results. Current bot, group, target and permission
+checks still apply; command recall follows existing rules. Private-chat and
+Dashboard removal only remove the entry. Independent unmuting does not remove
+it, and the whitelist is unchanged. Unknown outcomes are not automatically
+retried. Earlier dated removal-only statements describe previous versions.</p>
+<h2>Real Rejoins And Unknown Receipt Isolation (October 26, 2026)</h2>
+<p>A historical unknown result must not permanently exempt a blacklisted member
+from future admissions. Each canonical join remains at-most-once: duplicate
+notices, commands, renames and restarts never replay the old mute. In-flight
+requests, missing immutable completion evidence, and admissions at or before
+that completion remain held for reconciliation.</p>
+<p>After a mute request has finished with immutable completion evidence, a strictly
+later actual admission may receive its own capability, using the configured
+duration for this bot and group. Fresh native admission history, a complete
+current roster, identity and current authorization are still required.
+Keep the original unknown receipt and audit unchanged; new commands cannot use
+this exception to retry it. Removal, promotion, lost bot permissions and pauses
+still revoke pending work. No automatic kick, ordinary cap increase or
+per-message mute renewal is introduced. Platform acceptance, current mute-list
+membership, phone display and eventual expiry remain separate evidence.</p>
+<h2>Daily Group And Member Activity (October 26, 2026)</h2>
+<p>Open <strong>Groups → Speech Activity</strong>, select a bot and its enabled group.
+Dates use Asia/Shanghai: the current day starts from zero at midnight.
+Only today and yesterday's statistics are retained; older message identifiers,
+labels and collection cursors expire, including stores belonging to inactive bots.
+This retention applies only to the separate statistics store, not operational
+inboxes, sanction audits, finance or lottery records.</p>
+<p>The view shows message totals, active members, text/emoji, images, videos,
+forwards, hourly counts and the top 30. Messages count individually, excluding
+recalls, violations, bots and recognized management commands. The newest 30
+seconds await verification; a background collector imports small batches about
+every 20 seconds and the page refreshes about every 30 seconds. A catching-up
+notice means the displayed result is incomplete. Restart resumes durable cursors
+and backfills only the retained dates without dispatching messages or sanctions.
+Message bodies and media content are never copied into the statistics store.</p>
+<p>Search by name or UID, then select an exact scoped member to view their daily
+count, first/last activity and hourly distribution. Cached complete directories
+include members with no activity; recently departed speakers remain searchable
+within the two retained dates. The activity top 30 is <strong>not</strong> the automatic
+whitelist ranking. Existing yesterday-only text eligibility, 30-second spacing,
+five-minute duplicate suppression and the greater-than-100 threshold stay intact.</p>
+<h2>Management Changes And Scheduled Messages (October 26, 2026)</h2>
+<p>Adding or removing other bot managers preserves current confirmed schedules and
+literal replies. Rebind only rules matching the current tenant version and join
+epoch, with their native creator still authorized before and after the change.
+Dashboard-owned rules do not depend on an individual group manager. Rebinding and
+the manager update share one transaction; already admitted work keeps its old
+version fence. Future occurrences still verify fresh native roles and send grants.
+Never revive stale rules, revoked creators, paused groups, departures or lost bot
+administrator permissions merely because a manager is subsequently added.</p>
+<p>Missed occurrences are not replayed and uncertain deliveries are not retried.
+Previewing and confirming an unchanged plan restores its next future occurrence
+without editing its text, images or clock. Existing same-account serialization,
+at least three seconds between groups, and image-before-text spacing remain.</p>
+<h2>Command Cleanup And Added Keywords (October 25, 2026)</h2>
+<p>Fixed group controls such as an actual single mention plus <code>黑名单</code> or <code>白名单</code>
+now schedule the administrator's incoming command and the bot's response for the
+existing approximately twelve-second cleanup. This does not recall the mentioned
+member's other messages, delete audit evidence or retry unknown sanctions.
+The October24 statement about retaining the incoming command describes the older
+version. Both native group administrator/owner status and the exact group's bot
+management grant remain mandatory; denial replies explain both requirements.</p>
+<p>Append <code>的来</code>, <code>私我</code> and <code>大秀</code> to the existing default moderation keywords and
+to groups1417872,1459534,1516387. Preserve all other group rules, image/text
+campaigns, member lists and management grants. These are moderation triggers,
+not automatic-reply keywords, and do not change the warning/mute progression.</p>
 <h2>Immediate Native Blacklist Mutes (October 24, 2026)</h2>
 <p>This supersedes the October23 statements below about no immediate punishment
 when adding through a native group command. A verified native owner/administrator
@@ -134,8 +203,10 @@ Ordinary messages, duplicate join notifications, restarts and repeated adds do n
 punish or renew a mute. Duration changes affect <strong>only new trusted actual rejoins
 after confirmation</strong>. They never reset existing mutes, punish current members,
 replay historical notices or create daily mute renewals.
-An unknown receipt pauses the affected flow for reconciliation against the original
+An unknown receipt pauses that occurrence for reconciliation against the original
 receipt and platform state; never retry, erase history or invent success.
+Since October26, a strictly later verified real admission after completion follows
+the independent authorization rules above.
 Removing an entry <strong>does not unmute</strong> an existing mute.
 An independent unmute <strong>does not remove the blacklist entry</strong>.</p>
 <h3>Old-To-New Mapping</h3>
@@ -227,6 +298,18 @@ existing configurations, fill content, enable plans or send messages.
 These are <strong>three independent plans</strong>, not three images sent together by one plan.
 For new plans, explicitly enable each, check its content/images and minute 00/20/40,
 then preview and confirm save. Applying times alone does not enable anything.</p>
+<p>October 25 scheduler fix: moderation-only edits atomically carry forward an
+already-current business authorization. Manager changes, pauses, membership
+generation changes, lost permissions and already-stale authorizations never
+renew it automatically; review and confirmation remain required. In-flight work
+still carries its original version fence.
+Due campaigns serialize per receiving account. An accepted image precedes its
+caption by at least one second; the next campaign starts at least three seconds
+after the previous one ends. Preflight admission may wait up to120 seconds from
+the scheduled boundary, then skips with a durable reason instead of replaying.
+Local pacing does not guarantee a provider quota. Rejections, unknown results
+and partial delivery are not automatically retried; unknown/partial results
+remain paused for reconciliation. The form shows recent preflight skips and rejections.</p>
 <p>Upload failure: check static JPG/PNG/WebP format, the 5MB original limit, selected
 robot/group and permission. Wait for progress or timeout recovery, check for an
 existing asset/save receipt, then personally reselect, preview and confirm.
@@ -472,15 +555,23 @@ homonyms show UIDs for verification. <strong>Removal mode</strong> searches save
 current name, saved old name or exact UID, including departed/renamed members.
 The list-row removal icon also requires preview/confirmation and never deletes
 the other list's entry.
-The private menu is <strong>审核规则 → 发言白名单</strong>; select an authorized group first.
-Group commands use the current group:</p>
+From October 25, 2026, a native group administrator with this bot's group grant
+adds a member by genuinely mentioning exactly one member and sending <code>白名单</code>.
+The addition is immediate, with no search, selection or confirmation messages.
+Typed nicknames, multiple targets, conflicting quotes, cross-group identities and
+changed permissions are rejected. Repeated additions do not duplicate the audit.
+Private addition redirects to the target group; the old name-based addition command
+only explains the new route. Dashboard additions retain preview and confirmation.
+Private queries and removals still require selecting an authorized group first.</p>
 <pre><code class="language-text">白名单
-添加白名单 member-name
+@ONE_REAL_MEMBER 白名单
 移除白名单 CURRENT_NAME/SAVED_OLD_NAME/EXACT_UID
 选择白名单 search-result-number
 确认白名单 preview-token
 </code></pre>
-<p>Addition verifies complete native membership at search, selection and confirmation;
+<p>Direct group addition verifies the real mention, complete directory and native/tenant
+authority before writing and before transaction commit. Dashboard
+addition verifies complete native membership at search, selection and confirmation;
 removal checks saved entries in this group without requiring the target still to
 be a member. Both recheck actor/bot authority and revisions. Previews expire after
 ten minutes and chat confirmation requires a new message. Changing groups,
@@ -494,6 +585,16 @@ token and result index, never an arbitrary member identity. Exact UID removal lo
 only locates an existing entry in that scope, never authorizes addition.
 Changes persist with a separate audit; restart and upgrades preserve existing
 server-maintained entries.</p>
+<h3>Whitelist-Only Videos</h3>
+<p><strong>Group Management → Rules → 仅白名单成员可发视频</strong> is scoped to this bot and group,
+defaulting off for existing groups without the field. When enabled, authenticated
+videos from ordinary non-whitelisted members are recalled only: no warning, mute
+or advertising strike is added merely for the video. Manual and currently valid
+yesterday-qualified automatic whitelist entries may send videos. Native owners,
+administrators and managed bots remain protected. Images, stickers, audio and
+filenames are not classified as videos. Independent flood rules still apply.
+Fast-lane and ordinary processing share the original recall operation key; duplicate
+events cannot duplicate recalls, and unknown results are never automatically retried.</p>
 <p>October 22 source update: after <code>authority_guard()</code>, the <code>member_whitelist</code> guard
 compares <code>service.store.tenant(account, group)</code> with the complete original tenant
 snapshot and rejects differences as <code>tenant_changed</code>. The same guard runs before

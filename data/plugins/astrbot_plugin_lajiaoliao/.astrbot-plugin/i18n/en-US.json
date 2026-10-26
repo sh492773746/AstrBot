@@ -1,0 +1,9 @@
+{
+  "metadata": {
+    "display_name": "LajiaoLiao Group Management",
+    "desc": "Per-group allowlists and private-chat controls; sign in when creating a bot"
+  },
+  "pages": {
+    "management": {"title": "Group Management"}
+  }
+}

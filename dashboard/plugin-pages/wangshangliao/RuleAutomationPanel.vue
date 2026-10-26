@@ -12,6 +12,7 @@ const busy = ref(false);
 const error = ref("");
 const preview = ref<any>(null);
 const schedules = ref<any[]>([]);
+const authorizationRequired = ref(false);
 const images = ref<Record<string, string>>({});
 const uploadStatus = ref("");
 const schema = ref<ComponentPage | null>(null);
@@ -46,6 +47,7 @@ async function load() {
   ]);
   if (current !== generation) return;
   config.value = row.config; version.value = row.version;
+  authorizationRequired.value = row.version > 0 && row.tenant_version !== props.tenantVersion;
   schema.value = declaration;
   schedules.value = row.schedules || [];
   images.value = row.images || {};
@@ -178,9 +180,25 @@ function receiveImages(ad: any, event: ClipboardEvent | DragEvent, kind: "keywor
   event.preventDefault();
   void upload(ad, files, undefined, kind);
 }
+function deliveryError(id: string) {
+  const receipt = schedules.value.find(item => item.rule_id === id);
+  if (!receipt || receipt.blocked) return "";
+  if (["rejected", "not_sent"].includes(receipt.last_state)) {
+    return "最近一轮发送被拒绝或未提交，未自动重试。请核对机器人连接及发送权限。";
+  }
+  if (receipt.last_state !== "skipped") return "";
+  if (receipt.last_error === "advertisement_slot_expired") {
+    return "最近一轮超过发送等待时限，已跳过，不会补发。";
+  }
+  if (receipt.last_error === "advertisement_before_runtime") {
+    return "最近一轮早于本次服务启动，已跳过，不会补发。";
+  }
+  return "最近一轮发送前校验未通过，未发送。请刷新核对群权限、配置授权和机器人连接。";
+}
 watch(() => [props.account, props.group, props.tenantVersion], () => {
   generation++; preview.value = null; config.value = { keywords: [], ads: [] };
   schedules.value = []; images.value = {}; uploadStatus.value = "";
+  authorizationRequired.value = false;
   staggerIds.value = ["", "", ""]; staggerMinutes.value = [0, 20, 40]; staggerStatus.value = "";
   if (props.account && props.group) void run(load, true);
 }, { immediate: true });
@@ -193,6 +211,7 @@ onBeforeUnmount(() => { generation++; operation++; });
       <button type="button" title="刷新业务规则" :disabled="busy || disabled" @click="run(load)"><RefreshCw :size="16" /></button>
     </header>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
+    <p v-if="authorizationRequired" class="error" role="status">群配置授权已变化，已保存的关键词回复与定时发言暂不执行。请核对后重新预览确认保存。</p>
     <p v-if="uploadStatus" class="upload-status" role="status" aria-live="polite"><LoaderCircle v-if="busy" :size="16" class="spin" />{{ uploadStatus }}</p>
     <fieldset :disabled="busy || disabled || Boolean(preview) || !schema">
       <legend>群关键词自动回复</legend>
@@ -303,6 +322,7 @@ onBeforeUnmount(() => { generation++; operation++; });
           </div>
         </div>
         <p v-if="schedules.find(s => s.rule_id === ad.id)?.blocked" class="error" role="status">发送结果未知或未完整送达，已暂停。请先核对群内实际消息，再重新预览确认。</p>
+        <p v-else-if="deliveryError(ad.id)" class="error" role="status">{{ deliveryError(ad.id) }}</p>
       </article>
       <button type="button" :disabled="!schema || config.ads.length >= field('ads').maxItems" @click="add('ads')"><Plus :size="16" />添加发言计划</button>
     </fieldset>

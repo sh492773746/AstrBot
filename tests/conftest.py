@@ -22,6 +22,10 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# The managed LajiaoLiao plugin requires POSIX flock and directory fsync.
+# Shared message-policy and coexistence tests still run on Windows.
+collect_ignore_glob = ["test_lajiaoliao_*.py"] if sys.platform == "win32" else []
+
 # 设置测试环境变量
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("ASTRBOT_TEST_MODE", "true")

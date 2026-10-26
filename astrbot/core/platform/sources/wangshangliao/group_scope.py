@@ -12,9 +12,12 @@ def group_config(config, group):
     policy = {
         **config.get("moderation", {}),
         "enabled": True,
-        "automation_enabled": rules["advertising"] or rules["flood"],
+        "automation_enabled": rules["advertising"]
+        or rules["flood"]
+        or rules.get("video_whitelist_only", False),
         "advertising_enabled": rules["advertising"],
         "flood_enabled": rules["flood"],
+        "video_whitelist_only": rules.get("video_whitelist_only", False),
         "mute_keywords": list(rules["keywords"]),
         "kick_keywords": [],
         "semantic": {"enabled": False},

@@ -1,0 +1,11 @@
+{
+  "python": "3.12",
+  "astrbot": "4.28.1",
+  "distribution_versions": {
+    "aiohttp": "3.14.3",
+    "Pillow": "12.3.0",
+    "regex": "2026.9.10",
+    "google-genai": "2.24.0"
+  },
+  "installation": "Use the matching supported AstrBot environment. Never install dependencies or compile the worker during plugin initialization."
+}

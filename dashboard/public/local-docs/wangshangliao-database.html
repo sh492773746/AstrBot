@@ -65,8 +65,25 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 <td>首次私聊／好友欢迎认领、私聊咨询有效期、按群开通代次的引导认领</td>
 <td>未确认投递仍保留认领，删除会使首次发送保护失效</td>
 </tr>
+<tr>
+<td><code>speech_activity.sqlite3</code></td>
+<td>无正文的今日／昨日有效消息计数来源及增量游标</td>
+<td>北京时间零点换日并清理早于昨日数据，不能用清空游标实现长期回补</td>
+</tr>
+<tr>
+<td><code>speech_report.json</code></td>
+<td>可选的专门发言汇报名单与群范围，不存句数或聊天正文</td>
+<td>绑定当前机器人账号和固定UID；不跨账号共享，不随统计换日清理配置</td>
+</tr>
 </tbody>
 </table>
+<p>专门发言汇报通过已登录总控的只读扩展入口<code>GET speech-report?bot_id=...</code>读取，
+每次异步查询都在前后核对机器人及所有指定群的启用范围。只汇总有效文字；统计内容和保留期不扩大。
+<code>speech_report.json</code>由运维在当前账号绑定的业务目录维护，结构为
+<code>{&quot;account&quot;:&quot;机器人UID&quot;,&quot;groups&quot;:[{&quot;id&quot;:&quot;群UID&quot;,&quot;name&quot;:&quot;显示名&quot;}],&quot;members&quot;:[{&quot;id&quot;:&quot;成员UID&quot;,&quot;name&quot;:&quot;显示名&quot;}]}</code>。
+最多20群、30人，拒绝重复／无效UID、控制字符、符号链接及超过16KiB的配置；
+身份须先用真实群目录核对，不通过相似昵称猜人。未配置不展示专门汇报，任一群停用会阻断完整汇报，
+不能静默缩小统计范围。未读完的计数显示补齐状态，不作为完整汇总复制，不向群自动发出。</p>
 <p>表按功能首次使用逐步创建；没有某张表不一定是故障。账号与群通常还有表内联合键，
 目录隔离不能代替业务身份和授权校验。人格、知识库和 AstrBot 对话历史不属于这些库。</p>
 <p>集中业务数据在<code>data/plugin_data/</code>，不是可随源码清理的缓存：</p>

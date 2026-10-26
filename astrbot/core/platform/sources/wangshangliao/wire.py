@@ -17,6 +17,7 @@ from google.protobuf import (
     message_factory,
     unknown_fields,
 )
+from google.protobuf.message import DecodeError
 
 LIMIT = 1024 * 1024
 INVITATION_LOG_LIMIT = 3 * LIMIT
@@ -438,9 +439,12 @@ def open_message(key: bytes, text: str):
 
     Raises:
         ProtocolError: Fixed decode failure with a payload-free stage in ``reason``.
+            ``unverified`` contains only untrusted format metadata, never message
+            content or an identity suitable for authorization.
     """
     phase = "wrapper"
     shape = ""
+    unverified = {}
     try:
         if len(text) > LIMIT * 2:
             raise ProtocolError("message_limit")
@@ -463,6 +467,20 @@ def open_message(key: bytes, text: str):
                     break
                 fields.add((min(field.field_number, 17), field.wire_type))
             shape = "_".join(f"f{number}w{kind}" for number, kind in sorted(fields))
+            if not envelope.aad and not envelope.tag and envelope.body:
+                # Official 3.7.3 has a plaintext branch. Inspect only its type;
+                # neither its content nor its claimed identity is authenticated.
+                try:
+                    candidate = ApplicationMessage.FromString(envelope.body)
+                    if candidate.ListFields():
+                        unverified = {
+                            "reason": "unsigned_plaintext",
+                            "format": candidate.format
+                            if 0 <= candidate.format <= 65535
+                            else -1,
+                        }
+                except DecodeError:
+                    pass
             packet = MessagePacket.FromString(encoded)
             if not packet.msg or not packet.sign:
                 raise ProtocolError("message_unsigned")
@@ -533,6 +551,7 @@ def open_message(key: bytes, text: str):
         error = ProtocolError("message_decode")
         error.reason = phase
         error.shape = shape if phase == "envelope" else ""
+        error.unverified = unverified if phase == "envelope" else {}
         raise error from None
 
 

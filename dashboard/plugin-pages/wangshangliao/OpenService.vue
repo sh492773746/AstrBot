@@ -387,6 +387,7 @@ onMounted(() => run(reload));
         <div class="fields">
           <label class="check"><input v-model="tenant.rules.advertising" type="checkbox" />广告审核与递进禁言</label>
           <label class="check"><input v-model="tenant.rules.flood" type="checkbox" />防刷屏</label>
+          <label class="check"><input v-model="tenant.rules.video_whitelist_only" type="checkbox" />仅白名单成员可发视频</label>
           <label>广告审核关键词<textarea v-model="keywordText" rows="4" /></label>
         </div>
         <GroupRulesEditor :model-value="tenant.rules.custom_rules || []" :disabled="busy"

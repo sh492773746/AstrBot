@@ -601,18 +601,86 @@ def test_every_rejoin_mutes_without_ever_incrementing_legacy_kicks(store):
         {},
     ],
 )
-def test_unproven_outcome_blocks_future_rounds_even_after_restart_and_readd(
+def test_finished_unknown_preserves_receipt_but_allows_a_later_real_rejoin(
     store, result
 ):
     intent = reserve(store)
     store.done(intent, result)
     assert store.read("1", "5")[1][0]["kicks"] == 0
-    assert reserve(BlacklistStore("bot"), "102") is None
+    restarted = BlacklistStore("bot")
+    assert reserve(restarted) is None
+    assert (
+        restarted.reserve_command("1", "5", "2", "22", "another-command", lambda: None)
+        is None
+    )
+    next_intent = reserve(restarted, "102")
+    assert next_intent is not None
+    assert next_intent.id != intent.id
+    authorize(next_intent)
+    restarted.done(next_intent, proof(next_intent))
     store.set_member("1", "5", "2", "22", "Member", False, "9", lambda: None)
     store.set_member("1", "5", "2", "22", "Member", True, "9", lambda: None)
-    assert reserve(BlacklistStore("bot"), "103") is None
+    assert reserve(BlacklistStore("bot"), "103") is not None
+    with store._transaction() as db:
+        assert tuple(
+            db.execute(
+                "SELECT status,finished FROM blacklist_intents WHERE id=?", (intent.id,)
+            ).fetchone()
+        ) == ("unknown", 1)
+        assert (
+            db.execute(
+                "SELECT COUNT(*) FROM blacklist_audit WHERE kind='done' "
+                "AND json_extract(payload,'$.intent')=?",
+                (intent.id,),
+            ).fetchone()[0]
+            == 1
+        )
     with pytest.raises(ProtocolError, match="stale"):
         authorize(intent)
+
+
+@pytest.mark.parametrize("offset", [-1, 0])
+def test_join_at_or_before_unknown_completion_is_not_a_new_authorization(
+    store, monkeypatch, offset
+):
+    clock = time.time() + 10
+    monkeypatch.setattr(blacklist.time, "time", lambda: clock)
+    intent = reserve(store)
+    clock += 10
+    store.done(intent, {"status": "unknown", "submitted": True})
+    completed_at = clock
+    clock += 10
+    assert (
+        store.reserve("1", "5", "2", "22", "102", completed_at + offset, lambda: None)
+        is None
+    )
+    assert reserve(store, "103") is not None
+
+
+@pytest.mark.parametrize("finished_without_audit", [False, True])
+def test_unfinished_or_unproven_completion_still_blocks_new_joins(
+    store, finished_without_audit
+):
+    intent = reserve(store)
+    if finished_without_audit:
+        with store._transaction() as db:
+            db.execute(
+                "UPDATE blacklist_intents SET finished=1 WHERE id=?", (intent.id,)
+            )
+    assert reserve(BlacklistStore("bot"), "102") is None
+
+
+def test_concurrent_rejoin_after_unknown_completion_reserves_once(store):
+    old = reserve(store)
+    store.done(old, {"status": "unknown", "submitted": True})
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(
+            pool.map(lambda _: reserve(BlacklistStore("bot"), "102"), range(20))
+        )
+    intents = [intent for intent in results if intent is not None]
+    assert len(intents) == 1
+    assert intents[0].id != old.id
+    assert reserve(store, "103") is None
 
 
 def test_rejected_round_does_not_count_or_block_later_distinct_join(store):
@@ -1088,7 +1156,7 @@ async def test_accepted_mute_keeps_member_and_never_uses_kick_readback(
 
 
 @pytest.mark.asyncio
-async def test_unknown_native_outcome_is_persisted_and_never_submitted_twice(
+async def test_unknown_native_outcome_is_not_replayed_but_a_new_join_can_be_muted(
     store, native
 ):
     adapter, state = native
@@ -1100,7 +1168,22 @@ async def test_unknown_native_outcome_is_persisted_and_never_submitted_twice(
     assert await dispatch(adapter, action_request(adapter, intent)) == result
     assert len(state.mutations) == 1
     store.done(intent, result)
-    assert reserve(BlacklistStore("bot"), "102") is None
+    assert reserve(BlacklistStore("bot")) is None
+    next_intent = reserve(BlacklistStore("bot"), "102")
+    assert next_intent.id != intent.id
+    state.failure = None
+    next_result = await dispatch(adapter, action_request(adapter, next_intent))
+    assert next_result["status"] == "accepted"
+    assert next_result["operation"] != result["operation"]
+    assert len(state.mutations) == 2
+    store.done(next_intent, next_result)
+    with store._transaction() as db:
+        assert (
+            db.execute(
+                "SELECT status FROM blacklist_intents WHERE id=?", (intent.id,)
+            ).fetchone()[0]
+            == "unknown"
+        )
 
 
 @pytest.mark.asyncio

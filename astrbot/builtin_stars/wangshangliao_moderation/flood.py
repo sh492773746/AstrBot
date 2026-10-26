@@ -318,7 +318,7 @@ class FloodRuntime:
         from astrbot.core.platform.sources.wangshangliao.test_rules import rule_target
         from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
-        from .content_rules import classify, flood_category, keyword_category
+        from .content_rules import content_category, flood_category
         from .policy import handle, is_fresh_message
 
         instance, account, group, sender = key
@@ -371,18 +371,17 @@ class FloodRuntime:
                     or payload.get("_dispatch_class") == "command"
                     or not policy.get("enabled")
                     or not policy.get("automation_enabled")
-                    or policy.get("advertising_enabled") is False
                 ):
                     return
-                category = keyword_category(
-                    payload.get("text", ""),
+                category = content_category(
+                    payload,
                     {
                         **policy,
                         "custom_rules": view.config.get("_open_groups", {})
                         .get(group, {})
                         .get("custom_rules", []),
                     },
-                ) or classify(payload.get("text", ""), name=payload.get("name", ""))
+                )
                 if category != content.get("category"):
                     return
             if not category:

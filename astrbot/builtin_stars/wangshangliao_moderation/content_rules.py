@@ -220,6 +220,25 @@ def classify(text: str, *, name: str = "") -> str:
     return ""
 
 
+def content_category(payload: dict, policy: dict) -> str:
+    """Recompute deterministic content rules at ingress and before execution.
+
+    Args:
+        payload: Authenticated envelope, including its native media kind.
+        policy: Current group policy and optional literal combination rules.
+
+    Returns:
+        Enabled fixed category, or an empty string.
+    """
+    if payload.get("kind") == "video" and policy.get("video_whitelist_only") is True:
+        return "restricted_video"
+    if policy.get("advertising_enabled") is False:
+        return ""
+    return keyword_category(payload.get("text", ""), policy) or classify(
+        payload.get("text", ""), name=payload.get("name", "")
+    )
+
+
 async def contextual_category(adapter, group: str, mid: str, payload: dict) -> str:
     """Correlate split contact ads using bounded, live native inbox evidence.
 
@@ -497,8 +516,13 @@ async def enforce(
     ):
         return False
     policy = adapter.config.get("moderation", {})
-    if policy.get("advertising_enabled") is False and (
-        not assessment or assessment.get("category") != "message_flood"
+    video = (
+        payload.get("kind") == "video" and policy.get("video_whitelist_only") is True
+    )
+    if (
+        policy.get("advertising_enabled") is False
+        and not video
+        and (not assessment or assessment.get("category") != "message_flood")
     ):
         return False
     category = (
@@ -508,9 +532,10 @@ async def enforce(
         and assessment.get("message_id") == str(mid)
         and assessment.get("category")
         not in {"prohibited_image", "prohibited_video", "prohibited_forward"}
+        and (assessment.get("category") != "restricted_video" or video)
         else (
-            keyword_category(
-                payload.get("text", ""),
+            content_category(
+                payload,
                 {
                     **policy,
                     "custom_rules": adapter.config.get("_open_groups", {})
@@ -518,7 +543,6 @@ async def enforce(
                     .get("custom_rules", []),
                 },
             )
-            or classify(payload.get("text", ""), name=payload.get("name", ""))
         )
     )
     if not category:
@@ -551,7 +575,8 @@ async def enforce(
         ):
             raise ProtocolError("moderation_member_exempt")
         authorize_action(adapter.config, group, "recall")
-        authorize_action(adapter.config, group, "mute")
+        if category != "restricted_video":
+            authorize_action(adapter.config, group, "mute")
         if (
             not frozen_policy.get("automation_enabled")
             or adapter.config.get("moderation", {}) != frozen_policy
@@ -616,6 +641,27 @@ async def enforce(
             status = "identity_unverified"
             return True
         authorize_action(adapter.config, group, "recall")
+        if category == "restricted_video":
+            guard()
+            status = "unknown"
+            result = await adapter.execute_action(
+                ActionRequest.bind(
+                    adapter,
+                    f"recall/{account}/{group}/{mid}",
+                    "recall",
+                    int(group),
+                    member=int(sender),
+                    expected_nim=str(member["nimId"]),
+                    message=str(mid),
+                ),
+                authorize=guard,
+            )
+            status = (
+                "recalled"
+                if result.get("status") in {"accepted", "verified"}
+                else "unknown"
+            )
+            return True
         authorize_action(adapter.config, group, "mute")
         if category == "message_flood":
             from .flood import enforce as enforce_flood
