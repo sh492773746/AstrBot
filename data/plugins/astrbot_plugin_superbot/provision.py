@@ -42,7 +42,9 @@ async def prepare(
     previous = context.astrbot_config_mgr.ucr.umop_to_conf_id.get(route)
     saved = store.get("profile_id")
     if previous and previous != saved:
-        raise Rejected("目标平台已有其他配置路由，拒绝覆盖；请确认使用新机器人")
+        raise Rejected(
+            "目标 AstrBot 适配器已有其他配置路由，拒绝覆盖；请确认使用新机器人"
+        )
     if not providers_ready:
         # AstrBot may initialize plugins before provider instances. Existing
         # deterministic business must not depend on model startup ordering.
@@ -159,7 +161,7 @@ async def prepare_chat_only(context, store, platform_id, chat_provider):
     saved = store.get("profile_id")
     previous = manager.ucr.umop_to_conf_id.get(route)
     if previous and previous != saved:
-        raise Rejected("目标平台已有其他配置路由")
+        raise Rejected("目标 AstrBot 适配器已有其他配置路由")
     if not saved:
         matches = [c for c in manager.get_conf_list() if c["name"] == name]
         if len(matches) > 1:

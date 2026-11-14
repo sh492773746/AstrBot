@@ -16,8 +16,6 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 MANAGER_COMMANDS = frozenset(
     {
-        "帮助",
-        "我的权限",
         "群列表",
         "选择群",
         "成员列表",

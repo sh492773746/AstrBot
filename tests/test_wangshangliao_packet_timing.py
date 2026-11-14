@@ -136,6 +136,9 @@ async def test_packet_order_only_changes_display_not_identity_amount_or_receipts
         "sample",
         lambda self, population, count: list(reversed(population))[:count],
     )
+    monkeypatch.setattr(
+        activities.secrets.SystemRandom, "shuffle", lambda self, population: None
+    )
     packet.now[0] = latest(adapter)["ends"]
     adapter.send_reply_text.return_value = "unknown"
     await service.tick(adapter)

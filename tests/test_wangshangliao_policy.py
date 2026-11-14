@@ -22,33 +22,35 @@ def fresh_payload(text="fixture"):
 def keyword_adapter(tmp_path, monkeypatch):
     monkeypatch.setattr(policy, "instance_dir", lambda _: tmp_path)
     monkeypatch.setattr(policy.time, "time", lambda: 1790950000.0)
-    return bind_action_port(SimpleNamespace(
-        config={
-            "id": "keyword-fixture",
-            "enabled_groups": ["5"],
-            "moderation": {
-                "enabled": True,
-                "automation_enabled": True,
-                "permissions": {"5": ["mute", "recall"]},
-                "mute_keywords": ["fixture"],
-                "recall_enabled": True,
+    return bind_action_port(
+        SimpleNamespace(
+            config={
+                "id": "keyword-fixture",
+                "enabled_groups": ["5"],
+                "moderation": {
+                    "enabled": True,
+                    "automation_enabled": True,
+                    "permissions": {"5": ["mute", "recall"]},
+                    "mute_keywords": ["fixture"],
+                    "recall_enabled": True,
+                },
             },
-        },
-        account="1",
-        members={"5": {"2": "22"}},
-        get_moderation_members=AsyncMock(
-            return_value={
-                "complete": True,
-                "groupMemberInfo": [
-                    {"userId": "2", "nimId": "22", "groupRole": "GROUP_ROLE_MEMBER"}
-                ],
-            }
-        ),
-        diagnostics=SimpleNamespace(emit=Mock()),
-        send_text=AsyncMock(return_value="accepted"),
-        recall_violation=AsyncMock(return_value="accepted"),
-        execute_moderation=AsyncMock(),
-    ))
+            account="1",
+            members={"5": {"2": "22"}},
+            get_moderation_members=AsyncMock(
+                return_value={
+                    "complete": True,
+                    "groupMemberInfo": [
+                        {"userId": "2", "nimId": "22", "groupRole": "GROUP_ROLE_MEMBER"}
+                    ],
+                }
+            ),
+            diagnostics=SimpleNamespace(emit=Mock()),
+            send_text=AsyncMock(return_value="accepted"),
+            recall_violation=AsyncMock(return_value="accepted"),
+            execute_moderation=AsyncMock(),
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -139,9 +141,42 @@ async def test_keyword_valid_transport_time_still_warns_then_mutes(
     assert keyword_adapter.recall_violation.await_count == 2
     keyword_adapter.execute_moderation.assert_awaited_once()
     assert keyword_adapter.execute_moderation.await_args.args[:4] == (
-        "message/5/second", "mute", 5, 2
+        "message/5/second",
+        "mute",
+        5,
+        2,
     )
     assert keyword_adapter.execute_moderation.await_args.kwargs["minutes"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["accepted", "unknown", "exception", "cancel"])
+async def test_legacy_keyword_penalty_does_not_wait_for_recall(
+    keyword_adapter, outcome
+):
+    adapter = keyword_adapter
+    await policy.handle(adapter, "5", "warning", fresh_payload())
+    adapter.recall_violation.reset_mock()
+    calls = Mock()
+    calls.attach_mock(adapter.execute_moderation, "mute")
+    calls.attach_mock(adapter.recall_violation, "recall")
+    if outcome == "exception":
+        adapter.execute_moderation.side_effect = TimeoutError
+    elif outcome == "cancel":
+        adapter.execute_moderation.side_effect = asyncio.CancelledError
+    else:
+        adapter.execute_moderation.return_value = {"status": outcome}
+    if outcome in {"exception", "cancel"}:
+        with pytest.raises(
+            TimeoutError if outcome == "exception" else asyncio.CancelledError
+        ):
+            await policy.handle(adapter, "5", "penalty", fresh_payload())
+    else:
+        assert await policy.handle(adapter, "5", "penalty", fresh_payload())
+    assert [call[0] for call in calls.mock_calls] == (
+        ["mute"] if outcome == "cancel" else ["mute", "recall"]
+    )
+    adapter.send_text.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -288,7 +323,10 @@ async def test_automation_requires_grant_identity_and_member(
         assert await policy.handle(adapter, "5", "next", fresh_payload())
         assert adapter.execute_moderation.await_count == 1
         assert adapter.execute_moderation.await_args.args[:4] == (
-            "message/5/next", "mute", 5, 2
+            "message/5/next",
+            "mute",
+            5,
+            2,
         )
         await policy.handle(adapter, "5", "next", fresh_payload())
         assert adapter.execute_moderation.await_count == 1
@@ -336,7 +374,10 @@ async def test_warning_recall_then_penalty(tmp_path, monkeypatch, text):
     assert adapter.send_text.await_count == 1
     adapter.execute_moderation.assert_awaited_once()
     assert adapter.execute_moderation.await_args.args[:4] == (
-        "message/5/second", "mute", 5, 2
+        "message/5/second",
+        "mute",
+        5,
+        2,
     )
 
 

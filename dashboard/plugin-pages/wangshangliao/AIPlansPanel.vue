@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Check, CreditCard, Save, ShieldCheck } from "@lucide/vue";
 
 const props = defineProps<{
@@ -15,6 +15,7 @@ const manager = ref("");
 const tier = ref("plus");
 const received = ref("134");
 const preview = ref<any>(null);
+let previewSequence = 0;
 const provider = ref("");
 const priceVersion = ref(0);
 const priceDefaults = {
@@ -30,6 +31,7 @@ const managers = computed(() => props.members.filter(m => props.tenant?.managers
 const yuan = (value: number) => (value / 1000000).toFixed(4);
 const date = (value: number) => value ? new Date(value * 1000).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }) : "默认长期";
 watch(() => props.billing, value => {
+  previewSequence++;
   if (!value) return;
   settings.value = {
     contact_name: value.settings.contact_name, contact: value.settings.contact,
@@ -40,11 +42,13 @@ watch(() => props.billing, value => {
   choosePrice();
 }, { immediate: true });
 watch(() => props.tenant?.group_id + "/" + props.tenant?.account, () => {
+  previewSequence++;
   manager.value = props.tenant?.managers[0] || "";
   preview.value = null;
 }, { immediate: true });
-watch(tier, value => { received.value = value === "plus" ? "134" : "335"; preview.value = null; });
-watch(manager, () => { preview.value = null; });
+watch(tier, value => { received.value = value === "plus" ? "134" : "335"; });
+watch([manager, tier, received], () => { previewSequence++; preview.value = null; });
+onBeforeUnmount(() => { previewSequence++; });
 function choosePrice() {
   const row = props.billing?.prices.find((r: any) => r.provider === provider.value && r.current);
   price.value = { ...(row?.config || priceDefaults) };
@@ -63,11 +67,19 @@ async function saveSettings() {
 }
 async function grantPreview() {
   const row = props.tenant;
+  if (!row || !manager.value) return;
+  const sequence = ++previewSequence;
+  preview.value = null;
   const payload = {
     account: row.account, group_id: row.group_id, tenant_version: row.version,
     uid: manager.value, version: pool.value?.version || 0, tier: tier.value, received_cny: received.value,
   };
-  preview.value = { payload, result: await props.api("plan_preview", payload) };
+  const result = await props.api("plan_preview", payload);
+  if (sequence !== previewSequence || props.tenant?.account !== payload.account
+      || props.tenant?.group_id !== payload.group_id || props.tenant?.version !== payload.tenant_version
+      || manager.value !== payload.uid || tier.value !== payload.tier
+      || received.value !== payload.received_cny) return;
+  preview.value = { payload, result };
 }
 async function grant() {
   await props.api("plan_grant", { ...preview.value.payload, confirmation: preview.value.result.confirmation });
@@ -176,9 +188,8 @@ async function savePrice() {
         </tr></tbody>
       </table></div>
     </details>
-    <details v-if="billing.notices.length || billing.unknown.length">
-      <summary>私信通知与未知费用</summary>
-      <p v-for="n in billing.notices" :key="n.id">{{ date(n.created) }} · {{ n.uid || '试用用户' }} · {{ n.kind }} · {{ n.state }}</p>
+    <details v-if="billing.unknown.length">
+      <summary>未知费用</summary>
       <div v-for="r in billing.unknown" :key="r.request" class="error">
         <p>{{ date(r.created) }} · 未知费用占用 ¥{{ yuan(r.charged_micro) }} · {{ r.request.slice(0, 12) }}</p>
         <pre v-if="r.usage">{{ r.usage }}</pre>

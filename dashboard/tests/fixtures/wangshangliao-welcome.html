@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>入群欢迎隔离测试</title>
+  <style>body{margin:0;font:14px system-ui;color:#24312f;background:#fff}main{max-width:1000px;margin:auto;padding:16px;box-sizing:border-box}button{border:1px solid #bdc8c5;border-radius:4px;padding:6px 10px;background:#f1f6f4;color:#245c50;font:inherit}</style>
+</head>
+<body><main id="app"></main>
+<script type="module">
+import { createApp, h, ref } from "vue";
+import WelcomePanel from "/plugin-pages/wangshangliao/WelcomePanel.vue";
+const state = ref({ group: "5", disabled: true });
+let config = { enabled: false, text: "欢迎加入本群！" }, pending;
+window.welcomeFixture = { state, calls: [] };
+async function api(action, payload) {
+  window.welcomeFixture.calls.push(structuredClone({ action, payload }));
+  if (payload.operation === "read") return { config: { ...config }, version: 1 };
+  if (payload.operation === "preview") {
+    pending = structuredClone(payload.config);
+    return { token: "isolated-token", config: pending };
+  }
+  config = pending;
+  return { saved: true };
+}
+createApp({
+  setup: () => () => h(WelcomePanel, {
+    api, account: "99", group: state.value.group, tenantVersion: 1, disabled: state.value.disabled,
+  }),
+}).mount("#app");
+</script>
+</body></html>

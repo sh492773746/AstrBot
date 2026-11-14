@@ -8,9 +8,6 @@ import httpx
 import pytest
 
 from astrbot.builtin_stars.wangshangliao_moderation import dashboard
-from astrbot.builtin_stars.wangshangliao_moderation.service_settings import (
-    SupportConfiguration,
-)
 from astrbot.core.platform.sources.wangshangliao.business import BusinessError
 from tests.test_wangshangliao_dashboard import PREFIX
 from tests.test_wangshangliao_dashboard import headers as headers
@@ -72,33 +69,3 @@ async def test_member_reads_never_report_an_online_service_as_disconnected(
     assert emit.call_args.kwargs["error"] == expected
     assert emit.call_args.kwargs["provider_code"] == number
     dispatch.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_typed_business_validation_is_400_without_echoing_fields(
-    page_app, headers
-):
-    app, page, _, _, _ = page_app
-
-    async def invalid(_):
-        SupportConfiguration.model_validate({"provider_id": "private-invalid-field"})
-
-    dispatch = AsyncMock(side_effect=invalid)
-    page.plugin = SimpleNamespace(
-        open_service=SimpleNamespace(
-            integrated=True,
-            active=True,
-            rpc=SimpleNamespace(lock=asyncio.Lock(), dispatch=dispatch),
-        )
-    )
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
-    ) as client:
-        response = await client.post(
-            PREFIX + "/open-service",
-            headers=headers,
-            json={"action": "support_settings", "payload": {"account": "1"}},
-        )
-    assert response.status_code == 400
-    assert "参数格式" in response.json()["message"]
-    assert "private-invalid-field" not in response.text

@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import re
 import struct
 import uuid
 from urllib.parse import urlsplit, urlunsplit
@@ -219,125 +218,6 @@ class NimClient:
         code, body = await self.request(1, 2, timeout=5)
         if code != 200 or body:
             raise wire.ProtocolError("heartbeat")
-
-    async def get_friends(self, *, authorize=None):
-        """Read a complete bounded SDK friend directory without mutations.
-
-        Args:
-            authorize: Synchronous account/lifecycle guard checked on every page.
-
-        Returns:
-            Valid friend relations keyed by authenticated transport account.
-
-        Raises:
-            ProtocolError: If a page, cursor or complete roster cannot be verified.
-        """
-        friends, cursor, seen = {}, 0, set()
-        async with asyncio.timeout(20):
-            for _ in range(10):
-                if authorize:
-                    authorize()
-                code, body = await self.request(12, 4, struct.pack("<Q", cursor))
-                if authorize:
-                    authorize()
-                if code != 200:
-                    raise wire.ProtocolError("friend_directory_rejected")
-                count, offset = wire.read_varint(body, 0)
-                if count > 3000:
-                    raise wire.ProtocolError("friend_directory_limit")
-                updates = []
-                for _ in range(count):
-                    fields, offset = wire.read_properties(body, offset)
-                    try:
-                        peer = fields[4].decode("ascii")
-                        updated = fields[12].decode("ascii")
-                        created = fields.get(11, b"0").decode("ascii")
-                        alias = fields.get(8, b"").decode("utf-8")
-                        flag = fields[5]
-                        if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}", peer):
-                            raise wire.ProtocolError("friend_directory_identity")
-                        if (
-                            not re.fullmatch(r"[0-9]{1,16}", updated)
-                            or not re.fullmatch(r"[0-9]{1,16}", created)
-                            or int(updated) <= cursor
-                        ):
-                            raise wire.ProtocolError("friend_directory_timestamp")
-                        if flag not in {b"0", b"1"}:
-                            raise wire.ProtocolError("friend_directory_relation")
-                        if peer in seen or len(alias) > 200:
-                            raise wire.ProtocolError("friend_directory_shape")
-                    except KeyError:
-                        raise wire.ProtocolError(
-                            "friend_directory_missing_field"
-                        ) from None
-                    except UnicodeError:
-                        raise wire.ProtocolError("friend_directory_encoding") from None
-                    seen.add(peer)
-                    updates.append(int(updated))
-                    if flag == b"1":
-                        friends[peer] = {
-                            "peer": peer,
-                            "alias": alias,
-                            "updated": int(updated),
-                            "created": int(created),
-                        }
-                if offset + 8 != len(body):
-                    raise wire.ProtocolError("friend_directory_framing")
-                if count == 3000 and updates != sorted(updates):
-                    raise wire.ProtocolError("friend_directory_order")
-                if len(seen) > 10000:
-                    raise wire.ProtocolError("friend_directory_limit")
-                if count < 3000:
-                    return friends
-                if updates[-1] == updates[-2]:
-                    raise wire.ProtocolError("friend_directory_ambiguous_boundary")
-                cursor = updates[-1]
-        raise wire.ProtocolError("friend_directory_incomplete")
-
-    async def get_friend_names(self, peers):
-        """Fetch only names for a bounded, already verified friend selection.
-
-        Args:
-            peers: At most 150 authenticated transport accounts.
-
-        Returns:
-            Names keyed by requested account, without profiles or private fields.
-
-        Raises:
-            ProtocolError: If a response contains ambiguous or unrequested users.
-        """
-        if not peers:
-            return {}
-        if (
-            len(peers) > 150
-            or len(set(peers)) != len(peers)
-            or any(not re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}", peer) for peer in peers)
-        ):
-            raise wire.ProtocolError("friend_selection")
-        body = wire.varint(len(peers))
-        for peer in peers:
-            encoded = peer.encode("ascii")
-            body += wire.varint(len(encoded)) + encoded
-        code, body = await self.request(3, 7, body)
-        if code != 200:
-            raise wire.ProtocolError("friend_names_rejected")
-        count, offset = wire.read_varint(body, 0)
-        if count > len(peers):
-            raise wire.ProtocolError("friend_names_shape")
-        names = {}
-        for _ in range(count):
-            fields, offset = wire.read_properties(body, offset)
-            try:
-                peer = fields[1].decode("ascii")
-                name = fields.get(3, b"").decode("utf-8")
-                if peer not in peers or peer in names or len(name) > 200:
-                    raise ValueError
-            except (KeyError, UnicodeError, ValueError):
-                raise wire.ProtocolError("friend_names_shape") from None
-            names[peer] = name
-        if offset != len(body):
-            raise wire.ProtocolError("friend_names_shape")
-        return names
 
     async def get_team_muted_members(self, team_id: str) -> set[str]:
         """Fetch the current individual mute list using Web SDK query (8, 27).
@@ -559,7 +439,7 @@ def recall_notifications(packet) -> list[dict]:
 
 
 def messages(packet) -> tuple[list[dict], int | None]:
-    """Decode group/private pushes, returning explicit sync boundaries."""
+    """Decode group pushes and private ACK headers with explicit sync boundaries."""
     service, command, _, code, body = packet
     if code != 200:
         raise wire.ProtocolError("push_rejected")
@@ -586,12 +466,17 @@ def messages(packet) -> tuple[list[dict], int | None]:
     result = []
     for _ in range(count):
         fields, offset = wire.read_properties(body, offset)
+        keys = (
+            (0, 1, 2, 7, 8, 12)
+            if fields.get(0) == b"0"
+            else (0, 1, 2, 6, 7, 8, 9, 10, 11, 12)
+        )
         values = {
-            key: value.decode("utf-8")
-            for key, value in fields.items()
-            if key in (0, 1, 2, 6, 7, 8, 9, 10, 11, 12)
+            key: value.decode("utf-8") for key, value in fields.items() if key in keys
         }
         for tag in range(29, 39):
+            if values.get(0) != "1":
+                break
             value = fields.get(tag)
             if value is not None and len(value) <= 128:
                 try:

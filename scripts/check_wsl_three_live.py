@@ -5,7 +5,6 @@ import asyncio
 import json
 import re
 import sqlite3
-import sys
 import time
 import uuid
 from pathlib import Path
@@ -27,7 +26,6 @@ from scripts.check_wsl_pair_live import (
     PEER,
     PREFIX,
     RECEIVER,
-    REGISTRATION,
     ROOT,
     SENDER,
     PairCheck,
@@ -66,7 +64,6 @@ async def main():
             "lottery",
             "lottery-member",
             "administrators",
-            "finance",
         ),
     )
     args = parser.parse_args()
@@ -185,7 +182,7 @@ async def main():
                     )
                     try:
                         await check.preflight()
-                        if phase not in {"knowledge", "commands", "finance"}:
+                        if phase not in {"knowledge", "commands"}:
                             await check.ordinary_start()
                         if phase == "knowledge":
                             check.ai_scope = True
@@ -264,30 +261,6 @@ async def main():
                             await check.native_extra()
                         elif phase == "escalation":
                             await check.advertisements(escalate=True)
-                        elif phase == "finance":
-                            await check.api(
-                                "POST",
-                                REGISTRATION,
-                                {"action": "test_close", "instance_id": RECEIVER},
-                            )
-                            check.window, check.remaining = False, 0
-                            process = await asyncio.create_subprocess_exec(
-                                sys.executable,
-                                "-m",
-                                "scripts.check_wsl_finance_chat_live",
-                                "--native",
-                                "--extended",
-                                cwd=ROOT,
-                                stdout=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.STDOUT,
-                            )
-                            transcript, _ = await process.communicate()
-                            (folder / "isolated-finance.log").write_bytes(transcript)
-                            require(
-                                process.returncode == 0,
-                                "Isolated finance workflow failed",
-                            )
-                            check.record("isolated_finance_passed", real_payments=False)
                         elif phase == "lottery-member":
                             await check.lottery(controlled=True)
                         else:

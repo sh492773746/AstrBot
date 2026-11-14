@@ -324,7 +324,7 @@ class Ledger:
 
         Args:
             account: Authenticated account.
-            team: Durable group or private session identifier.
+            team: Durable group identifier or non-dispatchable transport archive.
             message: Stable upstream message ID.
             payload: Trusted adapter envelope.
             observe: Optional synchronous business observer enriching a copy.
@@ -335,6 +335,8 @@ class Ledger:
         Returns:
             Whether this was a new message.
         """
+        if team.startswith("private/"):
+            return False
         async with self.ingress_lock:
             if authorize is not None:
                 if state != "ignored_bot" or observe is not None:
@@ -350,50 +352,28 @@ class Ledger:
                     return False
             received_at = time.time()
             payload = dict(payload)
-            sender = (
-                str(payload.get("transport_peer", ""))
-                if team.startswith("private/")
-                else str(payload.get("sender", ""))
-            )
+            sender = str(payload.get("sender", ""))
             if state == "pending":
-                private = team.startswith("private/")
                 async with self.db.execute(
-                    "SELECT COUNT(*),SUM(team LIKE 'private/%'),"
-                    "SUM(team LIKE 'private/%' AND sender=?) "
-                    "FROM inbox WHERE account=? AND state IN ('pending','processing')",
-                    (sender, account),
+                    "SELECT COUNT(*) FROM inbox WHERE account=? "
+                    "AND state IN ('pending','processing') "
+                    "AND team NOT LIKE 'private/%'",
+                    (account,),
                 ) as cursor:
-                    total, private_count, personal = await cursor.fetchone()
-                private_count, personal = private_count or 0, personal or 0
-                control = private and payload.get("text", "").strip() in {
-                    "/chat",
-                    "/exit",
-                }
-                if private and len(payload.get("text", "").encode()) > 16384:
-                    state = "oversized"
-                elif (
-                    private
-                    and (
-                        private_count >= 256 + int(control) * 2
-                        or personal >= 4 + int(control)
-                    )
-                    or not private
-                    and total - private_count >= 4096
-                ):
+                    total = (await cursor.fetchone())[0]
+                if total >= 4096:
                     state = "queue_full"
-                    if not private:
-                        self.review_groups.add(team)
-                        await self.db.execute(
-                            "INSERT OR IGNORE INTO review_holds VALUES(?,?,?,'queue_full')",
-                            (account, team, received_at),
-                        )
+                    self.review_groups.add(team)
+                    await self.db.execute(
+                        "INSERT OR IGNORE INTO review_holds VALUES(?,?,?,'queue_full')",
+                        (account, team, received_at),
+                    )
                 if state != "pending":
                     self.rejected_count += 1
                     payload = {
                         k: v
                         for k, v in payload.items()
-                        if k
-                        in {"sender", "transport_peer", "created_at", "recall_route"}
+                        if k in {"sender", "created_at", "recall_route"}
                     }
                     payload["reason"] = state
                 else:
@@ -404,11 +384,6 @@ class Ledger:
             dispatch_class = (
                 "command" if payload.get("_dispatch_class") == "command" else "message"
             )
-            if team.startswith("private/") and (
-                payload.get("text", "").strip() in {"/chat", "/exit"}
-                or payload.get("_ai_busy")
-            ):
-                dispatch_class = "control"
             await self.db.execute(
                 "INSERT OR IGNORE INTO inbox(account,team,message,payload,state,received_at,sender,completed_at,dispatch_class) "
                 "VALUES(?,?,?,?,?,?,?,?,?)",
@@ -445,6 +420,8 @@ class Ledger:
             sqlite3.Error: If writer admission or persistence fails.
             asyncio.CancelledError: If cancelled before commit admission.
         """
+        if team.startswith("private/"):
+            return False
         authorize()
 
         def connect():
@@ -466,19 +443,10 @@ class Ledger:
                 return False
             received_at = time.time()
             payload = dict(payload)
-            sender = str(
-                payload.get("transport_peer", "")
-                if team.startswith("private/")
-                else payload.get("sender", "")
-            )
+            sender = str(payload.get("sender", ""))
             dispatch_class = (
                 "command" if payload.get("_dispatch_class") == "command" else "message"
             )
-            if team.startswith("private/") and (
-                payload.get("text", "").strip() in {"/chat", "/exit"}
-                or payload.get("_ai_busy")
-            ):
-                dispatch_class = "control"
             authorize()
             await db.execute(
                 "INSERT OR IGNORE INTO inbox"
@@ -609,7 +577,14 @@ class Ledger:
         return nonce, "new"
 
     async def finish(
-        self, key: str, state: str, server_id: str = "", *, recall: tuple | None = None
+        self,
+        key: str,
+        state: str,
+        server_id: str = "",
+        *,
+        recall: tuple | None = None,
+        recall_state: str = "pending",
+        supersede_welcome: bool = False,
     ) -> None:
         """Persist acceptance and optional self-recall intent in one commit.
 
@@ -618,20 +593,51 @@ class Ledger:
             state: Provider outcome.
             server_id: Accepted native message ID.
             recall: Account, group, team, peer, client, message time and deadline.
+            recall_state: Pending timer or retained route without automatic recall.
+            supersede_welcome: Make previous pending welcomes due atomically with
+                the newly accepted welcome, never touching other kinds of replies.
         """
+        if recall_state not in {"pending", "retained"}:
+            raise ProtocolError("recall_state")
+        if supersede_welcome and (
+            state != "accepted"
+            or recall is None
+            or recall_state != "pending"
+            or not key.startswith(f"welcome/{recall[0]}/{recall[1]}/")
+        ):
+            raise ProtocolError("welcome_recall_scope")
         await self.db.execute(
             "UPDATE outbox SET state=?,server_id=? WHERE key=?", (state, server_id, key)
         )
         if state == "accepted" and recall is not None:
             account, group, team, peer, client, stamp, deadline = recall
+            if supersede_welcome:
+                prefix = f"welcome/{account}/{group}/"
+                await self.db.execute(
+                    "UPDATE reply_recalls SET deadline=MIN(deadline,?) "
+                    "WHERE account=? AND group_id=? AND state='pending' AND sender='' "
+                    "AND key!=? AND substr(key,1,?)=?",
+                    (time.time(), account, group, key, len(prefix), prefix),
+                )
             await self.db.execute(
                 "INSERT OR IGNORE INTO reply_recalls"
-                "(key,account,group_id,team,peer,client,server_id,message_time,deadline)"
-                " VALUES(?,?,?,?,?,?,?,?,?)",
-                (key, account, group, team, peer, client, server_id, stamp, deadline),
+                "(key,account,group_id,team,peer,client,server_id,message_time,deadline,state)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    key,
+                    account,
+                    group,
+                    team,
+                    peer,
+                    client,
+                    server_id,
+                    stamp,
+                    deadline,
+                    recall_state,
+                ),
             )
         await self.db.commit()
-        if state == "accepted" and recall is not None:
+        if state == "accepted" and recall is not None and recall_state == "pending":
             self.recall_wakeup.set()
 
     async def receipt(self, key: str) -> dict | None:

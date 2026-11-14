@@ -16,36 +16,13 @@ class OpenError(ValueError):
 
 
 DEFAULT_RULES = {"advertising": True, "flood": True, "keywords": []}
-DEFAULT_GROUP_TEMPLATE_VERSION = 2
+DEFAULT_GROUP_TEMPLATE_VERSION = 3
 DEFAULT_GROUP_RULES = {
     "advertising": True,
     "flood": True,
-    "keywords": [
-        "稳赚不赔",
-        "保本套利",
-        "导师带赚",
-        "刷单垫付",
-        "垫付刷单",
-        "充值解冻",
-        "缴费解冻",
-        "私聊领取彩金",
-        "包赔上分",
-        "刷流水返佣",
-        "出售银行卡",
-        "收购银行卡",
-        "出售实名账号",
-        "代办洗钱",
-        "裸聊接单",
-        "色情直播",
-        "成人大秀",
-        "博彩开户注册",
-        "收fc",
-        "免费P图上分",
-        "直播打狗中",
-        "的来",
-        "私我",
-        "大秀",
-    ],
+    "keywords": json.loads(
+        Path(__file__).with_name("keyword_defaults.json").read_text(encoding="utf-8")
+    )["mute_keywords"],
     "custom_rules": [
         {"name": "收款截图招揽", "terms": ["收款", "截图", "加我"], "enabled": True},
         {"name": "闲鱼出租招揽", "terms": ["闲鱼", "出租", "客服"], "enabled": True},
@@ -117,6 +94,19 @@ class OpenStore:
                     digest TEXT PRIMARY KEY,kind TEXT,account TEXT,group_id TEXT,
                     epoch INTEGER,version INTEGER,actor TEXT,session TEXT,
                     target TEXT,operation TEXT,message TEXT,expires REAL,used INTEGER DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS bulk_recalls(
+                    id TEXT PRIMARY KEY,account TEXT NOT NULL,group_id TEXT NOT NULL,
+                    actor TEXT NOT NULL,created REAL NOT NULL,updated REAL NOT NULL,
+                    state TEXT NOT NULL,manifest TEXT NOT NULL,results TEXT NOT NULL,
+                    error TEXT NOT NULL DEFAULT '');
+                CREATE INDEX IF NOT EXISTS bulk_recalls_scope
+                    ON bulk_recalls(account,group_id,created DESC);
+                CREATE UNIQUE INDEX IF NOT EXISTS bulk_recalls_active
+                    ON bulk_recalls(account) WHERE state IN ('queued','running');
+                CREATE TABLE IF NOT EXISTS bulk_recall_receipts(
+                    account TEXT NOT NULL,group_id TEXT NOT NULL,message TEXT NOT NULL,
+                    job TEXT NOT NULL,state TEXT NOT NULL,updated REAL NOT NULL,
+                    PRIMARY KEY(account,group_id,message));
                 CREATE TABLE IF NOT EXISTS settings(
                     id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL,
                     paused INTEGER NOT NULL,personal_limit INTEGER NOT NULL,
@@ -153,11 +143,6 @@ class OpenStore:
                     ON actor_bindings(account,peer);
                 CREATE TABLE IF NOT EXISTS account_labels(
                     account TEXT PRIMARY KEY,peer TEXT,nickname TEXT,checked REAL);
-                CREATE TABLE IF NOT EXISTS guidance_trials(
-                    account TEXT,group_id TEXT,uid TEXT,principal TEXT NOT NULL,
-                    epoch INTEGER NOT NULL,version INTEGER NOT NULL,
-                    quota INTEGER NOT NULL,active INTEGER NOT NULL,created REAL NOT NULL,
-                    PRIMARY KEY(account,group_id,uid));
                 CREATE TABLE IF NOT EXISTS ai_budget(
                     id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL,
                     confirmed INTEGER NOT NULL,provider TEXT NOT NULL,evidence TEXT NOT NULL,
@@ -469,7 +454,20 @@ class OpenStore:
 
     def tenant(self, account, group):
         """Resolve an exact account/group identity, never a display name."""
-        return next((t for t in self.tenants(account) if t["group_id"] == group), None)
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT * FROM tenants WHERE account=? AND group_id=?",
+                (account, group),
+            ).fetchone()
+        return (
+            {
+                **dict(row),
+                "managers": json.loads(row["managers"]),
+                "rules": json.loads(row["rules"]),
+            }
+            if row
+            else None
+        )
 
     def retired_groups(self):
         """Read minimal identifiers excluded from future discovery.
@@ -515,6 +513,7 @@ class OpenStore:
                 "business_rules",
                 "business_rule_drafts",
                 "business_ad_cursors",
+                "business_ad_heads",
                 "business_rule_images",
                 "business_ad_rotations",
             ):
@@ -888,6 +887,7 @@ class OpenStore:
                 "business_rules",
                 "business_rule_drafts",
                 "business_ad_cursors",
+                "business_ad_heads",
                 "business_rule_images",
                 "business_ad_rotations",
             ):
@@ -1011,7 +1011,6 @@ class OpenStore:
         epoch,
         version,
         guard=None,
-        support_owner=None,
     ):
         """Atomically claim an unconfigured tenant after external membership checks."""
         with self.connect(write=True, guard=guard) as db:
@@ -1079,71 +1078,6 @@ class OpenStore:
                 "version=version+1 WHERE account=? AND group_id=?",
                 (json.dumps(managers or [actor]), json.dumps(rules), account, group),
             )
-            if support_owner is not None:
-                from .owner_support import TEMPLATE
-                from .service_settings import SupportConfiguration
-
-                peer, name = support_owner["peer"], support_owner["name"]
-                if (
-                    not actor.isascii()
-                    or not actor.isdigit()
-                    or not isinstance(peer, str)
-                    or not 1 <= len(peer) <= 256
-                    or not isinstance(name, str)
-                    or not 1 <= len(name) <= 64
-                    or any(ord(c) < 32 for c in name)
-                ):
-                    raise OpenError("support_owner_invalid")
-                owner = db.execute(
-                    "SELECT * FROM support_owners WHERE uid=?", (actor,)
-                ).fetchone()
-                conflict = db.execute(
-                    "SELECT 1 FROM support_owners WHERE peer=? AND uid<>?",
-                    (peer, actor),
-                ).fetchone()
-                if conflict or owner and owner["peer"] != peer:
-                    raise OpenError("support_owner_identity_conflict")
-                if not owner:
-                    db.execute(
-                        "INSERT INTO support_owners VALUES(?,?,?,1,1)",
-                        (actor, peer, name),
-                    )
-                    template = db.execute(
-                        "SELECT version,config FROM support_settings WHERE account=?",
-                        (TEMPLATE,),
-                    ).fetchone()
-                    config = SupportConfiguration.model_validate(
-                        json.loads(template["config"])
-                        if template
-                        else {
-                            "wording": "您好，我是专属业务客服。只依据已确认的业务资料解答；"
-                            "资料不足时请联系业务负责人，不承诺未确认事项。",
-                        }
-                    ).model_dump()
-                    db.execute(
-                        "INSERT INTO support_settings VALUES(?,1,?)",
-                        ("owner:" + actor, json.dumps(config)),
-                    )
-                db.execute(
-                    "INSERT INTO support_group_owners VALUES(?,?,?,?) "
-                    "ON CONFLICT(account,group_id) DO UPDATE SET "
-                    "epoch=excluded.epoch,uid=excluded.uid",
-                    (account, group, epoch, actor),
-                )
-                self.log(
-                    db,
-                    actor,
-                    account,
-                    group,
-                    "support_owner_bound",
-                    {
-                        "uid": actor,
-                        "created": not bool(owner),
-                        "template_version": (template["version"] if template else 0)
-                        if not owner
-                        else None,
-                    },
-                )
             self.log(
                 db,
                 actor,
@@ -1194,21 +1128,41 @@ class OpenStore:
                 raise OpenError(str(exc)) from None
             if isinstance(rules, dict) and any(
                 field in json.loads(row["rules"]) and field not in rules
-                for field in ("custom_rules", "video_whitelist_only")
+                for field in (
+                    "custom_rules",
+                    "video_whitelist_only",
+                    "recall_forward",
+                    "image_qr_recall",
+                    "image_digits_recall",
+                    "raid_defense_enabled",
+                )
             ):
                 raise OpenError("tenant_rules_refresh")
             if (
                 not isinstance(rules, dict)
-                or set(rules)
-                not in (
-                    set(DEFAULT_RULES),
-                    set(DEFAULT_RULES) | {"custom_rules"},
-                    set(DEFAULT_RULES) | {"video_whitelist_only"},
-                    set(DEFAULT_RULES) | {"custom_rules", "video_whitelist_only"},
-                )
+                or not set(DEFAULT_RULES) <= set(rules)
+                or not set(rules)
+                <= set(DEFAULT_RULES)
+                | {
+                    "custom_rules",
+                    "video_whitelist_only",
+                    "recall_forward",
+                    "image_qr_recall",
+                    "image_digits_recall",
+                    "raid_defense_enabled",
+                }
                 or type(rules["advertising"]) is not bool
                 or type(rules["flood"]) is not bool
                 or type(rules.get("video_whitelist_only", False)) is not bool
+                or any(
+                    type(rules.get(field, False)) is not bool
+                    for field in (
+                        "recall_forward",
+                        "image_qr_recall",
+                        "image_digits_recall",
+                        "raid_defense_enabled",
+                    )
+                )
                 or not isinstance(rules["keywords"], list)
                 or len(rules["keywords"]) > 50
                 or any(
@@ -1235,7 +1189,15 @@ class OpenStore:
                 or (paused is not None and type(paused) is not bool)
             ):
                 raise OpenError("tenant_invalid")
-            if control and managers != old_managers:
+            if not control and rules.get("raid_defense_enabled", False) != json.loads(
+                row["rules"]
+            ).get("raid_defense_enabled", False):
+                raise OpenError("raid_arguments")
+            if control and (
+                managers != old_managers
+                or bool(rules.get("raid_defense_enabled"))
+                != bool(json.loads(row["rules"]).get("raid_defense_enabled"))
+            ):
                 self.management_guard(db, row, actor, control=True)
                 digest = hashlib.sha256(confirmation.encode()).hexdigest()
                 capability = db.execute(
@@ -1585,7 +1547,7 @@ class OpenStore:
 
     @staticmethod
     def _reserve(db, sender, request, exempt, now, *, personal_limit=0):
-        """Share one atomic public budget across private and group AI requests."""
+        """Enforce the shared atomic public AI budget."""
         day = datetime.fromtimestamp(now, ZoneInfo("Asia/Shanghai")).date().isoformat()
         settings = db.execute("SELECT * FROM settings").fetchone()
         if settings["paused"]:
@@ -1678,14 +1640,6 @@ class OpenStore:
         """Bound completed metadata retention without deleting uncertain operations."""
         now = time.time() if now is None else now
         with self.connect(write=True) as db:
-            legacy_history = {
-                r["name"] for r in db.execute("PRAGMA table_info(chat_history)")
-            }
-            if "updated" in legacy_history:
-                # Compatibility cleanup only; all new AI history belongs to AstrBot.
-                db.execute("DELETE FROM chat_history WHERE updated<=?", (now - 900,))
-            elif legacy_history:
-                db.execute("DELETE FROM chat_history")
             db.execute(
                 "DELETE FROM calls WHERE created<? AND state IN ('completed','rejected','not_sent')",
                 (now - 90 * 86400,),

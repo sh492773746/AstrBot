@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 
 from astrbot.builtin_stars.wangshangliao_moderation import open_rpc
 from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import OpenCall, OpenRPC
@@ -517,7 +518,9 @@ async def test_rpc_review_keeps_existing_evidence_hold_conditions(
 
 
 @pytest.mark.asyncio
-async def test_readonly_members_and_activation_preserve_their_original_gates(rpc_scope):
+async def test_readonly_members_remain_available_but_private_activation_is_retired(
+    rpc_scope,
+):
     value, _, rows = rpc_scope
     tenant = value.store.tenant("99", "5")
     value.store.native_role("99", "5", tenant["epoch"], "GROUP_ROLE_MEMBER")
@@ -533,7 +536,9 @@ async def test_readonly_members_and_activation_preserve_their_original_gates(rpc
     )
     assert result["native_capability"]["state"] == "missing"
     assert {row["id"] for row in result["members"]} == {"1", "2"}
-    with pytest.raises(OpenError, match="inviter_unproven"):
+    with value.store.connect() as db:
+        capabilities_before = db.execute("SELECT * FROM capabilities").fetchall()
+    with pytest.raises(ValidationError, match="literal_error"):
         await rpc.dispatch(
             OpenCall(
                 action="activation_code",
@@ -545,14 +550,18 @@ async def test_readonly_members_and_activation_preserve_their_original_gates(rpc
         db.execute(
             "UPDATE tenants SET active=0,admission='verified' WHERE account='99' AND group_id='5'"
         )
-    result = await rpc.dispatch(
-        OpenCall(
-            action="activation_code",
-            actor="dashboard/root",
-            payload={"account": "99", "group_id": "5"},
+    with pytest.raises(ValidationError, match="literal_error"):
+        await rpc.dispatch(
+            OpenCall(
+                action="activation_code",
+                actor="dashboard/root",
+                payload={"account": "99", "group_id": "5"},
+            )
         )
-    )
-    assert result["code"] and result["expires_in"] == 600
+    with value.store.connect() as db:
+        assert (
+            db.execute("SELECT * FROM capabilities").fetchall() == capabilities_before
+        )
 
 
 @pytest.mark.asyncio

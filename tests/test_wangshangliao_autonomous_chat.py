@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from astrbot.builtin_stars.wangshangliao_moderation import group_ai
+from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
 from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from tests.test_wangshangliao_group_ai import fake_http, model_scope
 from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
@@ -411,7 +412,7 @@ async def test_native_at_history_is_isolated_by_account_group_member_and_mode(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("turns", [0, 1])
-async def test_native_at_uses_bounded_group_override_not_private_history_settings(
+async def test_native_at_uses_bounded_group_override_over_global_history_settings(
     rpc_scope, monkeypatch, turns
 ):
     from astrbot.builtin_stars.wangshangliao_moderation.conversation_profiles import (
@@ -422,7 +423,7 @@ async def test_native_at_uses_bounded_group_override_not_private_history_setting
     value, adapter, _ = rpc_scope
     _, persona = configure(value)
     persona["prompt"] = "EXACT_GROUP_STYLE"
-    save(value, "consultation", selection={**DEFAULT, "history_turns": 20})
+    save(value, "group", selection={**DEFAULT, "history_turns": 20})
     save(
         value,
         "group",
@@ -456,8 +457,9 @@ async def test_native_at_uses_bounded_group_override_not_private_history_setting
 
 
 @pytest.mark.asyncio
-async def test_private_profile_change_does_not_revoke_group_at_reply(
-    rpc_scope, monkeypatch
+@pytest.mark.parametrize("kind", ["consultation", "personal", "support"])
+async def test_rejected_private_profile_does_not_revoke_group_at_reply(
+    rpc_scope, monkeypatch, kind
 ):
     from astrbot.builtin_stars.wangshangliao_moderation.conversation_profiles import (
         DEFAULT,
@@ -466,6 +468,7 @@ async def test_private_profile_change_does_not_revoke_group_at_reply(
 
     value, adapter, _ = rpc_scope
     row = await model_scope(value, adapter)
+    before = value.profiles.resolve("group", "99", "5")
     barrier = (asyncio.Event(), asyncio.Event())
     requests = fake_http(monkeypatch, barrier=barrier)
     task = asyncio.create_task(
@@ -473,7 +476,10 @@ async def test_private_profile_change_does_not_revoke_group_at_reply(
     )
     await barrier[0].wait()
     try:
-        save(value, "consultation", selection={**DEFAULT, "history_turns": 0})
+        with pytest.raises(OpenError, match="^ai_profile_invalid$"):
+            save(value, kind, selection={**DEFAULT, "history_turns": 0})
+        assert value.profiles.resolve("group", "99", "5") == before
+        assert not value.profiles.rows()
     finally:
         barrier[1].set()
     await task

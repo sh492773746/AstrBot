@@ -154,11 +154,6 @@ def test_collector_transfer_preserves_ledger_proof_and_frozen_prices(store):
     assert migrated["scanned"] == 0
     assert migrated["error"] == "migration_verification_required"
     assert store.list_entries(CASHIER, "5")["total"] == 1
-    assert (
-        store.private_invitation_summaries("1", "bot-b", "100", ["5"])[0]["paid"]
-        == 1800
-    )
-    assert store.private_invitation_summaries("1", "bot-a", "99", ["5"]) == []
     scan(store, ("1", "2", "3", "4", "100"), [], bot="bot-b", account="100")
     assert row(store)["verification"] == "verified"
     assert row(store, "4")["eligible"] == 0
@@ -236,9 +231,6 @@ def test_collector_transfer_does_not_authorize_foreign_or_future_proof(
         store, OWNER, "5", "bot-a", "99", 1, replacement_roster()
     )
     assert store.list_entries(CASHIER, "5")["total"] == 0
-    assert (
-        store.private_invitation_summaries("1", "bot-b", "100", ["5"])[0]["total"] == 0
-    )
     scan(store, ("1", "2", "3", "4", "100"), [], bot="bot-b", account="100")
     with pytest.raises(CashbackError, match="qualification_required|not_payable"):
         pay(store)
@@ -282,9 +274,6 @@ def test_account_reconfiguration_without_transfer_cannot_inherit_proof(store):
         set(),
     )
     assert store.list_entries(CASHIER, "5")["total"] == 0
-    assert (
-        store.private_invitation_summaries("1", "bot-b", "100", ["5"])[0]["total"] == 0
-    )
     with pytest.raises(CashbackError, match="not_payable"):
         pay(store)
 
@@ -387,10 +376,6 @@ def test_migration_recovery_restores_only_selected_baselines(migration_recovery)
         uid: before[uid] for uid in ("1", "2", "3", "100")
     }
     assert store.list_entries(CASHIER, "5", "verifying")["total"] == 1
-    assert (
-        store.private_invitation_summaries("1", "bot-b", "100", ["5"])[0]["verifying"]
-        == 1
-    )
     with pytest.raises(CashbackError, match="recovery_entry_changed"):
         recover_cashback_migration_entries(
             store, OWNER, "5", "bot-a", "99", 2, roster, [item]
@@ -498,11 +483,6 @@ async def test_cashback_risk_90_percent_warning_then_second_burst_freezes(store)
             "AND inviter='1' ORDER BY detected"
         ).fetchall()
         assert [item["status"] for item in incidents] == ["warned", "blocked"]
-
-    summaries = store.private_invitation_summaries("1", "bot-a", "99", ["5"])
-    assert summaries[0]["risk_status"] == "blocked"
-    assert summaries[0]["pending"] == 0
-    assert summaries[0]["risk_blocked_count"] >= 1
 
     with store.connect(True) as db:
         db.execute(
@@ -741,7 +721,6 @@ def test_unproved_paid_owner_is_detached_without_repaying(store):
         db.execute("UPDATE evidence SET source='nim_notification'")
         db.execute("UPDATE entries SET verification='conflict' WHERE member='2'")
     assert store.invitation_summary("5", "1")["paid"] == 0
-    assert store.private_invitation_summaries("1", "bot-a", "99", ["5"])[0]["paid"] == 0
     assert detach_unverified_paid_inviters(store, OWNER, "5", 1, [select(store)]) == 1
     after = row(store)
     assert after["inviter"] == after["inviter_name"] == after["inviter_peer"] == ""
@@ -803,9 +782,6 @@ def test_later_rejoin_does_not_reassign_registered_payment(store, departed):
         assert after[field] == before[field]
     assert store.invitation_summary("5", "3")["paid"] == 0
     assert store.invitation_summary("5", "1")["paid"] == 1800
-    assert (
-        store.private_invitation_summaries("1", "bot-a", "99", ["5"])[0]["paid"] == 1800
-    )
 
 
 def test_baseline_and_old_history_never_qualify(store):
@@ -1629,9 +1605,6 @@ def test_withdrawal_does_not_skip_remaining_qualification(store, unqualified):
         assert after[field] == current[field]
     assert store.list_entries(CASHIER, "5")["payable_amount"] == 0
     assert store.invitation_summary("5", "1")["pending"] == 0
-    assert (
-        store.private_invitation_summaries("1", "bot-a", "99", ["5"])[0]["pending"] == 0
-    )
     with pytest.raises(
         CashbackError,
         match="qualification_required|not_payable|historical_price_unavailable",
@@ -2271,9 +2244,6 @@ def test_unassigned_view_and_exact_existing_inviter(assignment_store):
     scan(store, ("1", "2", "3"), [evidence(source="nim_notification")])
     assert row(store)["verification"] == "verified"
     assert row(store)["inviter"] == "1"
-    assert (
-        store.private_invitation_summaries("1", "bot-a", "99", ["5"])[0]["total"] == 2
-    )
     assert any(a["action"] == "inviter_assigned" for a in store.audit(OWNER, "5"))
     assert (
         assign(store, items=[{"id": before["id"], "version": before["version"]}])
@@ -2295,9 +2265,6 @@ def test_qualified_manual_assignment_transfers_pending_and_can_pay(assignment_st
     assert pay(store)["count"] == 1
     assert row(store)["state"] == "paid"
     assert store.invitation_summary("5", "1")["paid"] == 1800
-    assert (
-        store.private_invitation_summaries("1", "bot-a", "99", ["5"])[0]["paid"] == 1800
-    )
     restored = CashbackStore(store.path)
     assert row(restored)["state"] == "paid"
     scan(restored, ("1", "2", "3"), [evidence("3", "1", "known-inviter")])
@@ -2364,9 +2331,6 @@ def test_manual_paid_attribution_keeps_original_payment(assignment_store):
     ):
         assert after[key] == before[key]
     assert store.list_entries(CASHIER, "5", "pending")["total"] == 0
-    assert (
-        store.private_invitation_summaries("1", "bot-a", "99", ["5"])[0]["paid"] == 700
-    )
     with pytest.raises(CashbackError, match="qualification_required|not_payable"):
         pay(store)
 
@@ -3005,9 +2969,7 @@ def test_sender_cash_summary_flags_conflict_without_counting_payable(store):
 
 
 @pytest.mark.parametrize("unqualified", ["deadline", "price", "member_class"])
-def test_pending_payable_amount_agrees_across_page_group_and_private(
-    store, unqualified
-):
+def test_pending_payable_amount_agrees_across_page_and_group(store, unqualified):
     scan(store)
     with store.connect(True) as db:
         if unqualified == "deadline":
@@ -3028,9 +2990,6 @@ def test_pending_payable_amount_agrees_across_page_group_and_private(
     summary = store.invitation_summary("5", "1")
     assert summary["total"] == 1
     assert summary["pending"] == 0 and summary["review"] == 1
-    assert (
-        store.private_invitation_summaries("1", "bot-a", "99", ["5"])[0]["pending"] == 0
-    )
 
 
 @pytest.mark.parametrize("invalid_proof", ["operator", "account", "self_join"])
@@ -3048,9 +3007,6 @@ def test_chat_summaries_do_not_count_unproven_or_self_entered_members(
     summary = store.invitation_summary("5", "1")
     assert summary["total"] == 0
     assert summary["pending"] == 0 and summary["items"] == []
-    assert (
-        store.private_invitation_summaries("1", "bot-a", "99", ["5"])[0]["total"] == 0
-    )
     assert store.list_entries(CASHIER, "5")["payable_count"] == 0
 
 

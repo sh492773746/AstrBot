@@ -81,6 +81,8 @@ dashboard/bun.lock
 # Runtime state and credentials must never be included in this public fork.
 .pytest_cache/
 .ruff_cache/
+output/
+.playwright-cli/
 *.pyc
 *.db
 *.db-*

@@ -8,13 +8,16 @@ import {
   MessageSquareText,
   Network,
   Pause,
+  Plus,
   RefreshCw,
   Save,
   Settings2,
   ShieldCheck,
   TableProperties,
   Terminal,
+  Trash2,
   Users,
+  Video,
   Wallet,
   X,
 } from "@lucide/vue";
@@ -22,13 +25,14 @@ import ConversationExamples from "./ConversationExamples.vue";
 import ReferenceTables from "./ReferenceTables.vue";
 import Cashier from "./SettlementPanel.vue";
 import BusinessControls from "./BusinessControls.vue";
-import FriendApproval from "./FriendApproval.vue";
 import OperationsLog from "./OperationsLog.vue";
 import GroupManagers from "./GroupManagers.vue";
 import OpenService from "./OpenService.vue";
 import CommandHelp from "./CommandHelp.vue";
 import CurrentMutesPanel from "./CurrentMutesPanel.vue";
+import BulkRecallPanel from "./BulkRecallPanel.vue";
 import SpeechActivityPanel from "./SpeechActivityPanel.vue";
+import VideoRelayPanel from "./VideoRelayPanel.vue";
 import { getPlatformInstanceName } from "../../src/utils/platformInstanceName.mjs";
 
 type Policy = Record<string, any>;
@@ -38,10 +42,8 @@ type Bot = {
   name?: string;
   account_id?: string;
   enabled_groups?: string[];
-  reply_private?: boolean;
   reply_groups?: Record<string, boolean>;
   ai_routes?: {
-    admin_provider_id?: string;
     groups?: Record<string, string>;
   };
   moderation?: Policy;
@@ -71,9 +73,16 @@ type ActivityState = {
     invite_gate: number;
     contact: string;
     total_amount: string;
-    packet_mode: "prize" | "ordinary" | "lucky";
+    packet_mode: "prize" | "ordinary" | "lucky" | "tiered";
     by_invites: boolean;
     remarks: string;
+    entry_phrase: string;
+    prize_tiers: Array<{ amount: string; count: number }>;
+    reserved_members: Array<{ member: string; peer: string; name: string; amount: string }>;
+    start_at: string;
+    luckiest_bonus: string;
+    integer_packets: boolean;
+    draw_on_full: boolean;
   };
   invite_rate: string;
   invitation: {
@@ -129,6 +138,9 @@ const scheduleError = ref("");
 const notice = ref("");
 const managersDirty = ref(false);
 const settlementDirty = ref(false);
+const relayDirty = ref(false);
+const relayBusy = ref(false);
+const relayEpoch = ref(0);
 const form = ref<Policy>({});
 const original = ref("");
 const activityState = ref<ActivityState | null>(null);
@@ -143,9 +155,147 @@ const activityForm = ref<ActivityState["lottery"] & { invite_rate: string }>({
   packet_mode: "ordinary",
   by_invites: false,
   remarks: "",
+  entry_phrase: "参与抽奖",
+  prize_tiers: [],
+  reserved_members: [],
+  start_at: "",
+  luckiest_bonus: "0.00",
+  integer_packets: false,
+  draw_on_full: false,
   invite_rate: "0.00",
 });
 const activityOriginal = ref("");
+const activityControlling = ref(false);
+const activityControlRequest = ref("");
+const activityControlScope = ref("");
+const activityControlUnconfirmed = ref(false);
+const reservedQuery = ref("");
+const reservedTier = ref("");
+const reservedResults = ref<Array<{ member: string; peer: string; name: string }>>([]);
+const reservedChosen = ref("");
+const reservedSearching = ref(false);
+const reservedSearched = ref(false);
+let reservedSequence = 0;
+const activeLottery = computed(() => activityState.value?.current_lottery &&
+  ["scheduled", "schedule_blocked", "announcing", "open", "blocked", "drawing", "notice_unknown", "result_unknown"]
+    .includes(activityState.value.current_lottery.status));
+const tierSummary = computed(() => {
+  const tiers = activityForm.value.prize_tiers;
+  const count = tiers.reduce((sum, tier) => sum + Number(tier.count || 0), 0);
+  const cents = tiers.reduce(
+    (sum, tier) => sum + Math.round(Number(tier.amount || 0) * 100) * Number(tier.count || 0), 0,
+  );
+  const remainingCount = activityForm.value.capacity - count;
+  const remainingCents = Math.round(Number(activityForm.value.total_amount || 0) * 100) - cents;
+  return {
+    count, amount: (cents / 100).toFixed(2), remainingCount,
+    remainingAmount: (remainingCents / 100).toFixed(2),
+    invalid: count < 1 || remainingCount < 0
+      || remainingCents < remainingCount * (activityForm.value.integer_packets ? 100 : 1)
+      || (remainingCount === 0 && remainingCents !== 0),
+  };
+});
+function formatTiers(tiers: Array<{ amount: string; count: number }>) {
+  return tiers.map(tier => `${tier.count} × ${tier.amount}`).join(" / ");
+}
+function clearReservedSearch() {
+  reservedSequence++;
+  reservedResults.value = [];
+  reservedChosen.value = "";
+  reservedSearching.value = false;
+  reservedSearched.value = false;
+}
+async function searchReservedMembers() {
+  if (!bridge || !botId.value || !groupId.value || !reservedQuery.value.trim()
+    || !reservedTier.value || reservedSearching.value || activitySaving.value
+    || activityForm.value.packet_mode !== "tiered")
+    return;
+  activityError.value = "";
+  clearReservedSearch();
+  reservedSearching.value = true;
+  const search = reservedSequence;
+  const selectedBot = botId.value, selectedGroup = groupId.value, sequence = activitySequence;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const data = await Promise.race([
+      bridge.apiGet("lottery-members", {
+        bot_id: selectedBot,
+        group_id: selectedGroup,
+        query: reservedQuery.value.trim(),
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(
+          t("群成员查询超时，请稍后重试", "Member search timed out; please retry"),
+        )), 18000);
+      }),
+    ]);
+    if (search === reservedSequence && sequence === activitySequence
+      && selectedBot === botId.value && selectedGroup === groupId.value) {
+      reservedResults.value = data.members || [];
+      reservedSearched.value = true;
+    }
+  } catch (err) {
+    if (search === reservedSequence && sequence === activitySequence
+      && selectedBot === botId.value && selectedGroup === groupId.value)
+      activityError.value = err instanceof Error ? err.message : t("群成员搜索失败", "Member search failed");
+  } finally {
+    clearTimeout(timer);
+    if (search === reservedSequence) reservedSearching.value = false;
+  }
+}
+function addReservedMember() {
+  const member = reservedResults.value.find(item => item.member === reservedChosen.value);
+  const tier = activityForm.value.prize_tiers.find(item => item.amount === reservedTier.value);
+  if (!member || !tier || !Number.isFinite(Number(tier.amount)) || Number(tier.amount) <= 0) return;
+  if (activityForm.value.reserved_members.some(item => item.member === member.member)) {
+    activityError.value = t("同一成员只能指定一个固定档位", "A member can only hold one fixed tier");
+    return;
+  }
+  const used = activityForm.value.reserved_members.filter(item => item.amount === tier.amount).length;
+  if (used >= Number(tier.count)) {
+    activityError.value = t("该固定档位的指定人数已满", "This fixed tier has no reservation slots left");
+    return;
+  }
+  activityForm.value.reserved_members.push({ ...member, amount: tier.amount });
+  activityError.value = "";
+  reservedQuery.value = "";
+  clearReservedSearch();
+}
+function addPrizeTier() {
+  let amount = 288;
+  while (activityForm.value.prize_tiers.some(tier => Number(tier.amount) === amount)) amount++;
+  const tier = { amount: amount.toFixed(2), count: 1 };
+  activityForm.value.prize_tiers.push(tier);
+  if (!reservedTier.value) reservedTier.value = tier.amount;
+}
+function updatePrizeTierAmount(index: number, event: Event) {
+  const tier = activityForm.value.prize_tiers[index];
+  if (!tier) return;
+  const input = event.target as HTMLInputElement;
+  if (input.value && activityForm.value.prize_tiers.some(
+    (other, otherIndex) => otherIndex !== index && Number(other.amount) === Number(input.value),
+  )) {
+    input.value = tier.amount;
+    activityError.value = t("相同金额请合并到同一个档位", "Merge equal amounts into one tier");
+    return;
+  }
+  const previous = tier.amount;
+  tier.amount = input.value;
+  activityError.value = "";
+  for (const member of activityForm.value.reserved_members)
+    if (member.amount === previous) member.amount = tier.amount;
+  if (reservedTier.value === previous) reservedTier.value = tier.amount;
+}
+function removePrizeTier(index: number) {
+  const [removed] = activityForm.value.prize_tiers.splice(index, 1);
+  if (!removed) return;
+  activityError.value = "";
+  activityForm.value.reserved_members = activityForm.value.reserved_members
+    .filter(member => member.amount !== removed.amount);
+  if (!activityForm.value.prize_tiers.some(tier => tier.amount === reservedTier.value))
+    reservedTier.value = activityForm.value.prize_tiers[0]?.amount || "";
+  clearReservedSearch();
+}
 const scheduleState = ref<ScheduleState>({
   schedule: null,
   executions: [],
@@ -181,18 +331,20 @@ const activityDirty = computed(
 const groupPermissions = computed<string[]>(
   () => form.value.group?.permissions || [],
 );
-const busy = computed(() => loading.value || saving.value);
+const busy = computed(() => loading.value || saving.value || activityControlling.value || relayBusy.value);
 let auditSequence = 0;
 let activitySequence = 0;
 let scheduleSequence = 0;
 let unsubscribe: (() => void) | undefined;
+watch([botId, groupId, reservedQuery, () => activityForm.value.packet_mode],
+  clearReservedSearch, { flush: "sync" });
 
 const tabs = computed(() => [
   { id: "open", name: integrated.value ? t("开通", "Activation") : t("开放服务", "Open Service"), icon: Network },
   { id: "rules", name: t("规则", "Rules"), icon: ShieldCheck },
   { id: "business", name: t("群聊与运行", "Groups & Runtime"), icon: Settings2 },
-  { id: "friend-approval", name: t("好友申请", "Friend Requests"), icon: Users },
   { id: "speech-activity", name: t("发言统计", "Speech Activity"), icon: MessageSquareText },
+  { id: "video-relay", name: t("视频转发", "Video Relay"), icon: Video },
   { id: "settings", name: t("审核配置", "Moderation"), icon: Settings2 },
   { id: "permissions", name: t("群授权", "Group Grants"), icon: ShieldCheck },
   { id: "activities", name: t("玩家福利抽奖", "Player Lottery"), icon: Gift },
@@ -209,19 +361,16 @@ const tabs = computed(() => [
   },
   { id: "architecture", name: t("架构表", "Architecture"), icon: Network },
   { id: "matrix", name: t("权限表", "Permissions"), icon: TableProperties },
-  { id: "consultation", name: t("客服咨询", "Customer Service"), icon: MessageSquareText },
-  { id: "admin-guidance", name: t("管理员指引", "Admin Guidance"), icon: ShieldCheck },
   { id: "group-ai", name: t("群聊与热群", "Group AI"), icon: MessageSquareText },
   { id: "plans", name: t("套餐与额度", "Plans & Quotas"), icon: Wallet },
   { id: "model", name: t("模型与预算", "Model & Budget"), icon: ShieldCheck },
-  { id: "finance", name: t("结算授权", "Settlement Grants"), icon: ShieldCheck },
   { id: "runtime", name: t("服务总控", "Service Controls"), icon: Settings2 },
   { id: "open-audit", name: t("群管审计", "Management Audit"), icon: ClipboardList },
 ].filter(item => integrated.value ? !["business", "settings"].includes(item.id) : item.id !== "rules"));
 const sections = computed(() => [
-  { id: "groups", name: t("群管理", "Groups"), icon: Network, tabs: ["open", "rules", "business", "settings", "permissions", "friend-approval", "speech-activity"] },
-  { id: "ai", name: t("AI服务", "AI"), icon: MessageSquareText, tabs: ["consultation", "admin-guidance", "group-ai", "plans", "model"] },
-  { id: "finance", name: t("活动与财务", "Activities & Finance"), icon: Wallet, tabs: ["activities", "invite-rewards", "cashback", "finance"] },
+  { id: "groups", name: t("群管理", "Groups"), icon: Network, tabs: ["open", "rules", "business", "settings", "permissions", "speech-activity", "video-relay"] },
+  { id: "ai", name: t("AI服务", "AI"), icon: MessageSquareText, tabs: ["group-ai", "plans", "model"] },
+  { id: "finance", name: t("活动与财务", "Activities & Finance"), icon: Wallet, tabs: ["activities", "invite-rewards", "cashback"] },
   { id: "runtime", name: t("运行与日志", "Runtime & Logs"), icon: CalendarClock, tabs: ["runtime", "schedule", "audit", "operations", "open-audit"] },
   { id: "help", name: t("使用帮助", "Help"), icon: Terminal, tabs: ["commands", "examples", "architecture", "matrix"] },
 ]);
@@ -230,8 +379,8 @@ const sectionTabs = computed(() => section.value.tabs
   .flatMap(id => tabs.value.filter(item => item.id === id)));
 const lastTabs = ref<Record<string, string>>({});
 const openViews: Record<string, string> = {
-  open: "groups", rules: "rules", consultation: "consultation", "admin-guidance": "admin-guidance", "group-ai": "group-ai",
-  plans: "plans", model: "model", finance: "finance", runtime: "runtime", "open-audit": "audit",
+  open: "groups", rules: "rules", "group-ai": "group-ai",
+  plans: "plans", model: "model", runtime: "runtime", "open-audit": "audit",
 };
 const openVisible = computed(() => tab.value in openViews);
 const openView = ref("groups");
@@ -240,6 +389,7 @@ watch(tab, value => {
   if (value in openViews) openView.value = openViews[value];
 }, { immediate: true });
 function selectTab(value: string) {
+  if (!tabs.value.some(item => item.id === value)) return;
   guard(() => { fillActivityForm(); tab.value = value; });
 }
 function navigateTabs(event: KeyboardEvent) {
@@ -275,7 +425,7 @@ const commands = computed(() => [
   { command: "邀请奖励", action: "invite_rewards", public: true },
   { command: "公告 公告内容", action: "announce" },
   { command: "解禁 @成员（或：解除禁言 @成员）", action: "unmute" },
-  { command: "禁言名单（私聊选群后查询当前禁言成员）", action: "unmute" },
+  { command: "禁言名单", action: "unmute" },
   { command: "定时禁言 23:00 08:00", action: "mute_all" },
 ]);
 const activePolicy = computed(() => bot.value?.moderation || {});
@@ -316,6 +466,8 @@ function label(value: string): string {
     not_online: ["连接不可用，未执行", "Connection unavailable"],
     progressive_not_authorized: ["递进处罚授权已变化", "Progressive sanction grant changed"],
     operation_failed: ["执行异常", "Execution error"],
+    lottery_bonus_invalid: ["人气王额外奖励无效，已暂停开奖", "Invalid luckiest bonus; draw blocked"],
+    lottery_reserved_member_unavailable: ["指定成员未有效报名或身份已变化，已暂停开奖", "A reserved member did not enter or changed identity; draw blocked"],
     validation_failed: ["提交校验未通过", "Submission validation failed"],
     transport: ["平台连接异常", "Provider connection error"],
     failed: ["失败", "Failed"],
@@ -349,6 +501,8 @@ function label(value: string): string {
     external_promotion: ["外部引流", "External promotion"],
     adult_promotion: ["成人推广", "Adult promotion"],
     mute_keyword: ["禁言关键词", "Mute keyword"],
+    blacklist_keyword: ["关键词拉黑并禁言", "Keyword blacklist and mute"],
+    consecutive_digits: ["连续6位以上数字（禁言1分钟）", "6+ consecutive digits (1-minute mute)"],
     kick_keyword: ["高风险关键词", "High-risk keyword"],
     none: ["无", "None"],
     warned: ["已警告", "Warned"],
@@ -359,7 +513,15 @@ function label(value: string): string {
     prohibited_image: ["禁止图片", "Prohibited image"],
     prohibited_video: ["禁止视频", "Prohibited video"],
     prohibited_forward: ["禁止合并聊天记录", "Prohibited merged chat"],
-    review_only: ["仅记录，未处罚", "Recorded only"],
+    restricted_video: ["非白名单视频", "Restricted video"],
+    restricted_forward: ["合并聊天记录限制", "Merged chat restriction"],
+    image_qr: ["二维码图片", "QR code image"],
+    image_digits: ["含数字图片", "Image with digits"],
+    review_only: ["旧记录未确认执行结果", "Legacy outcome unconfirmed"],
+    preflight_failed: ["执行前核验失败", "Preflight verification failed"],
+    execution_rejected: ["执行被拒绝", "Execution rejected"],
+    recall_pending: ["撤回清理排队中", "Recall cleanup queued"],
+    business_rejected: ["平台拒绝请求", "Provider rejected the request"],
     identity_unverified: ["成员身份待核验", "Member identity unverified"],
     administrator_exempt: ["群管理免自动处罚", "Administrator exempt"],
     historical_or_unknown_time: ["历史消息或时间待核验", "Historical or unverified time"],
@@ -369,6 +531,14 @@ function label(value: string): string {
     open: ["报名中", "Open"],
     blocked: ["暂停待核查", "Blocked for review"],
     drawing: ["开奖中", "Drawing"],
+    scheduled: ["待定时发布", "Scheduled"],
+    schedule_blocked: ["定时发布已阻止", "Scheduled publication blocked"],
+    scheduled_start_missed: ["错过预约时刻超过60秒；请取消后重新预约，不自动补发", "More than 60 seconds late; cancel and reschedule. No catch-up sends."],
+    scheduled_start_verification_failed: ["到点成员权限核验失败；请核对后取消并重新预约", "Member verification failed; check permissions, cancel and reschedule."],
+    activity_owner_revoked: ["创建者已失去管理授权；请取消后由当前管理员重新预约", "Creator authorization revoked; cancel and reschedule as a current administrator."],
+    activity_proactive_not_authorized: ["本群未授权主动发送；请核对后重新预约", "Proactive group sending is not authorized; check grants and reschedule."],
+    group_native_admin_required: ["机器人不是本群管理员；请先授予管理权限", "The bot is not a group administrator; grant the required role first."],
+    activity_scope: ["群或机器人当前未启用；请核对后取消并重新预约", "Group or bot is not active; check the scope, cancel and reschedule."],
     finished: ["已开奖", "Finished"],
     cancelled: ["已取消", "Cancelled"],
     notice_unknown: ["开场通知结果未知", "Announcement outcome unknown"],
@@ -418,23 +588,23 @@ function fillForm() {
             bot.value?.ai_routes?.groups?.[groupId.value] || "",
         }
       : {},
-    reply_private: bot.value?.reply_private !== false,
     enabled_groups: [...(bot.value?.enabled_groups || [])],
     proactive_send: {
       enabled: bot.value?.proactive_send?.enabled === true,
-      targets: [...(bot.value?.proactive_send?.targets || [])],
+      targets: (bot.value?.proactive_send?.targets || []).filter(target => !target.startsWith("private/")),
     },
     developer_test: {
       sender_instance: "",
       groups: [],
-      scopes: ["private_commands", "private_ai"],
+      scopes: ["group_commands", "group_ai", "group_rules"],
       keywords: [],
       seconds: 300,
       budget: 3,
       ...(bot.value?.developer_test || {}),
     },
-    admin_provider_id: bot.value?.ai_routes?.admin_provider_id || "",
   };
+  form.value.developer_test.scopes = form.value.developer_test.scopes
+    .filter((scope: string) => ["group_commands", "group_ai", "group_rules"].includes(scope));
   original.value = JSON.stringify(form.value);
 }
 function fillActivityForm() {
@@ -450,8 +620,18 @@ function fillActivityForm() {
     packet_mode: settings?.lottery.prize ? settings.lottery.packet_mode || "prize" : "ordinary",
     by_invites: settings?.lottery.by_invites ?? Boolean(settings?.lottery.invite_gate),
     remarks: settings?.lottery.remarks || "",
+    entry_phrase: settings?.lottery.entry_phrase || "参与抽奖",
+    prize_tiers: (settings?.lottery.prize_tiers || []).map(tier => ({ ...tier })),
+    reserved_members: (settings?.lottery.reserved_members || []).map(member => ({ ...member })),
+    start_at: settings?.lottery.start_at || "",
+    luckiest_bonus: settings?.lottery.luckiest_bonus ?? "0.00",
+    integer_packets: settings?.lottery.integer_packets ?? false,
+    draw_on_full: settings?.lottery.draw_on_full ?? false,
     invite_rate: settings?.invite_rate ?? "0.00",
   };
+  reservedQuery.value = "";
+  reservedTier.value = activityForm.value.prize_tiers[0]?.amount || "";
+  clearReservedSearch();
   activityOriginal.value = JSON.stringify(activityForm.value);
 }
 async function loadAudit() {
@@ -481,6 +661,7 @@ async function loadAudit() {
 }
 async function loadActivities() {
   const sequence = ++activitySequence;
+  clearReservedSearch();
   activityError.value = "";
   activityState.value = null;
   activityOriginal.value = "";
@@ -496,6 +677,7 @@ async function loadActivities() {
     });
     if (sequence === activitySequence) {
       activityState.value = data;
+      activityControlUnconfirmed.value = false;
       fillActivityForm();
     }
   } catch (err) {
@@ -547,7 +729,7 @@ async function reload() {
     const wasIntegrated = integrated.value;
     integrated.value = data.open_mode === "integrated";
     if (integrated.value && !wasIntegrated) tab.value = "open";
-    bots.value = data.bots;
+    bots.value = data.bots.filter((item: Bot) => item.enable !== false);
     providers.value = data.providers;
     if (!bots.value.some((item) => item.id === botId.value))
       botId.value = bots.value[0]?.id || "";
@@ -566,7 +748,15 @@ async function reload() {
 }
 function guard(action: () => void) {
   notice.value = "";
-  if (dirty.value || activityDirty.value || managersDirty.value || settlementDirty.value) pending.value = action;
+  if (dirty.value || activityDirty.value || managersDirty.value || settlementDirty.value || relayDirty.value) {
+    pending.value = () => {
+      if (relayDirty.value) {
+        relayEpoch.value++;
+        relayDirty.value = false;
+      }
+      action();
+    };
+  }
   else action();
 }
 function select(event: Event, kind: "bot" | "group") {
@@ -604,11 +794,9 @@ async function save() {
     const proposal = JSON.parse(JSON.stringify(form.value));
     if (integrated.value) {
       proposal.policy = {};
-      delete proposal.admin_provider_id;
       delete proposal.enabled_groups;
       delete proposal.proactive_send;
       delete proposal.developer_test;
-      delete proposal.reply_private;
     }
     if (bot.value.business_active === undefined) {
       delete proposal.enabled_groups;
@@ -640,7 +828,7 @@ async function save() {
 async function saveActivities() {
   if (
     !activityState.value || !bridge || busy.value || activityLoading.value
-    || activitySaving.value || !activityDirty.value
+    || activitySaving.value || activityControlling.value || !activityDirty.value
   )
     return;
   const sequence = activitySequence, selectedBot = botId.value, selectedGroup = groupId.value;
@@ -664,6 +852,17 @@ async function saveActivities() {
         packet_mode: activityForm.value.packet_mode,
         by_invites: activityForm.value.by_invites,
         remarks: activityForm.value.remarks,
+        entry_phrase: activityForm.value.entry_phrase,
+        start_at: activityForm.value.start_at,
+        luckiest_bonus: activityForm.value.packet_mode === "lucky" ? activityForm.value.luckiest_bonus : "0.00",
+        integer_packets: activityForm.value.packet_mode !== "prize" && activityForm.value.integer_packets,
+        draw_on_full: activityForm.value.packet_mode !== "prize" && activityForm.value.draw_on_full,
+        prize_tiers: activityForm.value.packet_mode === "tiered"
+          ? activityForm.value.prize_tiers.map(tier => ({ amount: tier.amount, count: tier.count })) : [],
+        reserved_members: activityForm.value.packet_mode === "tiered"
+          ? activityForm.value.reserved_members.map(member => ({
+              member: member.member, peer: member.peer, amount: member.amount,
+            })) : [],
       } }),
     });
     if (sequence !== activitySequence || selectedBot !== botId.value || selectedGroup !== groupId.value)
@@ -679,6 +878,43 @@ async function saveActivities() {
           : t("活动参数保存失败", "Activity settings could not be saved");
   } finally {
     activitySaving.value = false;
+  }
+}
+
+async function controlLottery(action: "start" | "cancel") {
+  if (!bridge || !activityState.value || activityDirty.value || busy.value || activityLoading.value || activitySaving.value || activityControlUnconfirmed.value)
+    return;
+  const selectedBot = botId.value, selectedGroup = groupId.value, sequence = activitySequence;
+  if (action === "cancel" && !window.confirm(t("取消当前活动？已生成的开奖结果不会重抽。", "Cancel this draw? Existing results are never rerolled.")))
+    return;
+  activityControlling.value = true;
+  const scope = JSON.stringify([selectedBot, selectedGroup, action]);
+  if (activityControlScope.value !== scope) {
+    activityControlRequest.value = "";
+    activityControlScope.value = scope;
+  }
+  activityControlRequest.value ||= crypto.randomUUID();
+  activityError.value = "";
+  try {
+    const result = await bridge.apiPost("lottery-control", {
+      bot_id: selectedBot, group_id: selectedGroup, revision: activityState.value.revision,
+      operation_id: activityControlRequest.value, action,
+      lottery_id: action === "cancel" ? activityState.value.current_lottery?.id || "" : "",
+    });
+    if (sequence !== activitySequence || selectedBot !== botId.value || selectedGroup !== groupId.value)
+      return;
+    activityState.value = result.state;
+    fillActivityForm();
+    notice.value = result.result;
+    activityControlRequest.value = "";
+    activityControlScope.value = "";
+  } catch (err) {
+    if (sequence === activitySequence && selectedBot === botId.value && selectedGroup === groupId.value) {
+      activityControlUnconfirmed.value = true;
+      activityError.value = (err instanceof Error ? err.message + " " : "") + t("请刷新核对当前活动；不会自动重试。", "Refresh the round state; no automatic retry.");
+    }
+  } finally {
+    activityControlling.value = false;
   }
 }
 async function pauseSchedule() {
@@ -730,6 +966,7 @@ onMounted(async () => {
 });
 onBeforeUnmount(() => {
   unsubscribe?.();
+  clearReservedSearch();
   auditSequence++;
   activitySequence++;
   scheduleSequence++;
@@ -804,6 +1041,7 @@ onBeforeUnmount(() => {
           >{{ t("机器人实例", "Bot instance")
           }}<select
             :value="botId"
+            :aria-label="t('机器人实例', 'Bot instance')"
             :disabled="busy"
             @change="select($event, 'bot')"
           >
@@ -816,6 +1054,7 @@ onBeforeUnmount(() => {
           >{{ t("当前群", "Current group")
           }}<select
             :value="groupId"
+            :aria-label="t('当前群', 'Current group')"
             :disabled="busy || !groupOptions.length"
             @change="select($event, 'group')"
           >
@@ -869,13 +1108,17 @@ onBeforeUnmount(() => {
           }}</strong>
         </div>
       </div>
+      <VideoRelayPanel v-if="tab === 'video-relay' && bridge" id="panel-video-relay"
+        :key="`${botId}/${groupId}/${relayEpoch}`"
+        role="tabpanel" aria-labelledby="tab-video-relay" :bot-id="botId" :group-id="groupId"
+        :group-name="bot.group_names?.[groupId]" :locale="locale" :bridge="bridge"
+        @dirty="relayDirty = $event" @busy="relayBusy = $event" />
       <form @submit.prevent="['settings', 'permissions', 'business'].includes(tab) && save()">
         <fieldset :disabled="busy" class="form-body">
           <OpenService v-if="bridge" v-show="openVisible" :id="openVisible ? `panel-${tab}` : 'panel-open-service-hidden'"
             role="tabpanel" :aria-labelledby="openVisible ? `tab-${tab}` : undefined" :bridge="bridge" :view="openView" />
           <p v-if="['business', 'operations'].includes(tab) && bot.business_active === undefined" role="status">{{ t("此实例尚未切换到插件配置服务。", "This instance has not switched to the plugin policy service.") }}</p>
           <BusinessControls v-if="tab === 'business' && bridge && bot.business_active !== undefined" id="panel-business" role="tabpanel" aria-labelledby="tab-business" :bot="bot" :form="form" :group-id="groupId" :bridge="bridge" :t="t" />
-          <FriendApproval v-if="tab === 'friend-approval' && bridge" id="panel-friend-approval" role="tabpanel" aria-labelledby="tab-friend-approval" :bot="bot" :bridge="bridge" :t="t" />
           <OperationsLog v-if="tab === 'operations' && bridge && bot.business_active !== undefined" id="panel-operations" role="tabpanel" aria-labelledby="tab-operations" :bot-id="botId" :bridge="bridge" :t="t" />
           <SpeechActivityPanel v-if="tab === 'speech-activity' && bridge" id="panel-speech-activity"
             role="tabpanel" aria-labelledby="tab-speech-activity" :bot-id="botId" :group-id="groupId"
@@ -889,25 +1132,8 @@ onBeforeUnmount(() => {
             <h2>{{ t("AI 对话模型路由", "AI conversation routing") }}</h2>
             <div class="field-grid">
               <label class="wide"
-                >{{ t("管理员私聊群管模型", "Admin private-management model")
-                }}<select v-model="form.admin_provider_id">
-                  <option value="">
-                    {{
-                      t("沿用当前会话模型", "Use current conversation model")
-                    }}
-                  </option>
-                  <option
-                    v-for="item in providers"
-                    :key="item.id"
-                    :value="item.id"
-                  >
-                    {{ item.id }} · {{ item.model }}
-                  </option>
-                </select></label
-              >
-              <label class="wide"
                 >{{
-                  t("本群 @ 客服模型", "Customer-service model for this group")
+                  t("本群 @ 对话模型", "Conversation model for this group")
                 }}<select v-model="form.group.customer_provider_id">
                   <option value="">
                     {{
@@ -930,8 +1156,8 @@ onBeforeUnmount(() => {
             <p class="field-note">
               {{
                 t(
-                  "客服模型仍使用本群现有的人格与知识库；管理员群管模型只在管理员私聊生效。违规审核模型在下方单独设置。",
-                  "Customer service keeps this group's persona and knowledge base. The admin model applies only in admin private chats; moderation has a separate model below.",
+                  "群聊模型使用本群现有的人格与知识库；违规审核模型在下方单独设置。",
+                  "Group conversations use this group's persona and knowledge base; moderation has a separate model below.",
                 )
               }}
             </p>
@@ -1090,18 +1316,6 @@ onBeforeUnmount(() => {
               </label>
             </div>
             <h2>{{ t("回复设置", "Replies") }}</h2>
-            <div class="switch-row">
-              <label for="private-reply">{{
-                t("私聊回复", "Private replies")
-              }}</label
-              ><input
-                id="private-reply"
-                v-model="form.reply_private"
-                type="checkbox"
-                role="switch"
-                class="switch"
-              />
-            </div>
             <div v-if="groupId" class="switch-row">
               <label for="group-reply">{{
                 t("当前群回复", "Current group replies")
@@ -1229,7 +1443,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="icon-button"
-              :disabled="activityLoading || activitySaving || !groupId"
+              :disabled="activityLoading || activitySaving || activityControlling || !groupId"
               :title="t('刷新活动状态', 'Refresh activity state')"
               :aria-label="t('刷新活动状态', 'Refresh activity state')"
               @click="guard(() => loadActivities())"
@@ -1253,7 +1467,7 @@ onBeforeUnmount(() => {
                     : t("无进行中活动", "No active draw")
                 }}</strong>
               </div>
-              <div><span>{{ t("参与口令", "Entry command") }}</span><strong>参与玩家福利抽奖</strong></div>
+              <div><span>{{ t("参与口令", "Entry command") }}</span><strong>{{ activityState.current_lottery?.entry_phrase || activityState.lottery.entry_phrase || "参与抽奖" }}</strong></div>
             </div>
             <dl
               v-if="activityState.current_lottery"
@@ -1265,7 +1479,15 @@ onBeforeUnmount(() => {
               </div>
               <div v-if="activityState.current_lottery.packet_mode && activityState.current_lottery.packet_mode !== 'prize'">
                 <dt>{{ t("红包总金额", "Packet total") }}</dt>
-                <dd>{{ activityState.current_lottery.total_amount }} {{ t("元", "CNY") }} · {{ activityState.current_lottery.packet_mode === 'lucky' ? t("拼手气", "Lucky split") : t("普通红包", "Equal split") }}</dd>
+                <dd>{{ activityState.current_lottery.total_amount }} {{ t("元", "CNY") }} · {{ activityState.current_lottery.packet_mode === 'tiered' ? t("分档拼手气", "Fixed tiers + random") : activityState.current_lottery.packet_mode === 'lucky' ? t("拼手气", "Lucky split") : t("普通红包", "Equal split") }}</dd>
+              </div>
+              <div v-if="activityState.current_lottery.prize_tiers?.length">
+                <dt>{{ t("本期固定档位", "Current fixed tiers") }}</dt>
+                <dd>{{ formatTiers(activityState.current_lottery.prize_tiers) }}</dd>
+              </div>
+              <div v-if="Number(activityState.current_lottery.luckiest_bonus) > 0">
+                <dt>{{ t("人气王额外奖励", "Luckiest winner bonus") }}</dt>
+                <dd>{{ activityState.current_lottery.luckiest_bonus }} {{ t("元（原奖池外）", "CNY (outside packet pool)") }}</dd>
               </div>
               <div>
                 <dt>{{ t("报名人数", "Entries") }}</dt>
@@ -1278,8 +1500,12 @@ onBeforeUnmount(() => {
                 </dd>
               </div>
               <div>
-                <dt>{{ t("开奖时间", "Draw time") }}</dt>
-                <dd>{{ date(activityState.current_lottery.ends) }}</dd>
+                <dt>{{ t("开始时间（北京时间）", "Start time (Beijing)") }}</dt>
+                <dd>{{ activityState.current_lottery.starts ? date(activityState.current_lottery.starts) : t("立即发布", "Immediate publication") }}</dd>
+              </div>
+              <div>
+                <dt>{{ t("开奖时间（北京时间）", "Draw time (Beijing)") }}</dt>
+                <dd>{{ activityState.current_lottery.draw_on_full ? t("报满设定人数后公布", "Publish when full") : activityState.current_lottery.status === "schedule_blocked" ? t("尚未发布，无开奖时间", "Not published; no draw time") : date(activityState.current_lottery.ends) }}{{ activityState.current_lottery.status === "scheduled" && !activityState.current_lottery.draw_on_full ? t("（预计）", " (estimated)") : "" }}</dd>
               </div>
               <div>
                 <dt>{{ t("领奖联系人", "Claim contact") }}</dt>
@@ -1298,10 +1524,14 @@ onBeforeUnmount(() => {
                   <dt>{{ t("未领取退回（未支出）", "Unclaimed (unspent)") }}</dt>
                   <dd>{{ activityState.current_lottery.capacity - activityState.current_lottery.allocated_count }} {{ t("份", "packets") }} · {{ activityState.current_lottery.unclaimed_amount }} {{ t("元", "CNY") }}</dd>
                 </div>
+                <div v-if="Number(activityState.current_lottery.luckiest_bonus) > 0">
+                  <dt>{{ t("额外奖励待发放／本期待发放合计", "Bonus allocated / total payable") }}</dt>
+                  <dd>{{ activityState.current_lottery.bonus_allocated_amount }} / {{ activityState.current_lottery.total_payable_amount }} {{ t("元", "CNY") }}</dd>
+                </div>
               </template>
               <div v-if="activityState.current_lottery.error">
                 <dt>{{ t("活动异常", "Activity issue") }}</dt>
-                <dd>{{ activityState.current_lottery.error }}</dd>
+                <dd>{{ label(activityState.current_lottery.error) }}</dd>
               </div>
             </dl>
             <h2>{{ t("下一期抽奖参数", "Next lottery settings") }}</h2>
@@ -1318,11 +1548,28 @@ onBeforeUnmount(() => {
                 <select v-model="activityForm.packet_mode" :aria-label="t('红包类型', 'Packet type')">
                   <option value="ordinary">{{ t("普通红包", "Equal split") }}</option>
                   <option value="lucky">{{ t("拼手气", "Lucky split") }}</option>
+                  <option value="tiered">{{ t("分档拼手气", "Fixed tiers + random") }}</option>
                   <option v-if="activityState.lottery.packet_mode === 'prize'" value="prize">{{ t("原有奖品抽奖", "Legacy prize draw") }}</option>
                 </select>
               </label>
+              <label>{{ t("报名口令（整句）", "Entry phrase (exact)") }}
+                <input v-model="activityForm.entry_phrase" type="text" minlength="1" maxlength="32" required />
+              </label>
               <label v-if="activityForm.packet_mode !== 'prize'">{{ t("总金额（元）", "Total amount (CNY)") }}
-                <input v-model="activityForm.total_amount" type="number" min="0.01" max="999999.99" step="0.01" required />
+                <input v-model="activityForm.total_amount" type="number" :min="activityForm.integer_packets ? 1 : 0.01" max="999999.99" :step="activityForm.integer_packets ? 1 : 0.01" required />
+              </label>
+              <label v-if="activityForm.packet_mode !== 'prize'" class="check">
+                <input v-model="activityForm.integer_packets" type="checkbox" />
+                {{ t("仅整数元（每份至少1元）", "Whole yuan only (minimum CNY 1)") }}
+              </label>
+              <label v-if="activityForm.packet_mode !== 'prize'">{{ t("开奖方式", "Draw trigger") }}
+                <select v-model="activityForm.draw_on_full" :aria-label="t('开奖方式', 'Draw trigger')">
+                  <option :value="false">{{ t("倒计时结束", "Countdown deadline") }}</option>
+                  <option :value="true">{{ t("报满人数", "When full") }}</option>
+                </select>
+              </label>
+              <label v-if="activityForm.packet_mode === 'lucky'">{{ t("人气王额外奖励（元，0为不加奖）", "Luckiest winner bonus (CNY, 0 = off)") }}
+                <input v-model="activityForm.luckiest_bonus" type="number" min="0" max="999999.99" :step="activityForm.integer_packets ? 1 : 0.01" required />
               </label>
               <label
                 >{{ t("领奖联系人", "Claim contact")
@@ -1343,6 +1590,14 @@ onBeforeUnmount(() => {
                   required
               /></label>
               <label
+                >{{ t("开始时间（北京时间，留空立即发送）", "Start time (Beijing, blank = immediate)")
+                }}<input
+                  v-model="activityForm.start_at"
+                  type="datetime-local"
+                  step="60"
+                />
+              </label>
+              <label v-if="!activityForm.draw_on_full || activityForm.packet_mode === 'prize'"
                 >{{ t("倒计时（分钟）", "Countdown (minutes)")
                 }}<input
                   v-model.number="activityForm.duration_minutes"
@@ -1381,13 +1636,102 @@ onBeforeUnmount(() => {
                   :placeholder="t('例如：须使用指定头像，昵称包含活动标识；领奖时由管理员核验。', 'For example: use the required avatar and event name tag; verified by the claim administrator.')" />
               </label>
             </div>
+            <dl v-if="activityForm.packet_mode === 'lucky' && Number(activityForm.luckiest_bonus) > 0"
+              class="policy-details" aria-live="polite">
+              <div><dt>{{ t("人气王", "Luckiest winner") }}</dt><dd>{{ t("本期最高红包者；并列随机选1人", "Highest packet; one randomly chosen if tied") }}</dd></div>
+              <div><dt>{{ t("总预算（红包＋额外奖励）", "Total budget (packets + bonus)") }}</dt>
+                <dd>{{ ((Math.round(Number(activityForm.total_amount || 0) * 100) + Math.round(Number(activityForm.luckiest_bonus || 0) * 100)) / 100).toFixed(2) }} {{ t("元", "CNY") }}</dd>
+              </div>
+            </dl>
+            <p class="message">
+              {{ t("活动开始后，群员发送报名口令即可参与。", "Members enter using the entry phrase after publication.") }}
+            </p>
+            <template v-if="activityForm.packet_mode === 'tiered'">
+              <div class="section-heading">
+                <h3>{{ t("固定金额档位", "Fixed amount tiers") }}</h3>
+                <button type="button" :disabled="activityForm.prize_tiers.length >= 10"
+                  @click="addPrizeTier">
+                  <Plus :size="16" />{{ t("添加档位", "Add tier") }}
+                </button>
+              </div>
+              <div v-for="(tier, index) in activityForm.prize_tiers" :key="index" class="lottery-tier-row">
+                <label>{{ t("每份金额（元）", "Amount per packet (CNY)") }}
+                  <input :value="tier.amount" type="number" :min="activityForm.integer_packets ? 1 : 0.01" max="999999.99" :step="activityForm.integer_packets ? 1 : 0.01" required @input="updatePrizeTierAmount(index, $event)" />
+                </label>
+                <label>{{ t("份数", "Packets") }}
+                  <input v-model.number="tier.count" type="number" min="1" max="100" step="1" required />
+                </label>
+                <button type="button" class="icon-button"
+                  :title="t('删除档位', 'Remove tier')" :aria-label="t('删除档位', 'Remove tier')"
+                  @click="removePrizeTier(index)"><Trash2 :size="17" /></button>
+              </div>
+              <dl class="policy-details" :class="{ warning: tierSummary.invalid }" aria-live="polite">
+                <div><dt>{{ t("固定份额", "Fixed allocation") }}</dt><dd>{{ tierSummary.count }} × {{ t("份", "packets") }} · {{ tierSummary.amount }} {{ t("元", "CNY") }}</dd></div>
+                <div><dt>{{ t("剩余随机份额", "Remaining random allocation") }}</dt><dd>{{ tierSummary.remainingCount }} × {{ t("份", "packets") }} · {{ tierSummary.remainingAmount }} {{ t("元", "CNY") }}</dd></div>
+              </dl>
+              <div class="section-heading lottery-reservation-heading">
+                <h3>{{ t("指定档位成员（选填）", "Reserved tier members (optional)") }}</h3>
+              </div>
+              <div class="lottery-reservation-search">
+                <label>{{ t("对应固定档位", "Fixed tier") }}
+                  <select v-model="reservedTier" :aria-label="t('指定成员对应固定档位', 'Reserved member fixed tier')">
+                    <option v-for="tier in activityForm.prize_tiers" :key="tier.amount" :value="tier.amount">
+                      {{ tier.amount }} {{ t("元", "CNY") }} · {{ tier.count }} {{ t("份", "packets") }}
+                    </option>
+                  </select>
+                </label>
+                <div class="lottery-member-query">
+                  <label>{{ t("当前群成员", "Current group member") }}
+                    <input v-model="reservedQuery" type="search" maxlength="64"
+                      :placeholder="t('输入名称或UID', 'Name or UID')" autocomplete="off"
+                      @keydown.enter.prevent="searchReservedMembers" />
+                  </label>
+                  <button type="button" :disabled="reservedSearching || !reservedQuery.trim() || !reservedTier" @click="searchReservedMembers">
+                    <LoaderCircle v-if="reservedSearching" :size="16" class="spin" />
+                    <Users v-else :size="16" />{{ t("搜索", "Search") }}
+                  </button>
+                </div>
+              </div>
+              <p v-if="reservedSearched && !reservedResults.length" class="message" role="status">
+                {{ t("未找到可参与抽奖的当前群成员", "No eligible current group members found") }}
+              </p>
+              <div v-if="reservedResults.length" class="lottery-member-results" role="radiogroup"
+                :aria-label="t('指定成员搜索结果', 'Reserved member search results')">
+                <label v-for="member in reservedResults" :key="member.member">
+                  <input v-model="reservedChosen" type="radio" name="reserved-lottery-member" :value="member.member" />
+                  <span>{{ member.name }}<small>UID {{ member.member }}</small></span>
+                </label>
+                <button type="button" :disabled="!reservedChosen || !reservedTier" @click="addReservedMember">
+                  <Plus :size="16" />{{ t("加入指定方案", "Add reservation") }}
+                </button>
+              </div>
+              <ul v-if="activityForm.reserved_members.length" class="lottery-reserved-members">
+                <li v-for="member in activityForm.reserved_members" :key="member.member">
+                  <span><strong>{{ member.name }}</strong><small>UID {{ member.member }} · {{ member.amount }} {{ t("元", "CNY") }}</small></span>
+                  <button type="button" class="icon-button" :title="t('移除指定成员', 'Remove reservation')"
+                    :aria-label="t(`移除${member.name}的指定档位`, `Remove ${member.name}'s reserved tier`)"
+                    @click="activityForm.reserved_members = activityForm.reserved_members.filter(item => item.member !== member.member)">
+                    <Trash2 :size="17" />
+                  </button>
+                </li>
+              </ul>
+              <p v-else class="message">{{ t("未指定成员，全部档位按原规则随机分配。", "No reservations; all tiers use the default random allocation.") }}</p>
+            </template>
             <div class="save-bar">
               <span :class="{ warning: activityDirty }">{{
                 activityDirty
                   ? t("活动参数有未保存更改", "Unsaved activity changes")
                   : t("活动参数已同步", "Activity settings are current")
               }}</span>
-              <div>
+              <div class="lottery-controls">
+                <button v-if="!activeLottery" type="button" class="primary"
+                  :disabled="activityDirty || activitySaving || activityControlling || activityControlUnconfirmed"
+                  @click="controlLottery('start')"><CalendarClock :size="17" />
+                  {{ activityForm.start_at ? t("预约发布", "Schedule draw") : t("开启活动", "Start draw") }}
+                </button>
+                <button v-else type="button"
+                  :disabled="activityDirty || activitySaving || activityControlling || activityControlUnconfirmed || !['scheduled','schedule_blocked','open','blocked'].includes(activityState.current_lottery?.status)"
+                  @click="controlLottery('cancel')"><Trash2 :size="17" />{{ t("取消活动", "Cancel draw") }}</button>
                 <button
                   type="button"
                   :disabled="activitySaving || !activityDirty"
@@ -1417,7 +1761,7 @@ onBeforeUnmount(() => {
         <section v-if="tab === 'invite-rewards'" id="panel-invite-rewards" role="tabpanel" aria-labelledby="tab-invite-rewards">
           <div class="section-heading">
             <h2>{{ t("邀请奖励", "Invitation rewards") }}</h2>
-            <button type="button" class="icon-button" :disabled="activityLoading || activitySaving || !groupId"
+            <button type="button" class="icon-button" :disabled="activityLoading || activitySaving || activityControlling || !groupId"
               :title="t('刷新邀请奖励', 'Refresh invitation rewards')" @click="guard(() => loadActivities())">
               <RefreshCw :size="18" :class="{ spin: activityLoading }" />
             </button>
@@ -1514,8 +1858,8 @@ onBeforeUnmount(() => {
             <p class="message warning">
               {{
                 t(
-                  "暂停只阻止后续计划，不会解除当前禁言。恢复或改时段仍需管理员私聊确认。",
-                  "Pausing only stops future scheduled actions; it does not unmute the group. Resume or change the time in admin private chat with confirmation.",
+                  "暂停只阻止后续计划，不会解除当前禁言。",
+                  "Pausing only stops future scheduled actions; it does not unmute the group.",
                 )
               }}
             </p>
@@ -1534,29 +1878,6 @@ onBeforeUnmount(() => {
           <div v-else-if="!scheduleLoading" class="empty schedule-empty">
             {{ t("当前群没有定时规则", "No schedule for this group") }}
           </div>
-          <h2>{{ t("管理员私聊操作", "Admin private-chat controls") }}</h2>
-          <dl class="policy-details">
-            <div>
-              <dt>{{ t("新建或改时段", "Create or change") }}</dt>
-              <dd><code>定时禁言 23:00 08:00</code></dd>
-            </div>
-            <div>
-              <dt>{{ t("恢复已暂停计划", "Resume paused schedule") }}</dt>
-              <dd><code>恢复定时</code></dd>
-            </div>
-            <div>
-              <dt>{{ t("确认预览", "Confirm preview") }}</dt>
-              <dd><code>确认定时 &lt;确认码&gt;</code></dd>
-            </div>
-          </dl>
-          <p class="field-note">
-            {{
-              t(
-                "需当前会话授权管理员身份，并为本群保存“全员禁言”和“解除全员禁言”动作授权。时间使用北京时间。",
-                "Requires an authorized admin conversation and both mute-all and unmute-all grants for this group. Times use China Standard Time.",
-              )
-            }}
-          </p>
           <h2>{{ t("最近执行", "Recent executions") }}</h2>
           <div class="table-scroll">
             <table>
@@ -1632,6 +1953,8 @@ onBeforeUnmount(() => {
         >
           <CurrentMutesPanel v-if="integrated && bridge && bot?.account_id && groupId"
             :key="`${botId}/${groupId}`" :bridge="bridge" :account="bot.account_id" :group="groupId" :locale="locale" />
+          <BulkRecallPanel v-if="integrated && bridge && bot?.account_id && groupId"
+            :key="`recalls/${botId}/${groupId}`" :bridge="bridge" :account="bot.account_id" :group="groupId" :locale="locale" />
           <div class="section-heading">
             <h2>{{ t("自动禁言累计", "Automatic mute counts") }}</h2>
             <button
@@ -1779,7 +2102,11 @@ onBeforeUnmount(() => {
                     <small class="mono">{{ row.sender }}</small>
                   </td>
                   <td>{{ label(row.category) }}</td>
-                  <td>{{ label(row.status === "review_only" && ["accepted", "verified"].includes(row.recall_status) ? "audit_incomplete" : row.status) }}</td>
+                  <td>
+                    {{ label(row.status === "review_only" && ["accepted", "verified"].includes(row.recall_status) ? "audit_incomplete" : row.status) }}
+                    <small v-if="row.processing_error" class="warning-cleanup">{{ label(row.processing_error) }}</small>
+                    <small v-if="row.processing_provider_code != null" class="warning-cleanup">{{ t("平台错误码：", "Provider code: ") }}{{ row.processing_provider_code }}</small>
+                  </td>
                   <td>
                     {{ row.recall_status ? label(row.recall_status) : t("未查到撤回回执", "No recall receipt found") }}
                     <small v-if="row.recall_submitted === 0" class="warning-cleanup">{{ t("未提交撤回", "Recall not submitted") }}</small>
@@ -1918,8 +2245,8 @@ onBeforeUnmount(() => {
               <dd>
                 {{
                   t(
-                    "管理员私聊预览与确认",
-                    "Private administrator preview and confirmation",
+                    "本群授权管理员预览与确认",
+                    "Authorized group administrator preview and confirmation",
                   )
                 }}
               </dd>
@@ -1927,10 +2254,6 @@ onBeforeUnmount(() => {
             <div>
               <dt>{{ t("违规撤回", "Violation recall") }}</dt>
               <dd>{{ t("自动违规处理", "Automatic moderation") }}</dd>
-            </div>
-            <div>
-              <dt>{{ t("帮助", "Help") }}</dt>
-              <dd><code>帮助</code> · {{ t("私聊", "Private chat") }}</dd>
             </div>
           </dl>
           </template>
@@ -2063,4 +2386,23 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .lottery-remarks { white-space: pre-wrap; overflow-wrap: anywhere; }
+.lottery-tier-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px; gap: 12px; align-items: end; margin-bottom: 12px; }
+.lottery-tier-row label { min-width: 0; display: grid; gap: 6px; }
+.lottery-tier-row input { width: 100%; min-width: 0; box-sizing: border-box; }
+.lottery-reservation-heading { margin-top: 20px; }
+.lottery-reservation-search { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(0, 1.3fr); gap: 12px; align-items: end; }
+.lottery-reservation-search > label, .lottery-member-query label { display: grid; gap: 6px; min-width: 0; }
+.lottery-member-query { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; min-width: 0; }
+.lottery-reservation-search input, .lottery-reservation-search select { width: 100%; min-width: 0; box-sizing: border-box; }
+.lottery-member-results { display: grid; gap: 0; margin: 12px 0; max-height: 280px; overflow: auto; }
+.lottery-member-results label { display: flex; align-items: center; gap: 8px; padding: 10px 4px; border-bottom: 1px solid var(--border); }
+.lottery-member-results span, .lottery-reserved-members span { min-width: 0; overflow-wrap: anywhere; }
+.lottery-member-results small, .lottery-reserved-members small { display: block; color: var(--muted); font-size: 12px; }
+.lottery-member-results button { justify-self: start; margin-top: 10px; }
+.lottery-reserved-members { list-style: none; padding: 0; margin: 12px 0; }
+.lottery-reserved-members li { display: grid; grid-template-columns: minmax(0, 1fr) 36px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.lottery-controls { flex-wrap: wrap; justify-content: flex-end; max-width: 100%; }
+@media (max-width: 640px) {
+  .lottery-reservation-search { grid-template-columns: minmax(0, 1fr); }
+}
 </style>

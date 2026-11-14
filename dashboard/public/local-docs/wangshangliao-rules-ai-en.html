@@ -7,14 +7,361 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 @page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
 </style></head>
 <body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">Documentation</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a><a href="wangshangliao-rules-ai-en.pdf" download>Download PDF</a><button onclick="window.print()">Print</button></nav><h1>Wangshangliao Rules And AI Ownership</h1>
-<h2>Current In-Group Blacklist Release</h2>
-<p>A verified administrator uses one actual mention or a verifiable same-group
-reply with <code>解除黑名单</code> (alias <code>移除黑名单</code>). This removes the entry and attempts
-to unmute, with separate results. Current bot, group, target and permission
-checks still apply; command recall follows existing rules. Private-chat and
-Dashboard removal only remove the entry. Independent unmuting does not remove
-it, and the whitelist is unchanged. Unknown outcomes are not automatically
-retried. Earlier dated removal-only statements describe previous versions.</p>
+<h2>Six Consecutive Digits (November 14, 2026)</h2>
+<p>New message text containing six or more consecutive digits in an active,
+advertising-enabled group receives a fixed one-minute mute before independent
+recall. This does not enroll the blacklist or consume/reset ordinary warnings.
+Full-width digits normalize to the same form; spaces, newlines and separators
+never join runs. Nicknames, sender IDs and transport metadata are not inspected.
+Long legitimate references and reported/quoted numbers can also match.
+Owners, administrators, bots and valid manual/automatic exemptions stay protected.
+Explicit blacklist signatures retain priority. Already-muted members are recalled
+without shortening or extending their existing native mute, with a final native
+submission check for intervening mutes. Detection does not wait for OCR or AI.
+Current authority, historical-message fences, independent receipts and no retries
+for unknown submissions remain in force. See dated maintenance for actual loading.</p>
+<p>The native mute-list read now runs at the final HTTP authorization fence without
+an additional preliminary roster/list round trip. Incomplete or unknown reads
+still block submission. Local recall-receipt reconciliation has at most one
+background task per account; it no longer holds new rule dispatch, and reload
+drains its actual database work. Native concurrency and queue bounds are unchanged.</p>
+<h2>Same-Round Native Video Fan-Out (November 14, 2026)</h2>
+<p>An optional <code>follow_group_id</code> binds a destination to an enabled, independent
+source on the same native account, CMS endpoint, category and interval.
+Self references and recursive chains are rejected. Preview and confirmation
+persist an enrollment cutoff: pre-enrollment publications are never replayed,
+and re-enabling starts a new cutoff rather than backfilling disabled periods.</p>
+<p>The source selects, prepares and uploads once. Only its explicitly accepted
+native publication can supply the destination's exact account-bound video asset,
+source ID and digest. The destination does not independently select, download
+or upload another file. Each group retains its own live authorization checks,
+idempotency key, duplicate fences and receipt. Unknown source delivery never
+fans out; unknown destination delivery pauses without retry. Changed source
+configuration or missing asset evidence cannot fall back to independent selection.
+Local source bytes are removed through the existing cleanup path; no extra
+video copy is retained. The panel displays the binding and removes independent
+category actions for followers. See maintenance for actual loading, dual-group
+receipt evidence and the separate mobile acceptance boundary.</p>
+<h2>Mute Refusals And Buffered Violations (November 14, 2026)</h2>
+<p>A valid integer1021 error from the native member-mute route is recorded as a
+provider refusal, without guessing whether the member departed, was already muted,
+or lost eligibility. Other routes, generic errors and transport uncertainty retain
+their existing treatment. Historical unknown receipts are not rewritten or replayed.
+A complete roster proving current absence blocks both initial and final submission
+checks with an explicit member-unavailable reason, not a command-format error.</p>
+<p>Before escalating while an accepted short mute has not expired, ordinary automatic
+sanctions check the current native mute list for the same account, group and frozen
+member identity. A still-muted target is not submitted again or counted as another
+successful escalation. Failed reads, revocation or identity changes block submission;
+an actual unmute or rejoin can still permit newly authorized violations. First
+sanctions, unrelated members and unrelated groups avoid the additional lookup.
+See dated maintenance for deployment evidence and the limits of historical diagnosis.</p>
+<h2>Scheduled Delivery And Bounded Ranking Reuse (November 13, 2026)</h2>
+<p>Scheduled failures consult durable native image/text intents. A proven
+pre-submission rejection advances only to a future slot; partial and unknown
+delivery still pause for reconciliation and are never automatically retried.
+Existing messages, images and times remain unchanged when future cursors are
+restored through the normal preview/confirmation interface.</p>
+<p>Rankings retain at most512 batches of32 normalized candidates in memory, without
+message text or new disk storage. Immutable inbox row identity, state and pruning
+markers invalidate reuse; account, group, ledger, date and authority also bind it.
+Recall evidence, violations, settlement and managed identities remain live.
+Cancelled or revoked scans cannot publish late shared results. Qualification and
+expiration rules for automatic exemptions do not change.</p>
+<p>Authenticated native images with zero metadata placeholders may enter bounded
+group inspection. Actual downloads remain limited to5MiB and decoded dimensions
+to16384 per side and16 million pixels. Supplied nonzero dimensions must match.
+Unsupported formats, animation, duplicate attachments and arbitrary URLs remain
+rejected. Private intake does not return. Missing historical assets are not
+reconstructed or retrospectively punished; unresolved coverage records specific
+metadata errors instead of being reported as clear. See dated maintenance for
+deployment evidence and the separate offline1000-record throughput comparison.</p>
+<h2>Explicit Solicitation Phrases Enroll The Group Blacklist (November 13, 2026)</h2>
+<p>In advertising-enabled groups, fixed solicitation phrases bind a new message to
+the receiving account's original inbox evidence. Matching senders are enrolled
+in that group's blacklist, muted for its existing configured duration, and their
+offending message is independently recalled. No three-warning grace, automatic
+kick, cross-group enrollment, AI authorization or retrospective punishment is added.
+Isolated common words and numbers, quotations and reports do not authorize enrollment.
+Owners, administrators, managed bots and valid manual/automatic exemptions remain
+protected. One durable keyword intent per enrollment prevents renewal on repetitions;
+unknown outcomes are never retried. Removal, revocation, promotion, changed identity
+or policy blocks unsubmitted actions. Mute failure does not skip independently
+authorized recall; pause or lost authority prevents any new native action.
+See the maintained content rules for exact signatures and dated maintenance for
+deployment and acceptance boundaries.</p>
+<h2>Separating Content Mutes From Recall Cleanup (November 13, 2026)</h2>
+<p>After an earned advertising mute decision, bounded background cleanup no longer
+occupies that member's rule slot. The first three warnings still require accepted
+or verified original recalls; counts and the one/three/ten-minute cycle do not change.
+Pending, accepted, rejected and unknown receipts remain distinct. Cleanup failure
+never erases an accepted mute, and unknown actions are never retried.
+Ordinary progressive mutes omit one duplicate preliminary directory read.
+Native group permissions, a complete roster, the frozen transport identity and
+target role remain mandatory. Blacklist, anti-raid and delegated paths are unchanged.
+The existing256-recall limit and inline overflow fallback remain; this is not
+unlimited capacity or a promise of instant platform response. See dated maintenance
+evidence for actual loading, offline benchmarks and production acceptance limits.</p>
+<h2>Keeping Background Work Off The Message Loop (November 11, 2026)</h2>
+<p>Keyword, scheduled-send and advertisement-replacement SQLite write transactions
+now wait on worker threads. Cancellation drains known-outcome bookkeeping
+without retrying delivery or downgrading accepted receipts. Native authorization
+still reads exact, current account/group versions synchronously and fails closed
+immediately on read-lock contention; permissions are not cached across awaits.
+Ranking decoding, normalization and ordered reduction run in batches of16 with
+explicit yields and fresh scope checks. Cancellation, revocation or changed
+account, group, ledger, day or test authority cannot publish stale shared caches.
+Counts, sorting and automatic exemption thresholds are unchanged.
+This improves responsiveness, not necessarily total ranking throughput.
+The historical1305.875ms stall has no captured stack; independent offline
+reproductions do not prove its cause or production peak-mute acceptance.
+See dated maintenance evidence for actual load status and measurements.</p>
+<h2>Ordinary Flood Preflight Deduplication (November 11, 2026; Loaded)</h2>
+<p>After a burst's mute decision and original trigger processing have completed,
+continuations omit redundant preliminary roster reads, not native authorization
+for new recalls. Matching includes account, group, sender, peer, revision, time
+window and test generation. New warning batches and unfinished triggers retain
+preflight; protected identities, warning counts and mute cycles remain unchanged.
+Exact duplicate automatic mutes recognize their existing record before remote
+reconciliation of unrelated unknowns. Unknown receipts remain unknown and are
+never retried. Current mute state does not prove a historical request succeeded.
+A controlled full restart loaded this round at21:37:58 Beijing time, with the
+account online at21:38:16. Offline results are not production peak-latency
+acceptance. See dated maintenance evidence.</p>
+<h2>Unknown Blacklist Receipts And Current State (November 11, 2026)</h2>
+<p>Sanction evidence retains safe error categories, bounded numeric provider codes,
+failure phases and timestamps, never response bodies or credentials. A timeout
+or generic provider error does not prove departure. Failed readback never
+downgrades an already accepted mutation receipt.
+Refreshing the WebUI blacklist separately checks current identities and native
+mute state for unknown receipts, with one shared group mute query and an extra
+eight-second budget. Failed checks remain unconfirmed. Current membership or
+mute state cannot establish the original request's outcome, actor or duration.
+Reads never rewrite unknown receipts, retry sanctions, extend mutes or remove
+list entries. Group commands and automatic moderation do not perform this extra
+readback; missing historical failure details are not fabricated.</p>
+<h2>Independent Burst Recall Cleanup (November 7, 2026)</h2>
+<p>Qualifying mutes still precede recalls. A bounded per-bot cleanup lane admits at
+most 256 recalls with one worker, outside the four deterministic rule slots.
+Admission failure retains inline handling; it is not unlimited capacity.
+Queued cleanup is explicitly pending, never reported as recall success, and
+reserved messages cannot continue into AI or keyword replies. Warning cycles,
+protected members and final native authorization remain unchanged.
+Only preliminary flood checks may reuse a valid one-second complete member
+snapshot. New native mutations still reauthorize; burst counting never awaits OCR.
+Concurrent duplicates await the original receipt without resubmitting.
+Every five seconds, at most 32 unknown recall audits are compared against exact
+account, group, member, message, operation and route-fingerprint matches.
+Only terminal native receipts refine audits, preserving their original timestamps;
+accepted is not phone-verified. Unknown results are not retried.
+Busy database maintenance yields its turn. Supplemental group-role reads share
+an eight-second budget; unresolved roles and unverified pagination remain unknown.
+See dated maintenance evidence for separate offline and production measurements.</p>
+<h2>Scheduling And Unknown Mute Reconciliation (November 7, 2026)</h2>
+<p>Completed deterministic workers wake the next item immediately, retaining four
+slots, a256-item backlog and per-member ordering. A healthy fastlane owns only
+matching trusted account/group/member/message/revision/time evidence; ordinary
+chat no longer waits for the same network work. Handoff is not sanction success.
+Rule queue and execution timings are separate from chat queue, directory and OCR.
+Existing recall receipts are read-only deduplication, including unknown outcomes;
+new recalls still require complete native membership authorization.</p>
+<p>An expired unknown automatic mute may be quarantined only with a matching
+submitted terminal-unknown receipt and a fresh authoritative native mute list
+showing the same verified member is not muted. Preserve the original unknown
+receipt and reconciliation evidence. Only a new violation can create a new
+operation; never replay the old message or operation. Final submission rechecks
+native mute state and authority. Existing mutes, failed reads, revocation and
+identity changes remain blocking. No policy, list, campaign or finance changes.
+Submitted requests remain nonpreemptible; offline scheduling is not phone or
+end-to-end latency acceptance. See dated maintenance evidence for deployment.</p>
+<h2>Advertising Line Limit (November 6, 2026)</h2>
+<p>With group advertising review enabled, a message exceeding seven explicit lines
+(eight or more) follows the existing advertising warning, recall and mute cycle.
+Blank and trailing blank lines count; CRLF counts once. LF, CR and Unicode
+line/paragraph separators are recognized. Screen wrapping and literal <code>\n</code> do not count.
+This is a format restriction, including otherwise ordinary text and quoted reports,
+not a semantic claim that every multiline message is an advertisement.
+Seven lines or fewer do not trigger this check, replacing the previous five-line
+threshold. Other advertising keywords and solicitation rules still apply independently.
+Disabling advertising disables this check;
+owners, admins, robots and valid speech exemptions remain protected.
+No keyword, contact detail, download, OCR, historical replay or policy change is required.
+Deployment and live acceptance require separate dated evidence.</p>
+<h2>Flood Precedence For Restricted Media (November 5, 2026)</h2>
+<p>A single restricted video or forwarded-chat card remains recall-only. When the
+same message has verified native-ingress flood evidence, the effective flood
+category takes precedence and follows the unchanged warning and mute cycle.
+Submit a qualifying mute before independent recalls, with notices last.
+Previously recalled messages remain valid burst evidence without resubmission.
+No video download, OCR wait, threshold change or exemption change is introduced.
+Loaded by plugin reload at00:42:09 Asia/Shanghai;1,187 regression tests passed,
+two conditionally skipped. Historical incidents were not replayed for sanctions.
+New live automatic sanctions and phone rendering require separate evidence.</p>
+<h2>Operator Nickname-prefix Blacklisting (November 3, 2026)</h2>
+<p>Private per-instance <code>blacklist_prefixes.json</code> explicitly scopes the receiving bot,
+groups and literal display-name prefixes, with a fixed seven-day/10,080-minute mute.
+Only current complete native rosters establish names and identities; ASCII P/p
+is case-insensitive. Message bodies and inferred cross-account identities do not
+qualify. Scan existing members, wake on trusted joins, and reconcile every sixty
+seconds through the existing bounded group workers, with at most twenty new
+submissions per scan. No image download, OCR, AI, kicking or global mute is involved.
+Owners, admins and robots remain protected; manual whitelist conflicts are
+reported without silently deleting exemptions. Enrollment and sanctions retain
+separate audits. A prefix intent is distinct from real join rounds or administrator
+commands, once per enrollment; unknown outcomes are not retried and existing
+native mutes are neither shortened nor renewed. Later genuine rejoins retain the
+existing blacklist authorization flow. New prefix sanctions pause if the group's
+existing blacklist duration is no longer10,080 minutes; no policy is overwritten.
+Removing an entry while retaining a matching nickname can cause re-enrollment
+while the rule remains enabled. Disabling the private rule neither removes
+existing entries nor unmutes members or deletes audits. Chat and AI cannot edit
+this authorization. Deployment and live acceptance require separate dated evidence.</p>
+<h2>Mute-only Delegation (November 3, 2026)</h2>
+<p>Explicit server-owned grants may authorize selected speech-report members to mute
+one real-mentioned ordinary member in a specific bot/group: <code>@MEMBER 禁言128</code>
+means128 minutes, with an explicit1..4320 whole-minute limit (three days).
+<code>@MEMBER 禁言4320</code> requests three days; longer requests are rejected.
+Ordinary automatic mute limits are unchanged. Reports or manager
+roles do not implicitly grant this capability. Kicking, unmuting, lists, rules,
+finance and Dashboard authority are never delegated. Self, owners, admins, bots,
+valid exemptions, blacklisted targets and existing mutes remain protected.
+Final submission rechecks current grants and complete native membership; unknown
+outcomes are not retried. Implementation does not establish deployment or phone acceptance.</p>
+<h2>Current Groups And WebUI</h2>
+<p>Private menus, friend approval/welcomes, personal knowledge, support, private
+AI/admin guidance, finance chat and image intake are retired. Preserve historical
+business data. Fixed group rules, verified native mention/reply lists, and WebUI
+rules, images, activities and Invitation Settlement remain.
+Ordinary group admins receive no global Dashboard access.
+See <a href="wangshangliao-start-en.html">the migration mapping</a> and
+<a href="wangshangliao-command-tree-en.html">current commands</a>.
+Loaded by a full restart at <strong>01:48 Asia/Shanghai, November 2, 2026</strong>.
+Mute-first is loaded; all six production raid switches remain off pending full live acceptance.</p>
+<p>Advertising and flood control share three recall/warning steps, then 1/3/10-minute
+mutes; expiry of the ten-minute penalty starts a fresh three-warning cycle.
+Per-member flood thresholds are five messages/three seconds, fifteen/ten seconds,
+or five identical texts/thirty seconds; supported media count toward rate limits.
+Submit a qualifying mute after authority/intent checks, then independently recall,
+with required notices last. Unknown/rejected mutes are not retried; recall checks
+its own authority, and notification failure cannot erase an accepted mute.
+New automatic-whitelist eligibility uses yesterday's Beijing top twenty with at
+least101 eligible texts, without backfilling rank21. Keep thirty-second settling/
+refresh, one count/member/thirty seconds and five-minute repeated-text suppression.
+Each eligible text renews seven days of existing eligibility; seven inactive days
+expire it. Retained plus new members may exceed twenty. Manual lists and blacklist
+priority remain unchanged, with all native role/identity protections intact.</p>
+<p>Images use WebUI upload only: one per keyword rule, up to three per scheduled plan,
+one rotated per occurrence; static JPG/PNG/WebP originals each ≤5MB, body ≤2000
+characters. Exact keywords win, otherwise saved order selects only one; default
+same-rule/group cooldown is thirty seconds. Matched, cooling-down or failed replies
+never fall through to AI. Image precedes text; partial/unknown deliveries never
+automatically replay. Three-message timing means three independent hourly plans at
+minutes00/20/40; applying times edits drafts, not confirmation or enablement.</p>
+<h2>Image Queue And Review Retention</h2>
+<p>The loaded fix replaces rejection after four image jobs with bounded metadata
+queues:64 globally,32 per account and16 per group, plus at most two running jobs.
+Accounts and groups rotate fairly. Waiting consumes the original thirty-second
+message lifetime and never blocks flood detection or mute-first processing.
+Overload, expiry and revocation are explicitly unchecked, not clear verdicts or
+grounds for punishment. Sustained input beyond recognition capacity can still
+exceed the inspection deadline.</p>
+<p>Only resolved ReviewStore records older than ninety days, without unresolved
+references, are eligible for bounded background cleanup. Unknown receipts,
+progressive warning cycles and native operation idempotency remain protected.
+Stale messages and persisted flood-retention watermarks prevent historical replay
+from recreating retired work. Cleanup yields to business writers, never scanning
+and deleting history in every message handler.
+<strong>Loaded November 2, 2026 Asia/Shanghai.</strong> These changes do not establish live coverage or end-to-end
+acceptance. See <a href="wangshangliao-content-rules.html">content rules</a> and
+<a href="wangshangliao-database.html">database maintenance</a> for scope and limits.</p>
+<h2>Outcomes And Rejoin Latency (October 30, 2026 Fix)</h2>
+<p>Dispatch completion is not sanction success. Content audits distinguish failed
+preflight verification, rejected execution and unknown results, retaining bounded
+error labels and numeric provider codes. Legacy recorded-only rows are labeled
+unconfirmed, never retrospectively rewritten as success or failure. Rule worker
+logs read persisted outcomes instead of emitting unconditional completed; incoming
+dispatch ends with dispatch_finished. A later notification failure cannot erase an
+accepted sanction. Failed or unknown writes are not automatically replayed.</p>
+<p>Persisted real join notifications directly wake bounded per-group workers without
+waiting for ordinary discovery. Unrelated joins do not fetch full rosters or join
+history. Matching blacklist entries still require a genuine new admission, complete
+current membership, and current creator/bot authority. Concurrent roster readers
+share in-flight verification. An unspecified -1 rejection permits one read retry;
+persistent rejection briefly suppresses duplicate reads, never using stale evidence.
+Zero latency during provider throttling or network faults is not guaranteed.</p>
+<p>Bound native group managers may use real mention or trusted-reply blacklist controls,
+removal, blacklist listing, and real-mention whitelist addition even when ordinary
+group replies are disabled. Only these fixed controls and one scoped result reply
+are admitted; general bot chat and all native target/authority protections remain.
+Consult maintenance evidence for loading and live acceptance, not offline results.</p>
+<h2>Membership Read Failures (October 30, 2026)</h2>
+<p>Blacklist commands require a fresh complete member directory, never a stale
+fallback for administrator or target identity. An unspecified provider rejection
+with numeric code <code>-1</code> permits one further read after one second. This retries
+only directory reading, not a mute, recall, list mutation or unknown receipt.
+Authentication failures, secondary verification, rate limits, transport timeouts
+and malformed or conflicting member records do not use this retry.
+The original account, lifecycle and permissions remain binding; cancellation or
+revocation stops processing. Persistent rejections now explain that the member
+interface is unavailable, rather than blaming command syntax. Dashboard feedback
+also states that cached membership was not used. Earlier failed commands are not
+automatically replayed.
+Pending rejoin notices for a group whose bot has lost its native administrator
+role, left, or been deactivated are finalized as revoked before provider reads.
+They are not repeatedly polled or replayed when permissions are restored.</p>
+<h2>Obfuscated Advertising Combinations (October 29, 2026)</h2>
+<p>Enabled advertising checks also recognize narrowly combined pointer solicitations,
+the Chinese benefit-solicitation phrase plus a 5-to-12-digit contact, and recurring
+influencer-video expose promotions paired with a 5-to-12-digit contact written in
+Arabic or digit-by-digit Chinese numerals. Full-width forms, whitespace,
+zero-width characters and pointer skin-tone variants are normalized or recognized.
+An isolated pointer, number, ordinary question, report or quotation is not enough.
+The numerals are promotion evidence, never member-identity evidence.
+Existing literal keywords, per-group advertising gates, administrator/bot/whitelist
+protection and progressive sanctions remain unchanged; no AI call is added.
+Only new messages are eligible. This shared-classifier fix does not prove complete
+live reception or successful native recalls; deployment evidence is recorded separately.</p>
+<h2>Bulk Flood Recall</h2>
+<p>New entry: <strong>Wangshangliao Management → Audit → Bulk flood recall</strong>.
+Existing mute and audit entries are unchanged. Select the receiver and group,
+search a name or UID, explicitly select an ordinary member, and choose the last
+5, 15, 30 or 60 minutes. The end defaults to now; an explicit historical
+Asia/Shanghai end time is also supported, with the entire interval within 24 hours.
+Absent senders can be searched by original name or UID and are explicitly marked
+as having left. Identity requires this receiver's original same-group inbox and
+an unconflicted UID/native-peer binding verified by an earlier complete roster.
+Preview the member, exact IDs, count and Asia/Shanghai
+timestamps before confirming. Only authenticated, reproducible flood windows
+from this account and group are selected, not ordinary chat or client-supplied IDs.
+A batch is limited to 500 messages; narrow the interval rather than silently
+truncating an oversized selection.</p>
+<p>This is explicitly confirmed manual administration: whitelisted members can be
+processed without changing their exemption, blacklisting, warning or muting them.
+Owners, administrators and managed bots remain protected. Single-use previews
+expire after five minutes and bind the actor, receiver, group, native member
+identity, authorization version and exact stored envelopes.</p>
+<p>One batch per receiver runs serially, waiting three to five seconds after each
+receipt before the next request. Batches never fan out simultaneous requests,
+and a new batch retains the receiver's cooldown. Conservative pacing cannot
+guarantee that the platform will not apply its own abuse detection.
+Each action rechecks current authority, native identity and stored routing.
+An absent sender must remain absent from a fresh complete roster, with no current
+member using that peer. Rejoin, identity conflicts or managed-account promotion
+stop the old job and require a new preview. This is explicitly confirmed manual
+historical administration, not a broader automatic recall, blacklist or mute grant.
+Deploying the adapter contract change requires a controlled full restart.
+“Stop remaining recalls” prevents future submissions while retaining independent
+receipts for in-flight work. Progress separates acceptance, independently verified
+recalls, skipped messages, unknown results, rejection and unsubmitted messages.
+Acceptance alone does not prove disappearance on a phone. Accepted messages are
+skipped; existing unknown or rejected requests are not resubmitted.
+Ambiguous results, rejection, revoked authority, pauses or target promotion stop
+the batch. Jobs and receipts are durable, but interrupted jobs never resume on
+restart. Refresh to reconcile, then explicitly preview any new batch.
+Expired or platform-rejected messages cannot be guaranteed recallable.
+These are implementation semantics, not a production deployment or live-test claim.</p>
+<p><img src="images/bulk-recall-mobile.png" alt="Mobile recall preview">
+<img src="images/bulk-recall-desktop.png" alt="Desktop recall preview"></p>
 <h2>Real Rejoins And Unknown Receipt Isolation (October 26, 2026)</h2>
 <p>A historical unknown result must not permanently exempt a blacklisted member
 from future admissions. Each canonical join remains at-most-once: duplicate
@@ -49,8 +396,14 @@ Message bodies and media content are never copied into the statistics store.</p>
 count, first/last activity and hourly distribution. Cached complete directories
 include members with no activity; recently departed speakers remain searchable
 within the two retained dates. The activity top 30 is <strong>not</strong> the automatic
-whitelist ranking. Existing yesterday-only text eligibility, 30-second spacing,
-five-minute duplicate suppression and the greater-than-100 threshold stay intact.</p>
+whitelist ranking. New eligibility requires yesterday's top twenty and at least
+101 eligible texts, with 30-second spacing and five-minute duplicate suppression.
+Existing automatic eligibility survives day changes; each eligible text refreshes
+a seven-day inactivity period. Seven idle days remove the automatic grant.
+Retained plus new members may exceed twenty. Only activity timestamps are retained
+for seven days, not chat bodies. Manual grants remain unchanged; explicit removal
+blocks historical readdition, and blacklists take priority. Check maintenance
+evidence separately for deployment status.</p>
 <h2>Management Changes And Scheduled Messages (October 26, 2026)</h2>
 <p>Adding or removing other bot managers preserves current confirmed schedules and
 literal replies. Rebind only rules matching the current tenant version and join
@@ -76,33 +429,7 @@ management grant remain mandatory; denial replies explain both requirements.</p>
 to groups1417872,1459534,1516387. Preserve all other group rules, image/text
 campaigns, member lists and management grants. These are moderation triggers,
 not automatic-reply keywords, and do not change the warning/mute progression.</p>
-<h2>Immediate Native Blacklist Mutes (October 24, 2026)</h2>
-<p>This supersedes the October23 statements below about no immediate punishment
-when adding through a native group command. A verified native owner/administrator
-with this group's management grant can <strong>actually mention one member and send
-<code>黑名单</code>, or reply to that member's verifiable original message in the same group</strong>.
-The bot records the entry and immediately submits a mute for this robot/group's
-configured duration. No kick or extra menu is involved. Trusted actual rejoins
-continue to use that duration. The three configured groups currently use
-<strong>seven days/10,080 minutes</strong>, without changing the29-day product default.</p>
-<p>A locally configured bot acting as manager is admitted only for scoped blacklist
-controls with matching sender binding and revision. Fresh complete roster,
-native roles and verified target checks still apply. General bot chat and AI
-execution remain blocked. Duplicate deliveries never renew a mute; unknown
-outcomes require review and are not retried. Accepted, verified, rejected and
-unknown receipts are distinct; upstream acceptance does not prove future expiry.
-Owners, administrators and bots remain protected. The ordinary24-hour cap stays.
-DM/dashboard additions still require search, preview and personal confirmation
-and <strong>do not immediately mute</strong>. Removal does not unmute and unmuting does not
-remove entries. Duration changes apply to later group commands and real rejoins,
-never retroactively to existing mutes or old ignored commands.
-Loaded by full restart at <strong>02:20:19 Beijing time, October24,2026</strong>, PID613188.
-At02:20:43 the configuration and23 protected business surfaces matched,
-both existing active accounts were online and queues had no backlog.
-Offline regression: <strong>1,327 passed</strong>. No real group member was sanctioned and
-no new phone or future-expiry acceptance was performed. Earlier dated evidence
-below belongs to its own earlier rounds.</p>
-<h2>Latest Configuration Record (October 23, 2026; 23:39 Beijing Time)</h2>
+<h2>Historical Configuration Record (October 23, 2026; 23:39 Beijing Time)</h2>
 <p>A native administrator's actual single mention, or a verifiable reply to the
 member's original message in the same group, followed by <code>黑名单</code> directly records
 the entry. <strong>It does not immediately mute or kick.</strong> Only a later trusted actual
@@ -119,37 +446,7 @@ group command or native sanction was exercised in this round.
 See the <a href="wangshangliao-maintenance.html">maintenance record</a> for scope and
 evidence. Earlier dated “no member changes/overlap retained” records below describe
 their own earlier rounds only.</p>
-<h2>List Exclusivity And Departed-Member Removal (October 23, 2026; Loaded At 22:59:23)</h2>
-<p><strong>Full-restart loading completed at22:59:23 Beijing time (14:59:23 UTC)</strong>,
-PID4071721, active/running, NRestarts=0. At22:59:51 all22 protected surfaces and
-config matched. Python:1,794 passed,2 skipped,1 audioop warning; UI:177 unit and
-9 browser passes. No real group members were added, removed or sanctioned; no
-real full-chain load test occurred. At23:13:07 all six list-read APIs across three
-formal groups passed, without preview/commit; historical overlaps remain.
-Display-only conflict flags loaded by plugin reload with the same PID;218 unit
-passes overlap with1,794, not additive. All22 protected surfaces/config matched
-again at23:14:32. The original12 needs_review records remain
-without automatic retry. Passive and isolated performance measurements retain
-their limited scope, not a production end-to-end guarantee; see the
-<a href="wangshangliao-maintenance.html">latest maintenance record</a>.
-This documentation generation does not synchronize dist.
-New blacklist/whitelist additions are <strong>mutually exclusive for the same bot,
-group and UID</strong>. If the other list already contains the member, reject with
-“remove from the whitelist first” or “remove from the blacklist first”; never
-automatically transfer or delete the other entry.
-Earlier permission to overlap explains historical records only: <strong>retain existing
-overlaps, keep blacklist precedence and allow each entry to be removed separately</strong>.
-For departed or renamed members, use the corresponding <strong>list-row removal icon →
-preview → personal confirmation</strong>, or search saved entries in <strong>removal mode</strong>
-by current name, saved old name or <strong>exact UID</strong>. Select the group first in DMs,
-then search/select the unique saved entry and confirm its preview.
-UID lookup targets existing records only. <strong>Addition still searches the real
-current roster by name</strong>, never guesses from a UID; native group blacklist
-addition still requires a real reply/mention. Removal affects only the selected
-list, never the other list, and <strong>blacklist removal does not unmute</strong>.
-The ordinary24-hour cap, blacklist rejoin duration and authority/confirmation
-boundaries are unchanged. The20:02:56 evidence below predates this fix.</p>
-<h2>Current Group Blacklist Flow (October 23, 2026)</h2>
+<h2>Historical Group Blacklist Flow (October 23, 2026)</h2>
 <p>The October 23, 2026 requirement is now the current contract: <strong>blacklists never
 kick; every trusted actual rejoin directly mutes the member in the group</strong>.
 Code loaded after the full restart at <strong>20:02:56 Beijing time, October 23, 2026</strong>
@@ -163,39 +460,6 @@ Actual expiry after 29 days has not been verified; displayed duration, platform
 acceptance and current mute status do not prove that future expiry occurred.
 Entries bind the <strong>same receiving robot account,
 same group and verified target identity</strong>, never another group or robot.</p>
-<ul>
-<li><strong>Add in a group:</strong> the sender must be a verified native owner/administrator with
-this group's management authorization. Natively reply to one target's message
-with <code>黑名单</code>, or actually mention one target and send <code>黑名单</code>.
-Addition records the entry only; it <strong>does not immediately punish</strong> a current member,
-by either kicking or muting.
-Nicknames, raw UIDs, typed <code>@name</code>, copied quotations and multiple targets are invalid.</li>
-<li><strong>Read/remove:</strong> <code>黑名单列表</code> reads this scope; <code>黑名单</code> without a verified target
-returns corrective instructions.
-In-group <code>移除黑名单</code> also requires a native reply or actual mention of one target,
-not a direct name argument.</li>
-<li><strong>Private flow:</strong> send <code>群列表</code>, then <code>选择群 INDEX</code>. Search real current group members
-with <code>添加黑名单 NAME</code>, or saved entries with <code>移除黑名单 CURRENT_NAME/SAVED_OLD_NAME/EXACT_UID</code>;
-send <code>选择黑名单 INDEX</code>. Check the robot, group and unique target in the preview,
-then personally send <code>确认黑名单 TOKEN</code>. Same-name matches are never auto-selected;
-unrelated member numbers or another group's token cannot be reused.</li>
-<li><strong>Duration:</strong> group chat uses its current group; privately send <code>群列表</code> and
-<code>选择群 INDEX</code> first. Send <code>黑名单禁言时长 N分钟</code>, <code>黑名单禁言时长 N小时</code>
-or <code>黑名单禁言时长 N天</code>, for example <code>黑名单禁言时长 29天</code>.
-The converted duration must be <strong>1..41760 whole minutes</strong>; the default is
-<strong>29 days = 41,760 minutes</strong>. Zero, negative, out-of-range or sub-minute values
-are invalid. Check the robot, group and converted minutes in the preview, then
-personally send a new <code>确认黑名单 token</code> message using that preview's token.
-The setting command and preview do not write. Settings are isolated by robot
-and group; changing group, cancellation, revocation or revision changes require
-a fresh preview, never an old token.</li>
-<li><strong>Dashboard:</strong> an existing total-control login uses <strong>Group Management → Rules →
-Blacklist Settings</strong> (<code>群管理 → 规则 → 黑名单设置</code>): read/search → check the
-unique target and current revision → preview → personally confirm commit.
-Duration edits also require preview and confirmation. Opening, reading,
-searching or previewing does not save or punish. Ordinary group managers do
-not acquire dashboard login rights.</li>
-</ul>
 <p>Only trusted <strong>actual rejoins</strong> after addition trigger enforcement. The first and
 every later rejoin use the confirmed duration for this robot/group to <strong>mute and
 retain the member, never kick</strong>, regardless of historical successful-kick counts.
@@ -208,7 +472,12 @@ receipt and platform state; never retry, erase history or invent success.
 Since October26, a strictly later verified real admission after completion follows
 the independent authorization rules above.
 Removing an entry <strong>does not unmute</strong> an existing mute.
-An independent unmute <strong>does not remove the blacklist entry</strong>.</p>
+The fix loaded on November 2, 2026 Asia/Shanghai makes an authorized bot command
+or dashboard unmute <strong>also remove this group's current blacklist entry after
+native verification</strong>. A changed list version, revoked authority, unknown receipt
+or failed verification never forces removal; outcomes remain separate.
+Phone-side unmute has no trusted-event synchronization yet. Natural expiry and
+reading an absent mute do not remove entries.</p>
 <h3>Old-To-New Mapping</h3>
 <table>
 <thead>
@@ -243,12 +512,6 @@ the blacklist</strong>. Ordinary automatic kicking remains prohibited and the or
 24-hour mute cap is unchanged. The 1..41760-minute range belongs only to this blacklist
 rejoin path. Guidance AI explains usage only: it cannot read live lists, execute,
 confirm on the caller's behalf or claim success.</p>
-<p>No permission: send <code>我的权限</code>; ask the group owner to verify native caller/bot roles
-and the service operator to check this robot/group's management/action grants.
-Never share the dashboard password or self-authorize in chat.
-Wrong group: send <code>取消</code>, repeat <code>群列表</code> and <code>选择群 INDEX</code>, then search and preview
-again with a fresh token. Failed/inconsistent roster reads stop the flow, never
-mean an empty list or justify guessing by nickname.</p>
 <p><strong>Evidence levels:</strong> final offline regression: 1,229 passed, 2 skipped and one
 audioop warning. Subsequent permission-hint tests: 257 passed, 2 skipped;
 coverage overlaps and must not be added. Offline bounds/conversion, isolation,
@@ -272,19 +535,6 @@ regeneration does not synchronize dist.</p>
 <p><img src="images/member-blacklist-mobile.png" alt="Blacklist settings and 90-minute confirmation preview, October 23, 2026 isolated 390px UI fixture, not release, live or phone acceptance"></p>
 <p><img src="images/member-blacklist-remove-mobile.png" alt="Blacklist removal preview for a departed member, October 23, 2026 isolated 390px UI fixture; removal does not unmute, not loading or live acceptance"></p>
 <h2>Keyword Images And Three-Message Timing (October 23, 2026)</h2>
-<p>The entry remains <strong>Group Management → Rules → Keyword Replies and Scheduled
-Messages</strong>. Each keyword reply accepts one static JPG, PNG or WebP image, up to
-5MB per original, with upload, paste, drop, replacement and removal. Images are sent
-before optional text. An unacknowledged image stops the caption; unknown or partial
-delivery pauses for reconciliation without automatic replay and remains subject to the rule cooldown.
-Image references are scoped to the uploading account and group. Reactive keyword
-images do not require proactive-send grants. Text edits through existing DM commands
-retain the image; keyword images are maintained in the form, not automatically
-captured from ordinary private messages.
-Assets stay private and deduplicate within this robot/group scope, without a public
-image host or cross-group/robot reuse. Without dashboard permission, ask the operator
-to attach the keyword image in this group's form. <strong>No new keyword-image DM intake
-command is introduced</strong>; the existing <code>广告图片 plan-number</code> is for scheduled ads only.</p>
 <p><strong>Three messages · hourly cycle</strong> selects three existing plans or creates three
 disabled drafts. Each plan keeps its own content and image. Defaults are minute
 00,20,40: one message every20 minutes, each message once per60-minute cycle.
@@ -320,156 +570,6 @@ This pass only updates guidance. New integration and phone acceptance still need
 their own planned checks; the dated screenshots/evidence below do not establish them.</p>
 <p><img src="images/keyword-image-mobile.png" alt="Mobile keyword image form using isolated fixtures"></p>
 <p><img src="images/three-message-timing.png" alt="Three-message timing form using isolated fixtures"></p>
-<h2>Scheduled Images And Direct DMs (October 22, 2026)</h2>
-<p>Use <strong>Group Management → Rules → Keyword Replies and Scheduled Messages</strong>.
-Upload, preview, reorder, replace or delete up to three static JPG, PNG or WebP
-images per plan, at most5MB per original. Text is optional and may include links.
-Each occurrence sends exactly one image, rotating1→2→3→1 after acknowledged
-delivery only. Unknown or partial delivery pauses; reconnects/restarts never
-backfill missed slots. Times use Beijing time. Enable, preview and personally
-confirm the configuration. This is deterministic and makes no AI calls.
-In DMs, administrators send <code>群列表</code>, <code>选择群 序号</code>, then a relevant direct command:
-<code>规则</code>, <code>关键词回复</code> or <code>定时发言</code>. <code>定时广告</code> and the <code>管理 </code> prefix remain compatible.
-Image upload, plan/activity parameters belong in forms, not mandatory nested
-chat choices. Administrator guidance derives from the current command catalog,
-offers a short relevant entry and never saves settings, consents to charges or
-confirms payments. Never share the dashboard password. Authorized group managers
-can instead select a group by DM, send <code>广告图片 plan-number</code>, then one static
-image. A preview is returned; only their explicit <code>确认广告 token</code> saves it.
-Confirm each before adding another, up to three. Unrequested pictures are ignored.
-Intake expires after five minutes and is invalidated by cancellation, group changes,
-plan edits or revoked permission. Downloads use only the reviewed native asset host,
-never caller URLs. File selection, paste and drop share the same page workflow.
-Reading times out after15 seconds and upload after45; controls recover, late results
-are ignored and no automatic retry is made.</p>
-<p>See <a href="wangshangliao-component-runtime-en.html">Component Governance and Pilot</a> for
-declarations, recovery controls and private-message batching.</p>
-<p>Updated October 22, 2026, Beijing time. This page describes the new configuration
-contract; deployment and native acceptance require their own recorded evidence.
-Earlier core-audit regression: 7,392 passed, 52 skipped, zero failures. Following user
-authorization, AstrBot was fully restarted at 03:56:52 Beijing time on October 22,
-2026, loading all three media parsers and this audit's fixes. This is not new live
-sanction acceptance. Group-AI switches and charge tables are unchanged.
-The independent cashier was subsequently retired. Current image rotation, direct-DM
-acceptance and unconfirmed model timeouts are recorded separately in the
-<a href="wangshangliao-maintenance.html">maintenance record</a>, not implied by that earlier audit.</p>
-<h2>Ownership</h2>
-<table>
-<thead>
-<tr>
-<th>Feature</th>
-<th>Server-owned</th>
-<th>Delegated authority</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Administrator guidance</td>
-<td>Configuration, persona, permission manual</td>
-<td>Read-only consultation</td>
-</tr>
-<tr>
-<td>Group / warm-group AI</td>
-<td>Model, persona, tools, modes, topic, hours, group knowledge</td>
-<td>Toggle already provisioned AI for one's authorized group only</td>
-</tr>
-<tr>
-<td>Business support</td>
-<td>Model, credentials, tools, safety boundary, default template</td>
-<td>Verified activators edit their own dedicated business; legacy account editors remain compatible</td>
-</tr>
-<tr>
-<td>Keyword replies / advertisements</td>
-<td>Send grants, boundaries, audit</td>
-<td>Authorized managers maintain their own group's content</td>
-</tr>
-</tbody>
-</table>
-<p>Successful native activation/claim creates <strong>one dedicated support service per
-verified activator</strong>, named after the activator with a stable UID suffix.
-Later groups, including groups on other robot accounts, reuse its configuration,
-persona and business content. Nicknames are display-only. The receiving account
-must independently verify the owner's UID and trusted peer before editing.
-Other group managers, finance roles, subscriptions and dashboard login never grant
-editing rights. Revocation, departure, pause, epoch changes or support suspension
-invalidate prepared changes, pending batches and in-flight replies.</p>
-<p>In <strong>AI services → Customer support → Business ownership</strong>, select a dedicated
-business, the new-owner template, or legacy account support. The template is copied
-only on first creation; later template edits never overwrite existing business
-content. Default links and commercial knowledge are empty. The private menu
-&quot;本机器人业务客服&quot; is now &quot;专属与账号业务客服&quot;; existing editing and confirmation
-commands remain compatible. Interrupted provisioning retains ownership and reuses
-the created native configuration on retry.
-Existing groups and server rules-only admission do not infer the original activator
-from current managers or nicknames, or automatically migrate legacy support.
-Administrator guidance has a separate
-server profile. Dedicated personas enable no generic tools or skills.
-Personal notes remain stored but are not migrated into business support.
-Business content is shared, not conversations: history remains isolated by receiving
-robot, actual sender, role and profile/business-content revision.</p>
-<h3>Fixed Bindings And Page Scope</h3>
-<p>The business selector lists only dedicated businesses bound to the selected robot,
-legacy account support and the default template. AI parameters load and save for
-that selected business rather than always editing legacy support. Configuration
-and persona names are read-only, without cross-business or other-platform options.
-Administrator guidance and group/warm-group AI also retain fixed bindings.
-Direct API rebinding is rejected; missing bindings require server provisioning.
-Only the server maintains model and generation settings; private business editing
-remains restricted to authorized content fields.</p>
-<p>For a verified owner, creating or verifying dedicated support updates its native
-configuration display name and dedicated persona name to the current owner's name.
-It preserves the configuration ID, persona content, business data and group
-bindings. Old personas remain for historical references. Legacy accounts without
-an explicit owner are not renamed or reassigned by guessing from manager nicknames,
-and no support-editing authority is granted by this change.</p>
-<h3>Administrator Manual</h3>
-<p>Profile provisioning and plugin startup idempotently synchronize a versioned
-<code>admin_manual</code> knowledge scope. Procedures cover private group selection, menus,
-moderation, keyword replies, ads, blacklists, scheduled muting, rules-only trials, support
-editors and separate finance authority. Command entries derive from the shared
-capability declarations. Unmanaged server-authored titles remain intact; personal,
-group and business-support knowledge is never copied. Relevant snippets are
-retrieved and injected into the actual request. Updates invalidate old snapshots.
-Missing references never justify invented syntax, menu numbers or live settings.</p>
-<p>The guidance panel reports resolvable configuration and manual synchronization
-counts without model calls or quota use. This checks configuration and versioned
-references, not user allowance, provider balance or native conversation acceptance.
-Guidance explains usage without operation tools; live queries and modifications
-still require the user's fixed commands.
-Answers prioritize short steps for the current question while retaining complete
-arguments and personal preview/confirmation. Literal keyword triggers such as
-&quot;链接&quot;/&quot;网址&quot; do not mean arbitrary URL detection. Truncated output or supplier
-reasoning copied into the answer is neither delivered nor saved as a partial
-operation example. A fixed no-operation notice replaces it without another call.</p>
-<h3>Customer Consultation Runtime</h3>
-<p>Start privately with <code>/chat</code>; <code>/exit</code> or cancellation ends consultation. Fixed
-commands, menus and confirmations run before AI. Verified independent roles route
-to administrator guidance; other users use a live business binding on the receiving
-robot. One business routes automatically; multiple businesses require &quot;客服列表&quot;
-then &quot;选择客服 序号&quot;. The selection lasts 15 minutes; &quot;退出客服&quot; restores role routing.
-An administrator may explicitly select read-only business consultation without new
-authority. Ambiguous, revoked or suspended bindings never call the model or fall
-back to another business. Unmigrated robots retain legacy account support.
-Rules-only groups do not gain AI access; guidance still requires its separate grant.
-Support injects only the selected business's confirmed wording, links, style, length,
-knowledge and scoped retrieval. It never reads another business, administrator
-manual or personal notes. Empty business content is not a
-finished business-support setup; brands, contacts and links must not be invented.</p>
-<p>This plugin sends controlled model requests rather than running the generic
-AstrBot Agent. Only allowlisted model, persona and generation settings are read.
-Generic configuration-page knowledge, tools and skills are not automatically used.
-Neither private role has management, finance, code, generic network or PC28 tools.
-Live queries remain fixed commands sent by the user. Actual model calls retain
-quota, pricing, permission, revocation and delivery checks; answers never execute
-configuration changes.</p>
-<p><code>private_batches.py</code> freezes the account guard and session generation before
-awaiting identity verification, then rechecks them. Exit, cancellation or account
-switching cannot attach old input to a new session batch. After reading,
-<code>native_conversations.py</code> rechecks the current conversation ID; checking and
-updating are still not atomic compare-and-swap.</p>
-<p><img src="images/owner-support-desktop.png" alt="Dedicated support and template"></p>
-<p><img src="images/owner-support-mobile.png" alt="Mobile dedicated support"></p>
-<h2>Deterministic Routing</h2>
 <h3>Moderation Does Not Wait For Chat Throttling</h3>
 <p>Without model-based review, trusted new-message evidence for high-confidence
 advertising, keywords, all-terms combinations and flooding uses an independent,
@@ -510,19 +610,6 @@ administrator and preview/confirm rules admission in <strong>Admission and rules
 version, manager UID and the confirmation token. The token binds the dashboard
 actor, membership epoch, version and verified sender identity. Expiry, revocation
 or identity changes invalidate it.</p>
-<p>Admission preserves customized rules or initializes the template above, preserves
-other groups, enables scoped rule actions
-and sending, and never fabricates an inviter or grants Plus, finance or support
-editing. New business keyword replies and advertisements remain disabled.
-A durable rules-only flag blocks group AI, mentions, autonomous/idle responses
-and PC28. Private users whose only management scope is rules-only receive fixed
-menus, not automatic AI consultation or administrator guidance. Independent
-finance/support roles and other groups are not changed. Moderation uses literal
-rules rather than a semantic model.</p>
-<p>Validity and authority checks precede fixed commands, menu parameters and
-confirmations; group keywords run next; only unconsumed messages reach AI.
-A matching keyword consumes even an @ mention, cooldown, disabled replies or
-send failure. No model fallback, duplicate answer or model charge follows.</p>
 <h3>Upgrade To Full AI Admission</h3>
 <p>In <strong>Admission and rules</strong> or <strong>Group AI</strong>, select an active rules-only group,
 choose <strong>预览升级正式AI</strong>, verify the bot account and group, then <strong>确认升级</strong>.
@@ -547,22 +634,6 @@ is not payer consent.</p>
 <p><img src="images/ai-admission-desktop.png" alt="AI admission preview in an offline test group"></p>
 <p><img src="images/ai-admission-mobile.png" alt="Mobile upgrade confirmation in an offline test group"></p>
 <h3>Group Speech Whitelist</h3>
-<p>The exclusivity/removal fix loaded with the22:59:23 full restart; see the evidence limits above.
-In <strong>Group Management → Rules</strong>, select an activated group and use <strong>add mode</strong>
-under <strong>本群发言白名单</strong> to search the real current roster by name, select, preview
-and confirm. Addition accepts no arbitrary UID, NIM or cross-group identity;
-homonyms show UIDs for verification. <strong>Removal mode</strong> searches saved entries by
-current name, saved old name or exact UID, including departed/renamed members.
-The list-row removal icon also requires preview/confirmation and never deletes
-the other list's entry.
-From October 25, 2026, a native group administrator with this bot's group grant
-adds a member by genuinely mentioning exactly one member and sending <code>白名单</code>.
-The addition is immediate, with no search, selection or confirmation messages.
-Typed nicknames, multiple targets, conflicting quotes, cross-group identities and
-changed permissions are rejected. Repeated additions do not duplicate the audit.
-Private addition redirects to the target group; the old name-based addition command
-only explains the new route. Dashboard additions retain preview and confirmation.
-Private queries and removals still require selecting an authorized group first.</p>
 <pre><code class="language-text">白名单
 @ONE_REAL_MEMBER 白名单
 移除白名单 CURRENT_NAME/SAVED_OLD_NAME/EXACT_UID
@@ -615,20 +686,6 @@ supported without regex or semantic guessing. Exact matches win; otherwise saved
 order decides one match. Default cooldown is thirty seconds per group/rule.
 Moderation keywords and automatic business replies have separate storage.
 Business replies and advertisements are not recalled after twelve seconds.</p>
-<h3>Explicit Private Guidance Trial</h3>
-<p>The server may separately grant a verified rules-only group manager a <strong>twenty-call
-private administrator-guidance trial</strong>, using <code>guidance_trial_preview</code> and
-<code>guidance_trial</code>. Confirmation binds the bot account, group, membership epoch,
-verified UID/transport sender and grant version. This grants neither Plus nor group
-AI, support editing or finance authority. Ungranted rules-only managers remain blocked.</p>
-<p>The allowance is twenty model requests in total, not a daily refill. Menus, fixed
-commands and provably unsent model requests do not spend calls; uncertain dispatched
-requests retain their count. Existing trial cost budgets, daily limits and provider
-hard-budget checks still apply. Send <code>/chat</code> privately, then ask a question; <code>/exit</code>
-ends the session. The personal quota command shows the remaining total. Regranting,
-revoking and restoring, or restarting cannot reset usage. Exhaustion stops model
-calls; grant or manager revocation, pausing, departure, identity or epoch changes
-invalidate old delivery authority, including pending answers.</p>
 <h2>Group Commands</h2>
 <p>The current group is implicit. Its authorized managers use:</p>
 <pre><code class="language-text">关键词回复
@@ -652,33 +709,6 @@ invalidate old delivery authority, including pending answers.</p>
 same sender in the same conversation within two minutes. Changed revisions or
 authority invalidate the preview. New rules are disabled. No production copy,
 links or activation are fabricated.</p>
-<h2>Private Commands</h2>
-<p>For group management, first send <code>群列表</code> then <code>选择群 1</code>; the same rule commands
-operate only on that selected authorized group. Menu10 contains business rules.
-Menu9 retains status, the already provisioned AI master switch, shared quota,
-personal payer confirmation and read-only group knowledge. Old mode controls and
-group-knowledge writes are rejected; stored content remains server-maintained.</p>
-<p>Verified dedicated-support owners or legacy account editors can use the private
-&quot;专属与账号业务客服&quot; menu or:</p>
-<pre><code class="language-text">客服设置
-客服话术 Confirmed business wording
-客服风格 简洁
-客服长度 300
-客服链接 https://confirmed-business-domain.example
-客服知识
-添加客服知识 Confirmed business information
-删除客服知识 1
-确认客服 preview-token
-</code></pre>
-<p>Fixed editing commands target the caller's own dedicated service first, or their
-authorized legacy account. Selecting a public business never grants editing.
-The selected management group never changes ownership. Editors cannot change models,
-credentials, tools or administrator guidance. Finance is a separate private-only
-entry shown to independent financial roles; AI has no settlement tool.
-<code>command_capabilities.py</code> supplies help, menu permissions and guidance material.
-In <strong>Help → Commands and permissions</strong>, separate group, private and server-only
-tabs show required roles and confirmation requirements. Form screenshots use
-offline fixtures and do not imply that a real group is authorized or advertising.</p>
 <h2>Durable Advertisements</h2>
 <p>Select a group under <strong>Group Management → Rules</strong>, then use <strong>Keyword replies and
 scheduled messages</strong>. Plans support text/links and up to three rotating images, daily fixed times or
@@ -741,12 +771,6 @@ the window afterward. Do not change production group AI switches, finances or
 connector lifecycles. Keep source, page, configuration and audit snapshots before
 loading the plugin after regression and browser checks.</p>
 <h3>Real Conversation Experiments</h3>
-<p><code>scripts/check_wsl_guidance_dialogue_live.py</code> requires explicit <code>--apply</code> and
-the existing online peers: 林夕 <code>31846829</code> asks 小满 <code>43506527</code> eight private
-guidance questions. Each answer requires native receive/send receipts and the
-peer's independent witness. A temporary exact-recipient send grant is restored
-and the developer window closed. It does not use NG酱酱's guidance trial, grant
-plans/group AI/finance authority, or retry unknown delivery.</p>
 <p><code>scripts/check_wsl_warm_dialogue_model.py</code> uses the currently bound persona,
 configuration, real model and real PC28 API with isolated databases, simulated
 group authority and local delivery. This is not native group-send acceptance.
@@ -764,12 +788,6 @@ acceptance have therefore not been performed in this round. No native permission
 promotion, surrogate payer consent, advertisement or real model request was used
 to bypass these blockers. Complete the prerequisites before opening the existing
 three-account controlled window.</p>
-<p>Private source/configuration snapshots, read-only financial evidence and test
-results are under <code>/opt/backups/wsl-service-rules-20261020-jq1hZG</code>; its <code>ROLLBACK.md</code>
-describes the rollback entry. Restore only this release's reviewed files and
-version-checked AI bindings, never whole databases, financial ledgers, subsequent
-business changes or unrelated plugins. Reload only the moderation plugin through
-the existing plugin management endpoint; do not restart the connectors.</p>
 <h3>October 20, 2026 Release Result (Historical)</h3>
 <p>On October 20, 2026, only the moderation plugin was hot-reloaded. One server
 guidance profile/persona and three account-specific support profiles/personas

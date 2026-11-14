@@ -172,6 +172,53 @@ def test_gemini_reasoning_only_output_is_allowed():
     )
 
 
+@pytest.mark.parametrize("validate_output", [True, False])
+@pytest.mark.parametrize("answer_thought", [None, False])
+def test_gemini_thought_parts_never_enter_answer_chain(validate_output, answer_thought):
+    provider = ProviderGoogleGenAI.__new__(ProviderGoogleGenAI)
+    response = LLMResponse(role="assistant")
+    candidate = types.Candidate(
+        finish_reason=types.FinishReason.STOP,
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(text="private reasoning", thought=True),
+                types.Part(text="test successful", thought=answer_thought),
+            ],
+        ),
+    )
+
+    chain = provider._process_content_parts(
+        candidate, response, validate_output=validate_output
+    )
+
+    assert response.reasoning_content == "private reasoning"
+    assert len(chain.chain) == 1
+    assert chain.chain[0].text == "test successful"
+    assert "private reasoning" not in response.completion_text
+
+
+@pytest.mark.parametrize("validate_output", [True, False])
+def test_gemini_reasoning_only_parts_do_not_become_answer(validate_output):
+    provider = ProviderGoogleGenAI.__new__(ProviderGoogleGenAI)
+    response = LLMResponse(role="assistant")
+    candidate = types.Candidate(
+        finish_reason=types.FinishReason.STOP,
+        content=types.Content(
+            role="model",
+            parts=[types.Part(text="private reasoning", thought=True)],
+        ),
+    )
+
+    chain = provider._process_content_parts(
+        candidate, response, validate_output=validate_output
+    )
+
+    assert response.reasoning_content == "private reasoning"
+    assert chain.chain == []
+    assert response.completion_text == ""
+
+
 def test_gemini_extract_usage_excludes_cached_tokens_from_input_other():
     provider = ProviderGoogleGenAI.__new__(ProviderGoogleGenAI)
 

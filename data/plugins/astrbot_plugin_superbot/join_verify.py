@@ -5,6 +5,7 @@ import json
 import secrets
 
 from telegram import ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, Forbidden
 
 from .moderation import SEND
 from .store import Rejected, encode
@@ -52,19 +53,32 @@ class JoinVerify:
             targets: Target dictionaries containing stable IDs and join URLs.
         """
         for target in targets:
-            info = await self.runtime.bot.get_chat(target["id"])
+            try:
+                info = await self.runtime.bot.get_chat(target["id"])
+            except (BadRequest, Forbidden) as exc:
+                raise Rejected(
+                    "无法访问验证目标，请确认机器人已加入并拥有管理员权限"
+                ) from exc
             if str(info.id) != target["id"] or info.type not in {
                 "supergroup",
                 "channel",
             }:
                 raise Rejected("验证目标已变化，请重新设置")
             if target.get("username"):
-                resolved = await self.runtime.bot.get_chat("@" + target["username"])
+                try:
+                    resolved = await self.runtime.bot.get_chat("@" + target["username"])
+                except (BadRequest, Forbidden) as exc:
+                    raise Rejected("验证目标的公开用户名不可用，请重新设置") from exc
                 if str(resolved.id) != target["id"]:
                     raise Rejected("验证链接已变化，请联系管理员")
-            bot_member = await self.runtime.bot.get_chat_member(
-                info.id, self.runtime.bot.id
-            )
+            try:
+                bot_member = await self.runtime.bot.get_chat_member(
+                    info.id, self.runtime.bot.id
+                )
+            except (BadRequest, Forbidden) as exc:
+                raise Rejected(
+                    "无法检查目标成员，请确认机器人是目标群／频道的管理员"
+                ) from exc
             if bot_member.status not in {"administrator", "creator"}:
                 raise Rejected("机器人必须在每个验证目标中担任管理员")
 
@@ -180,7 +194,12 @@ class JoinVerify:
                 await self.runtime.bot.send_message(
                     chat_id=chat,
                     text=(greeting or f"{user.full_name[:60]}，欢迎加入！")
-                    + "\n先加入下方频道或群，再点击验证即可发言。\n未验证暂时不能发言；遇到问题请联系群管理员。",
+                    + (
+                        "\n先加入下方频道或群，再点击验证即可发言。"
+                        if targets
+                        else "\n点击下方验证按钮即可发言，无须加入其他群或频道。"
+                    )
+                    + "\n未验证暂时不能发言；遇到问题请联系群管理员。",
                     parse_mode=None,
                     reply_markup=InlineKeyboardMarkup(buttons),
                 )

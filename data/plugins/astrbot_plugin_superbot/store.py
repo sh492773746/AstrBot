@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 SCOPES = {"ads", "points", "game", "moderation", "manager"}
+GRANT_SCOPES = SCOPES | {"superadmin"}
 MAX_POINTS = 10**12
 
 
@@ -68,6 +69,12 @@ class Store:
             COMMIT;
         """)
         with self.tx() as db:
+            if "issuer" not in {
+                row["name"] for row in db.execute("PRAGMA table_info(grants)")
+            }:
+                db.execute(
+                    "ALTER TABLE grants ADD COLUMN issuer TEXT NOT NULL DEFAULT ''"
+                )
             for table in ("bets", "chases"):
                 if "points_chat" not in {
                     row["name"] for row in db.execute(f"PRAGMA table_info({table})")
@@ -133,6 +140,216 @@ class Store:
         )
         return json.loads(row[0]) if row else default
 
+    def register_group(self, chat, title, actor=None, *, fresh=False):
+        """Register a group from a Telegram membership event.
+
+        A newly added administrator is the consent signal for the basic
+        group service.  This deliberately does not grant platform scopes.
+        """
+        chat = str(chat)
+        title = str(title or chat)
+        actor = str(actor or self.owner)
+        with self.tx() as db:
+            existing = db.execute(
+                "SELECT 1 FROM mod_groups WHERE chat=?", (chat,)
+            ).fetchone()
+            db.execute(
+                "INSERT INTO mod_groups(chat,title,enabled) VALUES(?,?,1) "
+                "ON CONFLICT(chat) DO UPDATE SET title=excluded.title,"
+                "enabled=CASE WHEN ? THEN 0 ELSE mod_groups.enabled END,"
+                "version=version+1",
+                (chat, title, int(fresh)),
+            )
+            # Group-local gameplay defaults.  Platform-wide gates still apply.
+            defaults = (
+                (
+                    "duel_groups",
+                    "INSERT OR IGNORE INTO duel_groups(chat,enabled) VALUES(?,1)",
+                ),
+                (
+                    "k3_groups",
+                    "INSERT OR IGNORE INTO k3_groups(chat,enabled) VALUES(?,1)",
+                ),
+                (
+                    "slots_groups",
+                    "INSERT OR IGNORE INTO slots_groups(chat,enabled) VALUES(?,1)",
+                ),
+                (
+                    "mines_groups",
+                    "INSERT OR IGNORE INTO mines_groups(chat,enabled) VALUES(?,1)",
+                ),
+            )
+            tables = {
+                row["name"]
+                for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            for table, statement in defaults:
+                if table in tables:
+                    db.execute(statement, (chat,))
+            if "wheel_groups" in tables:
+                db.execute(
+                    "INSERT OR IGNORE INTO wheel_groups(chat,config) VALUES(?,?)",
+                    (
+                        chat,
+                        encode(
+                            {
+                                "enabled": True,
+                                "stakes": [50, 100, 500, 1000],
+                                "limit": 20,
+                                "cooldown": 3,
+                            }
+                        ),
+                    ),
+                )
+            # Keep the existing platform tenant for legacy groups.  New groups
+            # get a lightweight owner record so local management is isolated.
+            if (
+                actor != self.owner
+                and "tenant_groups" in tables
+                and not db.execute(
+                    "SELECT 1 FROM tenant_groups WHERE chat=?", (chat,)
+                ).fetchone()
+            ):
+                tenant = "owner:" + actor
+                db.execute(
+                    "INSERT OR IGNORE INTO tenants(id,owner,status,created) VALUES(?,?,'active',?)",
+                    (tenant, actor, self.clock()),
+                )
+                db.execute(
+                    "INSERT OR IGNORE INTO tenant_groups(chat,tenant,verified,mode) VALUES(?,?,?,'auto')",
+                    (chat, tenant, self.clock()),
+                )
+            if (
+                actor != self.owner
+                and "tenant_settings" in tables
+                and db.execute(
+                    "SELECT 1 FROM tenant_groups WHERE chat=?", (chat,)
+                ).fetchone()
+            ):
+                # Basic group services are on by default. Platform-controlled
+                # modules and paid budgets remain gated outside this row.
+                defaults = {
+                    "canada_enabled": True,
+                    "ads_enabled": True,
+                    "points": {
+                        "enabled": True,
+                        "checkin": 0,
+                        "chat": 0,
+                        "interval": 60,
+                        "cap": 0,
+                        "groups": [chat],
+                    },
+                }
+                for key, value in defaults.items():
+                    db.execute(
+                        "INSERT OR IGNORE INTO tenant_settings(chat,key,value) VALUES(?,?,?)",
+                        (chat, key, encode(value)),
+                    )
+            self.audit(
+                db,
+                actor,
+                "group_registered" if not fresh else "group_recreated",
+                {"chat": chat, "title": title, "enabled": not fresh or not existing},
+            )
+
+    def suspend_group(self, chat, reason="bot_left"):
+        """Stop new group business without destroying orders or financial evidence."""
+        chat = str(chat)
+        with self.tx() as db:
+            db.execute(
+                "INSERT INTO meta(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ("group_exit:" + chat, str(self.owner)),
+            )
+            tables = {
+                row[0]
+                for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            db.execute(
+                "UPDATE mod_groups SET enabled=0,version=version+1 WHERE chat=?",
+                (chat,),
+            )
+            db.execute(
+                "UPDATE tenant_groups SET status='suspended',error=?,version=version+1 "
+                "WHERE chat=? AND status='active'",
+                (reason, chat),
+            )
+            if "mod_schedules" in tables:
+                db.execute(
+                    "UPDATE mod_schedules SET enabled=0,version=version+1,error=? WHERE chat=?",
+                    (reason, chat),
+                )
+            if "ak_policies" in tables:
+                db.execute(
+                    "UPDATE ak_policies SET enabled=0,error=? WHERE chat=? AND enabled=1",
+                    (reason, chat),
+                )
+            if "sr_consent" in tables:
+                db.execute(
+                    "UPDATE sr_consent SET enabled=0,version=version+1,gap=? "
+                    "WHERE chat=? AND enabled=1",
+                    (reason, chat),
+                )
+            db.execute(
+                "UPDATE ads SET status='review',error='群已停用，需人工核查后重新安排',"
+                "version=version+1 WHERE status IN ('pending','sent','sending') AND approved=1 "
+                "AND paid=1 AND json_valid(package) AND json_extract(package,'$.target')=?",
+                (chat,),
+            )
+            if "ad_operations" in tables:
+                db.execute(
+                    "UPDATE ad_operations SET status='review',error=? "
+                    "WHERE chat=? AND status IN ('executing','retry')",
+                    (reason, chat),
+                )
+            if "ad_boards" in tables:
+                db.execute(
+                    "UPDATE ad_boards SET state='review',error=? WHERE chat=? AND state='busy'",
+                    (reason, chat),
+                )
+            self.audit(
+                db, "system", "group_suspended", {"chat": chat, "reason": reason}
+            )
+
+    def restore_platform_group(self, uid, chat, expected):
+        chat = str(chat)
+        if str(uid) != self.owner:
+            raise Rejected("仅原经营群主可确认旧群重新接入")
+        with self.tx() as db:
+            group = db.execute(
+                "SELECT enabled,version FROM mod_groups WHERE chat=?", (chat,)
+            ).fetchone()
+            marker = db.execute(
+                "SELECT value FROM meta WHERE key=?", ("group_exit:" + chat,)
+            ).fetchone()
+            tenant = db.execute(
+                "SELECT tenant FROM tenant_groups WHERE chat=?", (chat,)
+            ).fetchone()
+            if (
+                not group
+                or group["enabled"]
+                or group["version"] != expected
+                or not marker
+                or marker["value"] != str(uid)
+                or (tenant and tenant["tenant"] != "platform")
+            ):
+                raise Rejected("群归属或状态已变化，请重新核查")
+            db.execute(
+                "UPDATE mod_groups SET enabled=1,version=version+1 WHERE chat=?",
+                (chat,),
+            )
+            db.execute("DELETE FROM meta WHERE key=?", ("group_exit:" + chat,))
+            db.execute(
+                "UPDATE tenant_groups SET status='active',error='',version=version+1 "
+                "WHERE chat=? AND tenant='platform' AND status='suspended' AND error='bot_left'",
+                (chat,),
+            )
+            self.audit(db, uid, "group_restored", {"chat": chat})
+
     def put(self, db, key, value):
         db.execute(
             "INSERT INTO settings(key,value,version) VALUES(?,?,1) ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=settings.version+1",
@@ -145,8 +362,21 @@ class Store:
             (self.clock(), str(actor), action, encode(data)),
         )
 
-    def allowed(self, uid, scope=None, db=None):
+    def is_superadmin(self, uid, db=None):
+        """Check explicit, unexpired platform authority; manager never implies it."""
         if str(uid) == self.owner:
+            return True
+        row = (
+            (db or self.db)
+            .execute("SELECT scopes,expires FROM roles WHERE uid=?", (str(uid),))
+            .fetchone()
+        )
+        return bool(
+            row and row[1] > self.clock() and "superadmin" in json.loads(row[0])
+        )
+
+    def allowed(self, uid, scope=None, db=None):
+        if self.is_superadmin(uid, db):
             return True
         row = (
             (db or self.db)
@@ -164,21 +394,15 @@ class Store:
         )
 
     def require(self, uid, scope=None, db=None, owner=False, *, chat=None):
-        if chat is not None and not owner:
-            from .tenants import LOCAL_SCOPES, PLATFORM, binding
+        if chat is not None:
+            from .group_authority import require
 
-            row = binding(self, chat, db)
-            if row and row["tenant"] != PLATFORM:
-                if str(uid) == self.owner:
-                    return
-                if (
-                    row["owner"] == str(uid)
-                    and row["status"] == row["tenant_status"] == "active"
-                    and (scope is None or scope in LOCAL_SCOPES)
-                ):
-                    return
-                raise Rejected("没有此群经营主体的权限")
-        if (owner and str(uid) != self.owner) or not self.allowed(uid, scope, db):
+            require(self, uid, chat, scope, db)
+            if not owner:
+                return
+        if (owner and not self.is_superadmin(uid, db)) or not self.allowed(
+            uid, scope, db
+        ):
             raise Rejected("无权限")
 
     def grant(self, uid, target, scopes, days):
@@ -187,21 +411,23 @@ class Store:
             not str(target).isdigit()
             or int(target) <= 0
             or str(target) == self.owner
-            or not set(scopes) <= SCOPES
+            or not set(scopes) <= GRANT_SCOPES
             or not scopes
             or not 1 <= days <= 365
         ):
             raise Rejected("请填写有效目标 UID、权限和 1—365 天授权期限")
         token = secrets.token_urlsafe(24)
         with self.tx() as db:
+            self.require(uid, owner=True, db=db)
             db.execute(
-                "INSERT INTO grants(token,target,scopes,expires,role_expires) VALUES(?,?,?,?,?)",
+                "INSERT INTO grants(token,target,scopes,expires,role_expires,issuer) VALUES(?,?,?,?,?,?)",
                 (
                     hashlib.sha256(token.encode()).hexdigest(),
                     str(target),
                     encode(sorted(set(scopes))),
                     self.clock() + 600,
                     self.clock() + days * 86400,
+                    str(uid),
                 ),
             )
             self.audit(
@@ -221,6 +447,7 @@ class Store:
                 or row["target"] != str(uid)
                 or row["used"]
                 or row["expires"] <= self.clock()
+                or (row["issuer"] and not self.is_superadmin(row["issuer"], db))
             ):
                 raise Rejected("授权链接无效、过期或不属于你")
             db.execute("UPDATE grants SET used=1 WHERE token=?", (key,))
@@ -245,8 +472,13 @@ class Store:
     def revoke(self, uid, target):
         with self.tx() as db:
             self.require(uid, owner=True, db=db)
+            if str(target) == self.owner:
+                raise Rejected("初始恢复账号不能在此撤销；其业务权限与其他超管相同")
             db.execute("DELETE FROM roles WHERE uid=?", (str(target),))
-            db.execute("UPDATE grants SET used=1 WHERE target=?", (str(target),))
+            db.execute(
+                "UPDATE grants SET used=1 WHERE target=? OR issuer=?",
+                (str(target), str(target)),
+            )
             self.audit(db, uid, "access_revoked", {"target": str(target)})
 
     def credit(self, db, op, uid, delta, reason, chat=None):
@@ -331,10 +563,18 @@ class Store:
         return row[0] if row else 0
 
     def callback(self, uid, chat, payload):
+        from .group_authority import stamp
+
         token = secrets.token_urlsafe(16)
         self.db.execute(
             "INSERT INTO callbacks(token,uid,chat,payload,expires) VALUES(?,?,?,?,?)",
-            (token, str(uid), str(chat), encode(payload), self.clock() + 600),
+            (
+                token,
+                str(uid),
+                str(chat),
+                encode(stamp(self, uid, payload)),
+                self.clock() + 600,
+            ),
         )
         return "sb:" + token
 
@@ -349,7 +589,9 @@ class Store:
             or row["expires"] <= self.clock()
         ):
             raise Rejected("按钮已过期或不属于当前会话，请重新打开菜单")
-        return json.loads(row["payload"])
+        from .group_authority import unstamped
+
+        return unstamped(self, json.loads(row["payload"]))
 
     def consume(self, token):
         with self.tx() as db:
@@ -362,15 +604,25 @@ class Store:
 
     def dialog(self, uid, payload=None):
         if payload is not None:
+            from .group_authority import stamp
+
             self.db.execute(
                 "INSERT INTO dialogs(uid,payload,expires) VALUES(?,?,?) ON CONFLICT(uid) DO UPDATE SET payload=excluded.payload,expires=excluded.expires",
-                (str(uid), encode(payload), self.clock() + 600),
+                (str(uid), encode(stamp(self, uid, payload)), self.clock() + 600),
             )
             return None
         row = self.db.execute(
             "SELECT payload,expires FROM dialogs WHERE uid=?", (str(uid),)
         ).fetchone()
-        return json.loads(row[0]) if row and row[1] > self.clock() else None
+        if not row or row[1] <= self.clock():
+            return None
+        from .group_authority import unstamped
+
+        try:
+            return unstamped(self, json.loads(row[0]))
+        except Rejected:
+            self.clear_dialog(uid)
+            return None
 
     def clear_dialog(self, uid):
         self.db.execute("DELETE FROM dialogs WHERE uid=?", (str(uid),))

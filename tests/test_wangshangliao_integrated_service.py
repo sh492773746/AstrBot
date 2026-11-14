@@ -66,10 +66,7 @@ def service(tmp_path):
             selections={}, run=AsyncMock(return_value="public-result")
         ),
         legacy_management=GroupManagement(context, tmp_path / "legacy"),
-        cashback=SimpleNamespace(
-            private_invitation_reply=AsyncMock(return_value="本人返现")
-        ),
-        private_interaction=SimpleNamespace(handle=AsyncMock(return_value=True)),
+        cashback=SimpleNamespace(),
     )
     return OpenService(plugin, tmp_path / "embedded", integrated=True)
 
@@ -283,7 +280,8 @@ async def test_overlay_keeps_saved_activity_and_cashback_policy_unchanged(tmp_pa
     value.store.configure(settings["version"], True, 20, 1000, "root")
     await value.refresh()
     paused = value.policy_values("99", original)
-    assert paused["enabled_groups"] == ["5"] and paused["reply_private"]
+    assert paused["enabled_groups"] == ["5"]
+    assert not paused.get("reply_private")
     assert not paused["moderation"]["enabled"] and paused["_open_paused"]
     assert not paused["proactive_send"]["enabled"]
 
@@ -299,7 +297,7 @@ async def test_runtime_uses_overlay_without_replacing_base_snapshot(tmp_path):
     base = PolicySnapshot(
         "99",
         "99:6",
-        json.dumps({"enabled_groups": ["5"], "reply_private": True}),
+        json.dumps({"enabled_groups": ["5"], "reply_groups": {"5": True}}),
         time.time(),
     )
     runtime.publish("bot", base)
@@ -312,7 +310,7 @@ async def test_runtime_uses_overlay_without_replacing_base_snapshot(tmp_path):
     assert observed[0]["_open_integrated"]
     assert runtime.snapshots["bot"].values() == {
         "enabled_groups": ["5"],
-        "reply_private": True,
+        "reply_groups": {"5": True},
     }
 
 
@@ -444,8 +442,6 @@ async def test_embedded_control_never_starts_a_second_account_login(tmp_path):
     "text",
     [
         "我的邀请",
-        "1",
-        "我的邀请 2 昨日明细",
         "参加抽奖",
         "排名 2",
         "管理 添加关键词 abc",
@@ -471,41 +467,6 @@ def test_unmatched_commands_never_gain_authority(text):
 
 
 @pytest.mark.asyncio
-async def test_my_invitation_bypasses_chat_and_only_calls_sender_bound_query(tmp_path):
-    value = service(tmp_path)
-    value.chat = AsyncMock()
-    value.store.remember_roster("99", {"1": {"nimId": "1001"}})
-    extra = {}
-    event = SimpleNamespace(
-        actor_identity=ActorIdentity("99", "1", "1001"),
-        platform=SimpleNamespace(account="99", config={"id": "fixture"}),
-        processing_completion=asyncio.get_running_loop().create_future(),
-        message_str="我的邀请",
-        eligible=True,
-        get_sender_id=lambda: "1",
-        is_private_chat=lambda: True,
-        get_group_id=lambda: "",
-        get_extra=lambda k: (
-            extra.get(k)
-            if k != "wangshangliao_payload"
-            else {
-                "recall_route": {"time": str(int(time.time() * 1000))},
-            }
-        ),
-        set_extra=lambda k, v: extra.update({k: v}),
-        send=AsyncMock(),
-        plain_result=lambda text: text,
-        stop_event=lambda: None,
-    )
-    bind_actor(event)
-    await value.on_event(event)
-    value.plugin.cashback.private_invitation_reply.assert_awaited_once_with(event)
-    value.plugin.private_interaction.handle.assert_not_awaited()
-    value.chat.assert_not_awaited()
-    assert event.send.call_args.args[0] == "本人返现"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("private", [False, True])
 async def test_group_write_guard_does_not_require_model_wake_eligibility(
     tmp_path, private
@@ -519,7 +480,7 @@ async def test_group_write_guard_does_not_require_model_wake_eligibility(
     adapter = SimpleNamespace(account="99", config={"id": "fixture"})
     guard = value.write_guard(adapter, event)
     if private:
-        with pytest.raises(OpenError, match="operation_revoked"):
+        with pytest.raises(OpenError, match="^private_messages_retired$"):
             guard()
     else:
         guard()
@@ -546,40 +507,43 @@ async def test_revoked_selected_group_reports_denial_without_reading_roster(tmp_
         "group": "5",
         "expires": time.monotonic() + 60,
     }
-    assert await value.manager_command(event, "确认授权 stale") == "无权限"
+    selections = copy.deepcopy(value.plugin.commands.selections)
+    value.store.connect = Mock(wraps=value.store.connect)
+    with pytest.raises(OpenError, match="^private_messages_retired$"):
+        await value.manager_command(event, "确认授权 stale")
+    value.management.allowed.assert_not_called()
     value.roster.assert_not_awaited()
+    value.plugin.commands.run.assert_not_awaited()
+    value.store.connect.assert_not_called()
+    assert value.plugin.commands.selections == selections
 
 
 @pytest.mark.asyncio
 async def test_missing_native_permissions_return_explicit_failure_not_success(tmp_path):
     from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
+    from tests.test_wangshangliao_plain_commands import native_event
 
     value = service(tmp_path)
     value.store.remember_roster("99", {"1": {"nimId": "1001"}})
     value.manager_command = AsyncMock(
         side_effect=ProtocolError("moderation_permission")
     )
-    extras = {
-        "wangshangliao_payload": {
-            "created_at": int(time.time() * 1000),
-        }
-    }
-    event = SimpleNamespace(
-        actor_identity=ActorIdentity("99", "1", "1001"),
-        platform=SimpleNamespace(account="99", config={"id": "fixture"}),
-        processing_completion=asyncio.get_running_loop().create_future(),
-        message_str="管理 全员禁言",
-        eligible=True,
-        get_sender_id=lambda: "1",
-        is_private_chat=lambda: True,
-        get_extra=lambda k: extras.get(k),
-        set_extra=lambda k, v: extras.update({k: v}),
-        plain_result=lambda text: text,
-        send=AsyncMock(),
-        stop_event=Mock(),
-    )
-    bind_actor(event)
+    event = native_event("管理 全员禁言")
+    event.platform.account = "99"
+    event.platform.members = {"5": {"1": "1001"}}
+    event.message_obj.self_id = "99"
+    event.message_obj.sender.user_id = "1"
+    event.session_id = "99/5"
+    event.actor_identity = ActorIdentity("99", "1", "1001", "1")
+    event.eligible = True
+    event.get_extra("wangshangliao_payload")["sender"] = "1"
+    event.send = AsyncMock()
+    event.plain_result = lambda text: text
+    event.stop_event = Mock()
+    assert not event.is_private_chat()
+    assert event.get_group_id() == "5"
     await value.on_event(event)
+    value.manager_command.assert_awaited_once_with(event, "全员禁言")
     assert "未执行" in event.send.call_args.args[0]
     assert "请先把我设为群管理员" in event.send.call_args.args[0]
     assert "原生" not in event.send.call_args.args[0]
@@ -619,72 +583,6 @@ async def test_activation_cooldown_is_shared_and_silent(tmp_path):
     diagnostics.emit.assert_not_called()
     value.activate.assert_not_awaited()
     event.stop_event.assert_called_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("control", ["/chat", "/exit"])
-async def test_private_chat_controls_survive_astrbot_wake_prefix_stripping(
-    tmp_path, control
-):
-    value = service(tmp_path)
-    value.chat = AsyncMock()
-    extras = {
-        "wangshangliao_payload": {
-            "text": control,
-            "created_at": int(time.time() * 1000),
-        }
-    }
-    event = SimpleNamespace(
-        platform=SimpleNamespace(account="99", config={}),
-        processing_completion=asyncio.get_running_loop().create_future(),
-        message_str=control[1:],
-        eligible=True,
-        is_private_chat=lambda: True,
-        get_extra=lambda k: extras.get(k),
-        set_extra=lambda k, v: extras.update({k: v}),
-        stop_event=Mock(),
-    )
-    bind_actor(event)
-    await value.on_event(event)
-    assert event.message_str == control
-    value.plugin.private_interaction.handle.assert_awaited_once_with(event, control)
-    value.chat.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("command", ["菜单", "帮助"])
-async def test_existing_friend_can_request_fixed_menu_picture_link(tmp_path, command):
-    from astrbot.builtin_stars.wangshangliao_moderation.feature_image import (
-        GUIDE_LINKS,
-    )
-
-    value = service(tmp_path)
-    value.verify_actor = AsyncMock()
-    extras = {"wangshangliao_payload": {"created_at": int(time.time() * 1000)}}
-    event = SimpleNamespace(
-        actor_identity=ActorIdentity("99", "unverified", "1001"),
-        platform=SimpleNamespace(account="99", config={}),
-        processing_completion=asyncio.get_running_loop().create_future(),
-        message_str=command,
-        eligible=True,
-        is_private_chat=lambda: True,
-        get_extra=lambda key: extras.get(key),
-        set_extra=lambda key, val: extras.update({key: val}),
-        plain_result=lambda text: text,
-        send=AsyncMock(),
-        stop_event=Mock(),
-    )
-    bind_actor(event)
-    await value.on_event(event)
-    menu = value.navigation.screen(
-        value.navigation.sessions[value.navigation.key(event)]
-    )
-    if command == "帮助":
-        menu += "\n群内操作本群；私聊先发送「群列表」「选择群 1」。"
-    assert event.send.call_args.args[0] == menu + "\n\n" + GUIDE_LINKS
-    value.verify_actor.assert_not_awaited()
-    value.plugin.cashback.private_invitation_reply.assert_not_awaited()
-    value.plugin.private_interaction.handle.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -796,6 +694,7 @@ async def test_native_permission_save_never_persists_effective_tenant_overlay(
     )
 
     app, page, _, configs, _ = page_app
+    configs["fixture"]["proactive_send"]["targets"] = ["5"]
     base = {
         k: copy.deepcopy(v)
         for k, v in configs["fixture"].items()
@@ -826,7 +725,6 @@ async def test_native_permission_save_never_persists_effective_tenant_overlay(
                 "revision": revision(effective),
                 "group_id": "7",
                 "group": {"permissions": ["rename"]},
-                "reply_private": False,
             },
         )
     assert response.status_code == 200, response.text
@@ -838,4 +736,3 @@ async def test_native_permission_save_never_persists_effective_tenant_overlay(
         "7": ["rename"],
     }
     assert saved["moderation"]["semantic"] == base["moderation"]["semantic"]
-    assert not saved["reply_private"]

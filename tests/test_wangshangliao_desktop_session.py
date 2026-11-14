@@ -25,6 +25,13 @@ from astrbot.core.platform.sources.wangshangliao.business import (
 )
 from astrbot.core.platform.sources.wangshangliao.registration import RegistrationManager
 
+DESKTOP_CLIENT = {
+    "kind": "CLIENT_KIND_DESKTOP_MAC_X64",
+    "version": "2.8.4",
+    "v1": "7579ca83a1c636de85d622fccbcc5a0f49e9a4acb06f969a3a29e851e5d86e54",
+    "v2": "34251676bf6ecfacb4a14365b14e5e5690d4b818f06c71a088b2847225ec6cef",
+}
+
 
 @pytest.fixture
 def desktop_deployment():
@@ -159,7 +166,14 @@ async def test_desktop_login_secondary_verification_and_current_im_token(desktop
     assert client.mac == bytes([7]) * 16
     assert await client.refresh_nim_token() == "desktop-im-token"
     assert seen == [
-        ("/v1/user/login", {"type": "LOGIN_TYPE_SMS"}),
+        (
+            "/v1/user/login",
+            {
+                "type": "LOGIN_TYPE_SMS",
+                "version": "2.8.4",
+                "client": DESKTOP_CLIENT,
+            },
+        ),
         ("/v1/user/verify_safe_code", {"code": "123456"}),
         (
             "/v1/user/get-nim-token",
@@ -167,6 +181,7 @@ async def test_desktop_login_secondary_verification_and_current_im_token(desktop
                 "nimDeviceId": "persistent-desktop-device",
                 "uid": 99,
                 "loginToken": "desktop-verified",
+                "client": DESKTOP_CLIENT,
             },
         ),
     ]
@@ -250,7 +265,8 @@ async def test_desktop_registration_finishes_before_issuing_save_capability(
         assert not tx.saved["business"]["security_required"]
         assert not tx.pending_login
         login = next(params for path, params in seen if path == "/v1/user/login")
-        assert not {"version", "appVersion", "appHash"}.intersection(login)
+        assert login["version"] == "2.8.4" and login["client"] == DESKTOP_CLIENT
+        assert not {"appVersion", "appHash"}.intersection(login)
         assert seen[-1] == (
             "/v1/user/get-nim-token",
             {
@@ -259,6 +275,7 @@ async def test_desktop_registration_finishes_before_issuing_save_capability(
                 "loginToken": (
                     "desktop-verified" if security_required else "desktop-pending"
                 ),
+                "client": DESKTOP_CLIENT,
             },
         )
         assert "123456" not in json.dumps(tx.saved)
@@ -273,6 +290,47 @@ async def test_desktop_registration_finishes_before_issuing_save_capability(
         )
     finally:
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_desktop_release_metadata_is_pinned_and_inputs_are_not_mutated(
+    desktop_http,
+):
+    client, seen, replies = desktop_http
+    client.jwt = "desktop-credential"
+    original = {"client": {"version": "untrusted"}}
+    replies.extend(
+        [
+            (
+                {
+                    "code": 0,
+                    "data": {"nimToken": "accepted", "kind": "NIM_LOGIN_KIND_CALLBACK"},
+                },
+                {},
+            ),
+            ({"code": 0, "data": {}}, {}),
+        ]
+    )
+    result = await client.request("/v1/user/get-nim-token", original)
+    assert result["kind"] == "NIM_LOGIN_KIND_CALLBACK"
+    assert seen[0][1]["client"] == DESKTOP_CLIENT
+    assert original == {"client": {"version": "untrusted"}}
+    await client.request("/v1/group/get-group-list", {"v": "0"})
+    assert seen[-1][1] == {"v": "0"}
+    assert client.export()["protocol_version"] == "2.8.3"
+
+
+@pytest.mark.asyncio
+async def test_desktop_release_rejection_is_explicit_without_fallback(desktop_http):
+    client, seen, replies = desktop_http
+    client.jwt = "desktop-credential"
+    replies.append(({"code": 1200, "msg": "client check", "data": None}, {}))
+    with pytest.raises(BusinessError, match="client_check_failed") as caught:
+        await client.refresh_nim_token()
+    assert caught.value.number == 1200
+    assert caught.value.provider_rejected is True
+    assert len(seen) == 1
+    assert client.jwt == "desktop-credential"
 
 
 @pytest.mark.asyncio

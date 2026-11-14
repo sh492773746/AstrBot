@@ -1,4 +1,4 @@
-"""Explicit, fixed-artwork upload using the official 3.7.1 media protocol."""
+"""Bounded group-media uploads using the official native protocol."""
 
 import asyncio
 import hashlib
@@ -6,7 +6,6 @@ import inspect
 import io
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -15,20 +14,6 @@ from PIL import Image
 from astrbot.core.platform.sources.wangshangliao import wire
 from astrbot.core.platform.sources.wangshangliao.business import BusinessError
 
-GUIDE_PATH = Path(__file__).parent / "assets" / "feature-guide-v1.jpg"
-OPEN_GUIDE_PATH = GUIDE_PATH.with_name("open-feature-guide-v1.jpg")
-GUIDE_DIGEST = "1d9cd90b8f1d543dc76231b802f8d5a642200b07c8c0d35c9e87850419d9f94a"
-OPEN_GUIDE_DIGEST = "259c6ea63b348335251e8b156e60d1135b91312f801f9f57320100b5ce4ed547"
-ONBOARDING_GUIDES = {
-    "instructions": (
-        GUIDE_PATH.with_name("instructions.jpg"),
-        "0baf6b6479abe935a09294992c17c068d8be13d27a6576b013909fb8c87da4ff",
-    ),
-    "examples": (
-        GUIDE_PATH.with_name("examples.jpg"),
-        "1a4f32e0888ea3dbf8784ec19f2a648a1729bc6d46a04ae81cc818dbd6fd78ab",
-    ),
-}
 IMAGE_LIMIT = 1024 * 1024
 
 # APK 3.7.1 and the verified 2026-10-16 17:00:15 UTC official LineEntry agree.
@@ -49,54 +34,6 @@ class VerifiedGuideAsset:
     digest: str
     asset_id: str
     size: int
-
-
-def load_fixed_guide(*, public=False, kind=None):
-    """Load a digest-pinned 1024-square JPEG from the fixed artwork allowlist.
-
-    Args:
-        public: Select the existing public guide instead of the private guide.
-        kind: Fixed onboarding instructions or examples; never a caller path.
-
-    Returns:
-        Fixed path, verified bytes and their pinned SHA-256 digest.
-
-    Raises:
-        wire.ProtocolError: If the selection, file, digest or image changed.
-    """
-    if (
-        type(public) is not bool
-        or kind is not None
-        and (type(kind) is not str or kind not in ONBOARDING_GUIDES)
-    ):
-        raise wire.ProtocolError("guide_image_selection")
-    path, digest = (
-        ONBOARDING_GUIDES[kind]
-        if kind is not None
-        else (
-            (OPEN_GUIDE_PATH, OPEN_GUIDE_DIGEST)
-            if public
-            else (GUIDE_PATH, GUIDE_DIGEST)
-        )
-    )
-    try:
-        if path.is_symlink():
-            raise ValueError
-        with path.open("rb") as stream:
-            data = stream.read(IMAGE_LIMIT + 1)
-        if not 0 < len(data) <= IMAGE_LIMIT:
-            raise wire.ProtocolError("guide_image_size")
-        if hashlib.sha256(data).hexdigest() != digest:
-            raise wire.ProtocolError("guide_image_digest")
-        with Image.open(io.BytesIO(data)) as image:
-            if image.format != "JPEG" or image.size != (1024, 1024):
-                raise wire.ProtocolError("guide_image_shape")
-            image.verify()
-    except wire.ProtocolError:
-        raise
-    except Exception:
-        raise wire.ProtocolError("guide_image_file") from None
-    return path, data, digest
 
 
 def is_native_asset_id(value):
@@ -137,29 +74,6 @@ async def _read_bounded(response, limit):
         if len(data) > limit:
             raise BusinessError("guide_upload_response_limit")
     return bytes(data)
-
-
-async def upload_fixed_guide(client, *, public=False, kind=None, authorize):
-    """Explicitly upload fixed artwork; never called by the welcome send path.
-
-    Args:
-        client: Existing authenticated BusinessClient; no login is performed.
-        public: Select one of the two digest-pinned local guides.
-        kind: Optional fixed onboarding-artwork selector.
-        authorize: Account/lifecycle guard checked under the business HTTP lock.
-
-    Returns:
-        Account-bound asset receipt after exact original and thumbnail readback.
-        This does not publish REVIEWED_ASSETS, send messages or write a ledger.
-
-    Raises:
-        BusinessError: On unreviewed endpoints, rejection or uncertain outcome.
-        wire.ProtocolError: If fixed artwork or authorization is invalid.
-    """
-    path, image, _ = load_fixed_guide(public=public, kind=kind)
-    return await upload_verified_image(
-        client, image, width=1024, height=1024, filename=path.name, authorize=authorize
-    )
 
 
 async def upload_verified_image(

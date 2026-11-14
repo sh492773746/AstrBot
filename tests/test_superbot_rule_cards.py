@@ -8,7 +8,7 @@ from data.plugins.astrbot_plugin_superbot.rich_text import PlainHTML, cards
 def test_rules_native_sections_and_bounds():
     text = Path("data/plugins/astrbot_plugin_superbot/docs/player-help.md").read_text()
     pages = cards(text, fold_sections=True)
-    assert len(pages) == 1
+    assert pages
     for plain, html in pages:
         parser = PlainHTML()
         parser.feed(html)

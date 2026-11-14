@@ -148,6 +148,7 @@ async def test_k3_hub_button_rejects_disabled_group(text_service):
         s.store.put(db, "modules", {**s.store.get("modules"), "k3": True})
     with pytest.raises(Rejected, match="本群此玩法当前不可用"):
         await s.text.center.action(click(s, panel, "k3"))
+    assert not s.store.db.execute("SELECT 1 FROM k3_sessions").fetchone()
 
 
 @pytest.mark.asyncio

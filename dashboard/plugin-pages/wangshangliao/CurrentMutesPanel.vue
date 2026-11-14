@@ -17,7 +17,7 @@ const busy = ref(false);
 const error = ref("");
 const notice = ref("");
 const loaded = ref(false);
-const pending = ref<{ member: Member; confirmation: string; version: number } | null>(null);
+const pending = ref<{ member: Member; confirmation: string; version: number; removesBlacklist: boolean } | null>(null);
 let active = true;
 onBeforeUnmount(() => { active = false; });
 async function api(payload: Record<string, unknown>) {
@@ -53,7 +53,7 @@ async function refresh() {
 async function preview(member: Member) {
   pending.value = null;
   const result = await api({ operation: "preview", version: version.value, member: member.id });
-  if (active) pending.value = { member, confirmation: result.confirmation, version: version.value };
+  if (active) pending.value = { member, confirmation: result.confirmation, version: version.value, removesBlacklist: result.removes_blacklist === true };
 }
 async function commit() {
   const selected = pending.value;
@@ -71,6 +71,13 @@ async function commit() {
       : result.status === "unknown"
         ? t("解禁回执未知，未自动重试", "Unmute receipt unknown; not retried")
         : t("解禁未受理", "Unmute not accepted");
+  const blacklistNotice: Record<string, string> = {
+    removed: t("已同时移出本群黑名单", "Also removed from this group's blacklist"),
+    retained: t("黑名单未移除，请先核对解禁结果", "Blacklist retained; verify the unmute first"),
+    changed: t("名单或权限已变化，未移除新记录，请刷新核对", "List or authority changed; newer entries were not removed"),
+    failed: t("黑名单移除失败，请核对处理", "Blacklist removal failed; follow-up required"),
+  };
+  if (blacklistNotice[result.blacklist_status]) notice.value += "；" + blacklistNotice[result.blacklist_status];
   await read();
 }
 onMounted(() => run(refresh));
@@ -100,6 +107,7 @@ onMounted(() => run(refresh));
       <strong>{{ t("确认解除禁言", "Confirm unmute") }}</strong>
       <p>{{ pending.member.name }} · {{ pending.member.id }}</p>
       <p>{{ t("机器人", "Bot") }} {{ account }} · {{ t("群", "Group") }} {{ group }}</p>
+      <p v-if="pending.removesBlacklist">{{ t("确认解禁后，同时移出本群黑名单", "Verified unmute also removes this group's blacklist entry") }}</p>
       <div class="actions">
         <button type="button" :disabled="busy" @click="run(commit)"><ShieldCheck :size="16" />{{ t("确认解禁", "Confirm") }}</button>
         <button type="button" :disabled="busy" @click="pending = null"><X :size="16" />{{ t("取消", "Cancel") }}</button>

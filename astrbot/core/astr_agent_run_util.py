@@ -92,10 +92,8 @@ def _should_buffer_llm_result(
     stream_to_general: bool,
     agent_runner: AgentRunner,
 ) -> bool:
-    return (
-        buffer_intermediate_messages
-        and not stream_to_general
-        and not agent_runner.streaming
+    return buffer_intermediate_messages and (
+        stream_to_general or not agent_runner.streaming
     )
 
 

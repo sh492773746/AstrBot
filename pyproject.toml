@@ -93,6 +93,7 @@ dev = [
   "pytest-aiohttp>=1,<2",
   "playwright>=1.50,<2",
   "Telethon>=1.45,<2",
+  "pyhpke==0.6.5",
   "ruff==0.15.22",
 ]
 

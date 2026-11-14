@@ -6,7 +6,7 @@
   "usdt_address": {"description": "专用 USDT-TRC20 收款地址（仅公钥地址）", "type": "string", "default": ""},
   "trongrid_api_key": {"description": "TronGrid 查询 API Key，可选；不填写钱包私钥", "type": "string", "default": "", "secret": true},
   "enabled": {"description": "启用插件；请先核实专用机器人与超管 UID", "type": "bool", "default": false},
-  "platform_id": {"description": "新机器人独立的 AstrBot Telegram 平台 ID，不填写现有机器人", "type": "string", "default": ""},
+  "platform_id": {"description": "新机器人独立的 AstrBot Telegram 适配器 ID，不填写现有机器人", "type": "string", "default": ""},
   "owner_uid": {"description": "@example_owner 经核实的 Telegram 数字 UID；不是用户名，不自动猜测", "type": "string", "default": ""},
   "chat_provider_id": {"description": "用于新机器人独立配置的现有聊天模型 ID", "type": "string", "default": ""},
   "embedding_provider_id": {"description": "用于新机器人独立知识库的现有嵌入模型 ID", "type": "string", "default": ""},

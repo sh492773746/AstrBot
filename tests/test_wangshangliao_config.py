@@ -78,7 +78,9 @@ async def test_legacy_save_preserves_new_policy_and_explicit_disable_wins(
     assert policy["card_auto"] == {"5": True}
     assert policy["card_suffix"] == {"5": "·群员"}
     assert policy["permissions"] == current["moderation"]["permissions"]
-    assert service.config["platform"][0]["ai_routes"] == current["ai_routes"]
+    assert service.config["platform"][0]["ai_routes"] == {
+        "groups": current["ai_routes"]["groups"]
+    }
     assert current == original
 
 

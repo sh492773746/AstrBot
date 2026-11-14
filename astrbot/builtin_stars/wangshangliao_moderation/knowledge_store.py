@@ -1,4 +1,4 @@
-"""Bounded, owner-scoped text knowledge on the existing public-service database."""
+"""Bounded group-scoped text knowledge on the existing service database."""
 
 import hashlib
 import json
@@ -27,6 +27,17 @@ class KnowledgeScope:
     @property
     def key(self):
         """Return the exact database scope key."""
+        reference = self.kind == "admin_manual" and not (
+            self.owner or self.account or self.group
+        )
+        group = (
+            self.kind == "group"
+            and not self.owner
+            and bool(self.account)
+            and bool(self.group)
+        )
+        if not (reference or group):
+            raise OpenError("knowledge_scope_invalid")
         return self.kind, self.owner, self.account, self.group
 
 
@@ -83,7 +94,7 @@ class KnowledgeStore:
         """Read at most one owner's bounded space.
 
         Args:
-            scope: Exact server-derived personal or group space.
+            scope: Exact server-derived group space.
             guard: Current transport and optional group authorization check.
 
         Returns:

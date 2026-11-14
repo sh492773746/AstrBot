@@ -1,39 +1,5 @@
 # LajiaoLiao
 
-## Source And Build
-
-The repository includes `data/plugins/astrbot_plugin_lajiaoliao/` (group management),
-`astrbot/core/platform/sources/lajiaoliao/` (core compatibility adapter),
-`services/lajiaoliao-bridge/` (Go transport and maintenance tools), Dashboard
-integration and offline tests. `integrations/personas/xiaoman/` contains static
-persona examples required by the configuration tool, not user conversations.
-
-The production compatibility declaration remains plugin v0.8.3 with AstrBot
-4.28.1, Linux and protocol 2. The main repository is 4.29.0-beta.1: source
-integration and offline tests do not certify real login, migration or production
-compatibility with that version. Do not bypass the plugin's version check.
-
-From the repository root, run
-`python services/lajiaoliao-bridge/build_plugin.py --worker-only` to build the
-current host's offline test worker and checksum without certifying production
-dependencies. Build a runtime package on matching Linux dependencies without
-that flag. CI builds workers on Linux/macOS; dedicated plugin tests require POSIX
-file locks and are not collected on Windows. Shared policy and coexistence tests
-still run across platforms.
-
-Binaries, release archives, credentials, cursors, business databases and live
-acceptance reports are excluded. Historical `*ACCEPTANCE.md` references identify
-private evidence, not files distributed in the public source or runtime package.
-Publishing source does not enable accounts, change group settings or restart
-production.
-
-Billing-source fingerprints now use a domain-separated HMAC signed with the
-selected provider API key, rather than a plain digest containing credentials.
-Empty credentials are rejected. Existing rate snapshots with the old fingerprint
-fail closed; an authorized billing operator must review the source and explicitly
-configure matching rates and subscriptions before resuming billed calls. This
-source publication does not rewrite existing rates, balances or billing history.
-
 ## Group AI and Delegated Private Management
 
 The group management page's automation settings provide independent group AI and

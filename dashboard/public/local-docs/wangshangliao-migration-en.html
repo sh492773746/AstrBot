@@ -8,16 +8,20 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 </style></head>
 <body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">Documentation</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>Adapter and plugin configuration migration</h1>
 <p>Flood fallback counts fresh unique messages per account, group and sender, including
-ordinary group commands: three messages in five seconds, eight in ten seconds, or five identical texts in
+ordinary group commands: five messages in three seconds, fifteen in ten seconds, or five identical texts in
 thirty seconds trigger review and enforcement independently of the model.
 Progressive enforcement first allows three successful recall-only actions, then
-recall plus 5/15/60-minute mutes. The recall grace persists across restarts; failed
-or unknown recalls do not consume it. Existing mute history is retained.</p>
+1/3/10-minute mutes, submitting a qualifying mute before independently recalling.
+Expiry of the ten-minute mute restarts the three-warning cycle. Failed/unknown
+actions do not escalate. Existing mute history is retained.</p>
 <p>Updated 2026-10-20. The 2026-10-07 migration build and 2026-10-08 deployment are
-historical milestones. The public bot now runs inside shared AstrBot; the cashier
-service remains independent. Do not restore <code>astrbot-open.service</code> or its public
-<code>control.sock</code>. The dedicated <code>cashier.sock</code> still bridges restricted writes and
-diagnostics. Deployment or passing code tests is not full live acceptance.</p>
+historical milestones. The public bot and Invitation Settlement use shared
+AstrBot/plugin WebUI, retaining the original ledger. Do not restore the retired
+public worker, independent cashier site or its login.
+This private-retirement batch is not deployed; mute-first/raid loading and live
+acceptance remain pending, with raid defense off by default.
+See <a href="wangshangliao-start-en.html">the current mapping</a>.
+Deployment or passing code tests is not full live acceptance.</p>
 <p>Subsequent October 20 live warning checks passed only three cases in 1459282 across
 two isolated fixtures of one and two, not complete escalation, fresh activation,
 finance or phone acceptance; see <a href="wangshangliao-membership-testing-en.html">scoped evidence</a>.
@@ -56,23 +60,31 @@ no backend and sends no messages.</p>
 </tr>
 <tr>
 <td>Reply and AI/moderation settings</td>
-<td>AI → Customer Service / Group AI / Model &amp; Budget; the old Moderation tab is hidden in integrated mode</td>
+<td>AI → Group AI / Model &amp; Budget; rules use Groups → Rules; Customer Service and private Admin Guidance are removed</td>
 </tr>
 <tr>
 <td>Policy revisions and failures</td>
 <td>Runtime &amp; Logs → Operation Logs / Management Audit</td>
 </tr>
 <tr>
-<td>Automatic friend approval and reconciliation</td>
-<td>Groups → Friend Requests; no friend deletion</td>
+<td>Automatic friend approval, welcomes and Friend Requests</td>
+<td>Retired, without automatic friend replacements; retain historical audits</td>
 </tr>
 <tr>
 <td>Administrators, providers, personas, knowledge bases</td>
 <td>Existing AstrBot configuration</td>
 </tr>
 <tr>
-<td>Manual cash payments, Access protection and contact text</td>
-<td>Independent cashier page</td>
+<td>Private finance chat, payment confirmation and Settlement Grants</td>
+<td>Private entrances removed; existing authorized operators use Activities &amp; Finance → Invitation Settlement, without inheriting old Access/chat roles</td>
+</tr>
+<tr>
+<td>Private menus, group selection, personal knowledge and private AI</td>
+<td>Removed; use fixed commands in the target group, never migrate these to group AI</td>
+</tr>
+<tr>
+<td>Private advertising images and attachments</td>
+<td>Existing authorized operators upload keyword/scheduled images in Groups → Rules</td>
 </tr>
 </tbody>
 </table>
@@ -101,9 +113,9 @@ Legacy requests cannot combine transport changes and business edits.</p>
 but does not log out the account. Delayed events cannot send or use management tools.
 Cold starts quarantine old pending chat commands, preserving invitation notices separately.
 Read-only restoration of observation groups cannot activate business execution.</p>
-<p>Only currently authorized fixed private management commands can preview and confirm
-changes. AI explains commands but cannot execute them. Private consultation requires
-<code>/chat</code>. Group mentions, including administrator mentions, require per-group opt-in
+<p>No private command, AI, finance or image-intake execution remains. Authorized
+native group managers use fixed commands in the current group, without gaining
+global Dashboard access. Group mentions, including administrator mentions, require per-group opt-in
 and, like autonomous replies and idle topics, resolve
 <code>profiles.resolve(&quot;group&quot;, account, group)</code>, never private consultation.
 They share the group persona, with account/group overrides, but verified members'
@@ -111,7 +123,7 @@ mention histories remain independent and bounded by the configured turns.
 Other members, groups, accounts, private chats and old group-consultation history
 are never mixed, migrated or reused. Autonomous candidate buffers and the original
 <code>/group</code> origin remain unchanged. All group output is plain text without
-<code>【群聊AI】</code> or <code>【客服咨询】</code> prefixes; private read-only AI is unchanged.
+<code>【群聊AI】</code> or <code>【客服咨询】</code> prefixes; private AI is retired.
 <code>mentions</code> remains independent of <code>autonomous</code>. Ordinary chat reaches bounded, filtered
 model context only when autonomous conversation is separately enabled; idle speech is
 another switch. Budget, payer confirmation, current permissions, quotas and hours apply.
@@ -120,12 +132,9 @@ Existing AstrBot identity, profile, persona and knowledge-base systems remain au
 Verified departure and a durable generation drive exact-group working-data cleanup,
 retaining finance and uncertain-action evidence. Cleanup commits per database, not
 as a cross-database atomic transaction.</p>
-<p>Friend reads have a minimum three-second interval and approvals a minimum
-thirty-second interval, alongside scan periods and durable read backoff. Unknown
-approvals require Dashboard readback; toggles do not clear holds. First-use guidance
-is durably claimed before delivery, and uncertain sends are not replayed. Welcome
-delivery uses fixed reviewed native artwork without automatic uploads. Never restore
-friend deletion.</p>
+<p>No friend polling/approval, welcome or quota DM is sent, and historical pending
+work is not replayed. Retain old approval/onboarding stores and unknown records
+without rewriting them as successes.</p>
 <h2>Backup and rollback</h2>
 <p>Run in a controlled maintenance window with business writes stopped:</p>
 <pre><code class="language-sh">PYTHONPATH=. .venv/bin/python scripts/wsl_policy_migrate.py backup \

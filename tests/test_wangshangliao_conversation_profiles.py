@@ -6,14 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from astrbot.builtin_stars.wangshangliao_moderation.command_menu import TREE
 from astrbot.builtin_stars.wangshangliao_moderation.conversation_profiles import DEFAULT
 from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import OpenCall, OpenRPC
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
 from tests.test_wangshangliao_group_ai import fake_http, model_scope
 from tests.test_wangshangliao_integrated_service import service
 from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
-from tests.test_wangshangliao_public_hardening import chat_event
 
 
 def configure(value):
@@ -59,9 +57,7 @@ def configure(value):
     return cfg, persona
 
 
-def save(
-    value, kind="consultation", *, account="", group="", version=0, selection=None
-):
+def save(value, kind="group", *, account="", group="", version=0, selection=None):
     value.profiles.save(
         kind,
         account,
@@ -75,97 +71,146 @@ def save(
     )
 
 
-@pytest.mark.parametrize("global_binding", [False, True])
-@pytest.mark.parametrize("account_binding", ["absent", "null", "empty"])
-def test_account_consultation_requires_own_nonempty_binding(
-    tmp_path, global_binding, account_binding
-):
+@pytest.mark.parametrize("kind", ["consultation", "personal", "support", "private"])
+@pytest.mark.parametrize("account,group", [("", ""), ("99", ""), ("99", "5")])
+def test_personal_and_support_profiles_are_rejected(tmp_path, kind, account, group):
     value = service(tmp_path)
     configure(value)
-    if global_binding:
-        save(value)
-    save(value, account="199")
-    if account_binding != "absent":
-        with value.store.connect(write=True) as db:
-            db.execute(
-                "INSERT INTO ai_profiles VALUES(?,?,?,?,?)",
-                (
-                    "consultation",
-                    "99",
-                    "",
-                    1,
-                    json.dumps(None if account_binding == "null" else {}),
-                ),
-            )
-    with pytest.raises(OpenError, match="ai_profile_missing"):
-        value.profiles.resolve("consultation", "99")
+    with pytest.raises(OpenError, match="^ai_profile_invalid$"):
+        value.profiles.save(
+            kind,
+            account,
+            group,
+            0,
+            {**DEFAULT, "config_id": "default"},
+            "dashboard/test",
+            guard=lambda: None,
+        )
+    with pytest.raises(OpenError, match="^ai_profile_invalid$"):
+        value.profiles.resolve(kind, account, group)
+    with pytest.raises(OpenError, match="^ai_profile_invalid$"):
+        value.profiles.assert_current({}, kind, account, group)
+    with value.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM ai_profiles").fetchone()[0] == 0
+    assert value.profiles.inventory() == {"configs": [], "personas": []}
     assert value.store.usage()["used"] == 0
 
 
-def test_account_profiles_ignore_global_selection_and_version_changes(tmp_path):
-    value = service(tmp_path)
-    _, persona = configure(value)
-    save(value)
-    save(value, account="99", selection={**DEFAULT, "persona_id": "__builtin__"})
-    save(value, account="199")
-    own = value.profiles.resolve("consultation", "99")
-    other = value.profiles.resolve("consultation", "199")
-    assert own["prompt"] == ""
-    assert own["versions"] == [("consultation", "99", "", 1)]
-    assert other["prompt"] == persona["prompt"]
-    save(value, version=1, selection={**DEFAULT, "persona_id": "__builtin__"})
-    assert value.profiles.resolve("consultation", "99") == own
-    assert value.profiles.resolve("consultation", "199") == other
-    persona["prompt"] += " changed"
-    value.profiles.assert_current(own, "consultation", "99")
-    with pytest.raises(OpenError, match="ai_profile_changed"):
-        value.profiles.assert_current(other, "consultation", "199")
-
-
-@pytest.mark.parametrize("remove", [False, True])
-def test_missing_account_binding_revokes_snapshot_without_global_fallback(
-    tmp_path, remove
-):
+@pytest.mark.parametrize("account,group", [("99", ""), ("", "5")])
+def test_group_profile_requires_account_and_group_together(tmp_path, account, group):
     value = service(tmp_path)
     configure(value)
-    save(value)
-    save(value, account="99")
-    snapshot = value.profiles.resolve("consultation", "99")
-    with value.store.connect(write=True) as db:
-        if remove:
-            db.execute("DELETE FROM ai_profiles WHERE account='99'")
-        else:
-            db.execute("UPDATE ai_profiles SET selection='null' WHERE account='99'")
-    with pytest.raises(OpenError, match="ai_profile_missing"):
-        value.profiles.assert_current(snapshot, "consultation", "99")
+    with pytest.raises(OpenError, match="^ai_profile_invalid$"):
+        value.profiles.save(
+            "group",
+            account,
+            group,
+            0,
+            DEFAULT,
+            "dashboard/test",
+            guard=lambda: None,
+        )
+    with pytest.raises(OpenError, match="^ai_profile_invalid$"):
+        value.profiles.resolve("group", account, group)
+    assert not value.profiles.rows()
+    assert value.store.usage()["used"] == 0
 
 
 @pytest.mark.asyncio
-async def test_unbound_private_consultation_never_calls_global_persona_or_bills(
-    rpc_scope, monkeypatch
+async def test_group_overrides_are_isolated_by_account_and_group(rpc_scope):
+    value, _, _ = rpc_scope
+    _, persona = configure(value)
+    save(value)
+    save(
+        value,
+        account="99",
+        group="5",
+        selection={**DEFAULT, "persona_id": "__builtin__"},
+    )
+    save(value, account="199", group="5")
+    own = value.profiles.resolve("group", "99", "5")
+    other = value.profiles.resolve("group", "199", "5")
+    assert own["prompt"] == ""
+    assert own["versions"] == [("group", "", "", 1), ("group", "99", "5", 1)]
+    assert other["prompt"] == persona["prompt"]
+    save(
+        value,
+        account="199",
+        group="6",
+        selection={**DEFAULT, "persona_id": "__builtin__"},
+    )
+    assert value.profiles.resolve("group", "99", "5") == own
+    assert value.profiles.resolve("group", "199", "5") == other
+    assert value.profiles.resolve("group", "99", "6")["prompt"] == persona["prompt"]
+    persona["prompt"] += " changed"
+    value.profiles.assert_current(own, "group", "99", "5")
+    with pytest.raises(OpenError, match="ai_profile_changed"):
+        value.profiles.assert_current(other, "group", "199", "5")
+
+
+def test_legacy_personal_profiles_never_supply_group_style_or_inventory(tmp_path):
+    value = service(tmp_path)
+    configure(value)
+    save(value)
+    before = value.profiles.resolve("group", "99", "5")
+    value.context.persona_manager.personas_v3.append(
+        {"name": "legacy-private-style", "prompt": "PRIVATE_STYLE_MUST_NOT_LEAK"}
+    )
+    selection = {**DEFAULT, "persona_id": "legacy-private-style"}
+    with value.store.connect(write=True) as db:
+        db.executemany(
+            "INSERT INTO ai_profiles VALUES(?,?,?,?,?)",
+            [
+                (kind, "99", "", 1, json.dumps(selection))
+                for kind in ("consultation", "personal", "support")
+            ],
+        )
+    assert value.profiles.resolve("group", "99", "5") == before
+    assert all(row["kind"] == "group" for row in value.profiles.rows())
+    assert value.profiles.inventory()["personas"] == [
+        {"id": "support", "name": "support"}
+    ]
+    assert value.store.usage()["used"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["consultation", "personal", "support", "private"])
+@pytest.mark.parametrize("scoped", [False, True])
+async def test_rpc_rejects_personal_and_support_profiles_before_roster_io(
+    rpc_scope, kind, scoped
 ):
     value, adapter, _ = rpc_scope
     configure(value)
     save(value)
-    await model_scope(value, adapter)
-    requests = fake_http(monkeypatch)
-    event = chat_event(adapter)
-    await value.chat(event)
-    assert not requests
+    before = value.profiles.rows()
+    payload = {
+        "kind": kind,
+        "account": "99" if scoped else "",
+        "group_id": "5" if scoped else "",
+        "version": 0,
+        "selection": {**DEFAULT, "config_id": "default"},
+    }
+    if scoped:
+        payload["tenant_version"] = value.store.tenant("99", "5")["version"]
+    with pytest.raises(OpenError, match="^group_control_scope$"):
+        await OpenRPC(value).dispatch(
+            OpenCall(action="ai_profile", actor="dashboard/test", payload=payload)
+        )
+    adapter.business.request.assert_not_awaited()
+    assert value.profiles.rows() == before
     assert value.store.usage()["used"] == 0
     assert not value.context.conversation_manager.db.rows
-    assert "AI咨询暂不可用" in event.send.call_args.args[0]
 
 
 def test_profile_resolves_only_allowlisted_values_and_never_copies_secrets(tmp_path):
     value = service(tmp_path)
     configure(value)
     save(value)
-    profile = value.profiles.resolve("consultation")
+    profile = value.profiles.resolve("group")
     assert profile["parameters"] == {
         "temperature": 0.7,
         "top_p": 0.9,
-        "max_completion_tokens": 800,
+        "max_completion_tokens": 512,
     }
     assert profile["history_turns"] == 3
     assert profile["prompt"] == "说话简洁友好。"
@@ -179,10 +224,7 @@ def test_profile_resolves_only_allowlisted_values_and_never_copies_secrets(tmp_p
         save(value)
     reopened = service(tmp_path)
     configure(reopened)
-    assert (
-        reopened.profiles.resolve("consultation")["fingerprint"]
-        == profile["fingerprint"]
-    )
+    assert reopened.profiles.resolve("group")["fingerprint"] == profile["fingerprint"]
 
 
 @pytest.mark.parametrize(
@@ -239,23 +281,22 @@ def test_personas_without_examples_keep_existing_payload(tmp_path, dialogs):
     _, persona = configure(value)
     persona["begin_dialogs"] = dialogs
     save(value)
-    profile = value.profiles.resolve("consultation")
+    profile = value.profiles.resolve("group")
     assert profile["examples"] == []
     assert len(value.profiles.persona_messages(profile)) == 1
 
 
 @pytest.mark.asyncio
-async def test_private_examples_are_style_only_and_never_saved_as_user_history(
+async def test_group_examples_are_style_only_and_never_saved_as_user_history(
     rpc_scope, monkeypatch
 ):
     value, adapter, _ = rpc_scope
     _, persona = configure(value)
     persona["begin_dialogs"] = ["preset-only question", "preset-only answer"]
-    save(value, account="99")
-    await model_scope(value, adapter)
+    save(value)
+    row = await model_scope(value, adapter)
     requests = fake_http(monkeypatch, content="你好")
-    event = chat_event(adapter)
-    await value.chat(event)
+    await value.group_ai.run(adapter, row, "mention/examples/2/1002", "你好")
     messages = requests[0][1]["json"]["messages"]
     assert messages[3:5] == [
         {"role": "user", "content": "preset-only question"},
@@ -263,17 +304,19 @@ async def test_private_examples_are_style_only_and_never_saved_as_user_history(
     ]
     assert "不是当前群聊" in messages[2]["content"]
     assert "预设示例结束" in messages[5]["content"]
-    assert messages[-1]["content"] == event.message_str
+    assert messages[-1]["content"] == "你好"
     cid = await value.context.conversation_manager.get_curr_conversation_id(
-        event.unified_msg_origin
-        + "/wsl-ai/99/customer/"
-        + value.profiles.resolve("consultation", "99")["fingerprint"]
-        + "/"
-        + value.support.fingerprint("99")
+        "rpc-offline:GroupMessage:99/5/wsl-ai/99/group/"
+        + value.profiles.resolve("group", "99", "5")["fingerprint"]
+        + "/mention/2/1002"
     )
     history = value.context.conversation_manager.db.rows[cid].content
     assert "preset-only" not in json.dumps(history)
-    assert event.send.call_args.args[0] == "你好"
+    assert history == [
+        {"role": "user", "content": "你好"},
+        {"role": "assistant", "content": "你好"},
+    ]
+    assert adapter.send_text.call_args.args[2] == "你好"
 
 
 @pytest.mark.parametrize(
@@ -283,7 +326,7 @@ def test_live_edits_revoke_frozen_profile(tmp_path, mutation):
     value = service(tmp_path)
     cfg, persona = configure(value)
     save(value)
-    snapshot = value.profiles.resolve("consultation")
+    snapshot = value.profiles.resolve("group")
     if mutation == "profile":
         cfg["agent_runner"]["config"]["compression"]["max_turns"] = 0
     elif mutation == "persona":
@@ -297,7 +340,7 @@ def test_live_edits_revoke_frozen_profile(tmp_path, mutation):
     else:
         value.context.astrbot_config_mgr.confs.clear()
     with pytest.raises(OpenError):
-        value.profiles.assert_current(snapshot, "consultation")
+        value.profiles.assert_current(snapshot, "group")
 
 
 @pytest.mark.asyncio
@@ -354,9 +397,7 @@ async def test_rpc_saves_global_and_group_profiles_without_enabling_ai(rpc_scope
     value, _, _ = rpc_scope
     configure(value)
     save(value)
-    save(value, "group")
     for kind, account, group in [
-        ("consultation", "", ""),
         ("group", "", ""),
         ("group", "99", "5"),
     ]:
@@ -381,7 +422,7 @@ async def test_rpc_saves_global_and_group_profiles_without_enabling_ai(rpc_scope
 
 
 @pytest.mark.asyncio
-async def test_private_request_uses_persona_options_and_own_bounded_history(
+async def test_group_request_uses_persona_options_and_own_bounded_history(
     rpc_scope, monkeypatch
 ):
     value, adapter, _ = rpc_scope
@@ -389,6 +430,7 @@ async def test_private_request_uses_persona_options_and_own_bounded_history(
     save(
         value,
         account="99",
+        group="5",
         selection={
             **DEFAULT,
             "config_id": "default",
@@ -396,14 +438,11 @@ async def test_private_request_uses_persona_options_and_own_bounded_history(
             "max_tokens": 300,
         },
     )
-    await model_scope(value, adapter)
-    event = chat_event(adapter)
+    row = await model_scope(value, adapter)
     await value.context.conversation_manager.new_conversation(
-        event.unified_msg_origin
-        + "/wsl-ai/99/customer/"
-        + value.profiles.resolve("consultation", "99")["fingerprint"]
-        + "/"
-        + value.support.fingerprint("99"),
+        "rpc-offline:GroupMessage:99/5/wsl-ai/99/group/"
+        + value.profiles.resolve("group", "99", "5")["fingerprint"]
+        + "/mention/2/1002",
         content=[
             {"role": "user", "content": "old"},
             {"role": "assistant", "content": "old"},
@@ -412,14 +451,19 @@ async def test_private_request_uses_persona_options_and_own_bounded_history(
         ],
     )
     requests = fake_http(monkeypatch, content="你好")
-    await value.chat(event)
+    await value.group_ai.run(adapter, row, "mention/history/2/1002", "现在聊什么")
     body = requests[0][1]["json"]
     assert body["temperature"] == 0.7 and body["max_completion_tokens"] == 300
     assert "说话简洁友好" in body["messages"][1]["content"]
     assert "old" not in json.dumps(body)
     assert "tools" not in body and "stream" not in body
-    assert len(body["messages"]) == 6
-    assert event.send.call_args.args[0] == "你好"
+    assert body["messages"][-3:] == [
+        {"role": "user", "content": "recent"},
+        {"role": "assistant", "content": "recent"},
+        {"role": "user", "content": "现在聊什么"},
+    ]
+    assert len(body["messages"]) == 5
+    assert adapter.send_text.call_args.args[2] == "你好"
 
 
 @pytest.mark.asyncio
@@ -446,15 +490,3 @@ async def test_persona_change_during_slow_model_suppresses_late_reply(
     assert len(requests) == 1
     adapter.send_text.assert_not_awaited()
     assert not value.group_ai.configs[("99", "5")]["blocked"]
-
-
-def test_ai_consultation_and_group_switches_have_separate_menu_branches():
-    assert [child.command for child in TREE[7].children[:4]] == [
-        "/chat",
-        "/exit",
-        "我的套餐",
-        "套餐说明",
-    ]
-    assert TREE[8].children[0].command == "热群状态"
-    assert TREE[7].children[4].label == "我的知识库"
-    assert TREE[8].children[6].label == "本群知识库"

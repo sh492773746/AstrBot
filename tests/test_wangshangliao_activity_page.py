@@ -186,8 +186,20 @@ async def test_split_pages_lottery_fields_and_current_unmute(
                         files
                     )
                     await expect(ad.locator(".media-item")).to_have_count(3)
+                    original_images = await ad.locator(
+                        ".media-item > img"
+                    ).evaluate_all("(items) => items.map(item => item.src)")
                     await ad.get_by_label("替换第1张图片", exact=True).set_input_files(
                         files[2]
+                    )
+                    await expect(automation.get_by_role("alert")).to_have_text(
+                        "已包含这张图片，请选择不同图片"
+                    )
+                    assert (
+                        await ad.locator(".media-item > img").evaluate_all(
+                            "(items) => items.map(item => item.src)"
+                        )
+                        == original_images
                     )
                     await expect(ad.locator("fieldset:disabled")).to_have_count(0)
                     await expect(
@@ -252,7 +264,7 @@ async def test_split_pages_lottery_fields_and_current_unmute(
                           transfer.items.add(new File([Uint8Array.from(atob(encoded), ch => ch.charCodeAt(0))], "pasted.png", {type:"image/png"}));
                           element.dispatchEvent(new ClipboardEvent("paste", {clipboardData: transfer, bubbles: true, cancelable: true}));
                         }""",
-                        base64.b64encode(files[0]["buffer"]).decode(),
+                        bitmap("purple"),
                     )
                     await expect(ad.locator(".media-item")).to_have_count(3)
                     await ad.get_by_role(
@@ -266,7 +278,7 @@ async def test_split_pages_lottery_fields_and_current_unmute(
                           transfer.items.add(new File([Uint8Array.from(atob(encoded), ch => ch.charCodeAt(0))], "dropped.png", {type:"image/png"}));
                           element.dispatchEvent(new DragEvent("drop", {dataTransfer: transfer, bubbles: true, cancelable: true}));
                         }""",
-                        base64.b64encode(files[1]["buffer"]).decode(),
+                        base64.b64encode(files[2]["buffer"]).decode(),
                     )
                     await expect(ad.locator(".media-item")).to_have_count(3)
                     await expect(
@@ -282,7 +294,14 @@ async def test_split_pages_lottery_fields_and_current_unmute(
                     confirmation = automation.get_by_role(
                         "alertdialog", name="确认业务规则"
                     )
-                    await expect(confirmation.locator("img")).to_have_count(image_count)
+                    try:
+                        await expect(confirmation.locator("img")).to_have_count(
+                            image_count
+                        )
+                    except AssertionError as exc:
+                        raise AssertionError(
+                            f"{exc}\nRule editor: {await automation.inner_text()}"
+                        ) from None
                     await confirmation.get_by_role(
                         "button", name="确认保存", exact=True
                     ).click()

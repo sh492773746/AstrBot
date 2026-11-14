@@ -13,8 +13,8 @@ from data.plugins.astrbot_plugin_superbot.store import Rejected
 BODY = "专业课程限时优惠，招代理高返佣，私信咨询下单加入我们的学习计划"
 
 
-def setup(env):
-    enable(env)
+async def setup(env):
+    await enable(env)
     fp = env.runtime.fingerprints = Fingerprints(env.runtime)
     with env.runtime.store.tx() as db:
         env.runtime.store.put(db, "modules", {"moderation": True, "fingerprint": True})
@@ -27,7 +27,7 @@ def setup(env):
 
 @pytest.mark.asyncio
 async def test_pending_approval_global_match_and_stale_controls(env):
-    fp = setup(env)
+    fp = await setup(env)
     identity = await fp.submit("1", "-1001", 90, BODY)
     assert fp.match("-1001", BODY) is None
     with pytest.raises(Rejected):
@@ -45,7 +45,7 @@ async def test_pending_approval_global_match_and_stale_controls(env):
 
 @pytest.mark.asyncio
 async def test_masking_does_not_claim_exact_match(env):
-    fp = setup(env)
+    fp = await setup(env)
     identity = await fp.submit("1", "-1001", 90, BODY + " https://first.example/path")
     fp.decide("1", identity, 1, "active")
     row = env.runtime.store.db.execute("SELECT body FROM fp_samples").fetchone()
@@ -61,7 +61,7 @@ async def test_masking_does_not_claim_exact_match(env):
 
 @pytest.mark.asyncio
 async def test_observation_false_positive_and_expiry(env):
-    fp = setup(env)
+    fp = await setup(env)
     identity = await fp.submit("1", "-1001", 90, BODY)
     fp.decide("1", identity, 1, "active")
     assert not await fp.inspect(message(BODY))
@@ -75,7 +75,7 @@ async def test_observation_false_positive_and_expiry(env):
 
 @pytest.mark.asyncio
 async def test_closed_release_gate_prevents_auto(env):
-    fp = setup(env)
+    fp = await setup(env)
     identity = await fp.submit("1", "-1001", 90, BODY)
     fp.decide("1", identity, 1, "active")
     env.runtime.store.db.execute("UPDATE fp_groups SET mode='auto'")
@@ -85,7 +85,7 @@ async def test_closed_release_gate_prevents_auto(env):
 
 @pytest.mark.asyncio
 async def test_exact_and_similar_share_single_executor_and_short_mute(env):
-    fp = setup(env)
+    fp = await setup(env)
     identity = await fp.submit("1", "-1001", 90, BODY)
     fp.decide("1", identity, 1, "active")
     env.runtime.store.db.execute("UPDATE fp_groups SET mode='auto'")
@@ -103,7 +103,7 @@ async def test_exact_and_similar_share_single_executor_and_short_mute(env):
 
 @pytest.mark.asyncio
 async def test_edit_while_identity_lookup_cancels_penalty(env):
-    fp = setup(env)
+    fp = await setup(env)
     identity = await fp.submit("1", "-1001", 90, BODY)
     fp.decide("1", identity, 1, "active")
     env.runtime.store.db.execute("UPDATE fp_groups SET mode='auto'")
@@ -120,7 +120,7 @@ async def test_edit_while_identity_lookup_cancels_penalty(env):
 
 @pytest.mark.asyncio
 async def test_sequence_is_observation_only_and_group_scoped(env):
-    fp = setup(env)
+    fp = await setup(env)
     await fp.inspect(message("我们在招代理，提供课程优惠", number=1))
     await fp.inspect(message("想了解的私信我", number=2))
     row = env.runtime.store.db.execute("SELECT * FROM fp_events").fetchone()
@@ -132,7 +132,7 @@ async def test_sequence_is_observation_only_and_group_scoped(env):
 async def test_sample_ui_approval_requires_manager(env):
     from data.plugins.astrbot_plugin_superbot.ad_fingerprint_ui import action
 
-    setup(env)
+    await setup(env)
     env.runtime.ui.render = AsyncMock()
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=1),
@@ -148,7 +148,7 @@ async def test_sample_ui_approval_requires_manager(env):
 async def test_restore_rejects_conflicts_and_is_single_use(env):
     from data.plugins.astrbot_plugin_superbot.store import encode
 
-    fp = setup(env)
+    fp = await setup(env)
     member = SimpleNamespace(
         status="restricted",
         to_dict=lambda: {"status": "restricted", "until_date": 123456},
@@ -182,7 +182,7 @@ async def test_restore_rejects_conflicts_and_is_single_use(env):
 async def test_actual_sample_buttons_and_history_submission(env):
     from data.plugins.astrbot_plugin_superbot.ad_fingerprint_ui import action
 
-    fp = setup(env)
+    fp = await setup(env)
     identity = await fp.submit("1", "-1001", 99, BODY)
     env.runtime.ui.render = AsyncMock()
     update = SimpleNamespace(
@@ -206,7 +206,7 @@ async def test_actual_sample_buttons_and_history_submission(env):
 async def test_allowlisted_link_does_not_whitelist_other_promotion(env):
     import json
 
-    fp = setup(env)
+    fp = await setup(env)
     identity = await fp.submit("1", "-1001", 99, BODY)
     fp.decide("1", identity, 1, "active")
     config = json.loads(env.runtime.ad_killer.policy("-1001")["config"])
@@ -228,7 +228,7 @@ async def test_5000_sample_index_benchmark(env):
 
     from data.plugins.astrbot_plugin_superbot.ad_fingerprint import canonical, grams
 
-    fp = setup(env)
+    fp = await setup(env)
     db = env.runtime.store.db
     with env.runtime.store.tx():
         for i in range(5000):
@@ -266,7 +266,7 @@ async def test_5000_sample_index_benchmark(env):
 
 @pytest.mark.asyncio
 async def test_test_permit_is_exact_and_short_lived(env):
-    fp = setup(env)
+    fp = await setup(env)
     store = env.runtime.store
     with store.tx() as db:
         store.put(db, "fp_release", {"version": "fingerprint-1", "offline_pass": True})
@@ -307,7 +307,7 @@ async def test_test_permit_is_exact_and_short_lived(env):
 
 @pytest.mark.asyncio
 async def test_rollout_does_not_overwrite_existing_group_config(env):
-    fp = setup(env)
+    fp = await setup(env)
     with env.runtime.store.tx() as db:
         env.runtime.store.put(
             db,
@@ -330,7 +330,7 @@ async def test_rollout_does_not_overwrite_existing_group_config(env):
 async def test_legacy_ai_callback_is_retired(env):
     from data.plugins.astrbot_plugin_superbot.ad_killer_ui import action
 
-    setup(env)
+    await setup(env)
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=1),
         effective_chat=SimpleNamespace(id=1, type="private"),

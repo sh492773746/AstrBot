@@ -11,7 +11,6 @@ from typing import Any
 BUSINESS_FIELDS = frozenset(
     {
         "enabled_groups",
-        "reply_private",
         "reply_groups",
         "ai_routes",
         "proactive_send",
@@ -19,6 +18,34 @@ BUSINESS_FIELDS = frozenset(
         "developer_test",
     }
 )
+
+
+def strip_private_settings(config: dict) -> None:
+    """Remove retired settings from a detached configuration in memory.
+
+    Args:
+        config: Detached transport settings or decoded business policy.
+    """
+    config.pop("reply_private", None)
+    routes = config.get("ai_routes")
+    if isinstance(routes, dict):
+        config["ai_routes"] = {
+            key: value for key, value in routes.items() if key == "groups"
+        }
+    draft = config.get("developer_test")
+    if isinstance(draft, dict) and isinstance(draft.get("scopes"), list):
+        draft["scopes"] = [
+            scope
+            for scope in draft["scopes"]
+            if scope in ("group_commands", "group_ai", "group_rules")
+        ]
+    proactive = config.get("proactive_send")
+    if isinstance(proactive, dict) and isinstance(proactive.get("targets"), list):
+        proactive["targets"] = [
+            target
+            for target in proactive["targets"]
+            if not isinstance(target, str) or not target.startswith("private/")
+        ]
 
 
 @dataclass(frozen=True)
@@ -32,7 +59,9 @@ class PolicySnapshot:
 
     def values(self) -> dict:
         """Return a detached policy suitable for existing dict consumers."""
-        return json.loads(self.payload)
+        values = json.loads(self.payload)
+        strip_private_settings(values)
+        return values
 
 
 class PolicyRuntime:
@@ -146,13 +175,13 @@ class PolicyRuntime:
         result["_business_epoch"] = self.generation
         if not public and not active:
             result.update(
-                reply_private=False,
                 reply_groups=dict.fromkeys(result.get("enabled_groups", []), False),
                 proactive_send={"enabled": False, "targets": []},
                 moderation={"enabled": False},
                 ai_routes={},
                 developer_test={},
             )
+        strip_private_settings(result)
         return result
 
     def recognize(self, text: str):

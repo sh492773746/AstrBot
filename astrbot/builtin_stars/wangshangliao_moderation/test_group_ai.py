@@ -386,10 +386,6 @@ class GroupAITest:
             raise OpenError("test_group_ai_scope")
         return self.check
 
-    async def notify_quota(self, *args, **kwargs):
-        """Keep test quota notifications out of real managers' private messages."""
-        return
-
     async def observe(self, event, command, *, consumed):
         self.check()
         identity = getattr(event, "actor_identity", None)
@@ -667,8 +663,6 @@ async def control_group_ai(service, actor, payload):
             await fixture.close()
             if fixture.receiver.test_window is fixture.window:
                 fixture.receiver.test_window = None
-            if getattr(fixture.sender, "test_command_window", None) is fixture.window:
-                fixture.sender.test_command_window = None
         return {"test_only": True, "status": "closed"}
     if action.startswith("send_"):
         if not fixture:

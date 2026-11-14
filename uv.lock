@@ -5,11 +5,11 @@ resolution-markers = [
     "python_full_version >= '3.14' and platform_python_implementation != 'PyPy' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and platform_python_implementation != 'PyPy' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and platform_python_implementation != 'PyPy' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version >= '3.14' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and platform_python_implementation == 'PyPy' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_python_implementation != 'PyPy' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and platform_python_implementation != 'PyPy' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and platform_python_implementation != 'PyPy' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version >= '3.14' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and platform_python_implementation == 'PyPy' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and platform_python_implementation == 'PyPy' and sys_platform != 'win32'",
     "python_full_version < '3.13' and sys_platform == 'win32'",
@@ -382,6 +382,7 @@ wsl = [
 dev = [
     { name = "commitizen" },
     { name = "playwright" },
+    { name = "pyhpke" },
     { name = "pytest" },
     { name = "pytest-aiohttp" },
     { name = "pytest-asyncio" },
@@ -472,6 +473,7 @@ provides-extras = ["wsl"]
 dev = [
     { name = "commitizen", specifier = ">=4.9.1" },
     { name = "playwright", specifier = ">=1.50,<2" },
+    { name = "pyhpke", specifier = "==0.6.5" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-aiohttp", specifier = ">=1,<2" },
     { name = "pytest-asyncio", specifier = ">=1.1.0" },
@@ -3027,6 +3029,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pyhpke"
+version = "0.6.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/81/692a67c409e0a81423941791f875313e7ebcf1493180363eec8051acc767/pyhpke-0.6.5.tar.gz", hash = "sha256:8dac22eb143cd83b8066213b8ad0ecc9d5326ef41f930197197f3bbb5c99cb93", size = 1639080, upload-time = "2026-07-16T04:22:59.589Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/31/2a0edff785b15d700199fed77186b3d070724cafd02fccfffb187e450d83/pyhpke-0.6.5-py3-none-any.whl", hash = "sha256:e8d794724e43053fe04e8971be55033225d6da904effc748b303cece763a3f3c", size = 24435, upload-time = "2026-07-16T04:22:57.832Z" },
+]
+
+[[package]]
 name = "pyjwt"
 version = "2.15.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3546,11 +3560,11 @@ resolution-markers = [
     "python_full_version >= '3.14' and platform_python_implementation != 'PyPy' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and platform_python_implementation != 'PyPy' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and platform_python_implementation != 'PyPy' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version >= '3.14' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and platform_python_implementation == 'PyPy' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_python_implementation != 'PyPy' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and platform_python_implementation != 'PyPy' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and platform_python_implementation != 'PyPy' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version >= '3.14' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and platform_python_implementation == 'PyPy' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and platform_python_implementation == 'PyPy' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and platform_python_implementation == 'PyPy' and sys_platform != 'win32'",
 ]

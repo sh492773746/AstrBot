@@ -10,7 +10,7 @@ from difflib import SequenceMatcher
 
 from telegram import ChatPermissions
 
-from .moderation import SEND
+from .moderation import SEND, scoped_moderator
 from .store import Rejected, encode
 
 RULES = {
@@ -76,6 +76,30 @@ def normalize(text):
         for ch in unicodedata.normalize("NFKC", html.unescape(text)).casefold()
         if ch not in "\u200b\u200c\u200d\u2060\ufeff"
     )
+
+
+def matches_keywords(text, phrases):
+    """Match normalized keyword combinations without network or side effects."""
+    return any(
+        all(normalize(word.strip()) in text for word in phrase.split("+"))
+        for phrase in phrases
+    )
+
+
+def matches_repeat(current, prior, threshold):
+    """Check prior normalized samples using the live 88% similarity criterion."""
+    if len(current) < 12:
+        return False
+    digest = hashlib.sha256(current.encode()).hexdigest()
+    matches = sum(
+        sample_digest == digest
+        or bool(
+            sample
+            and SequenceMatcher(None, sample, current, autojunk=False).ratio() >= 0.88
+        )
+        for sample_digest, sample in prior
+    )
+    return matches + 1 >= threshold
 
 
 def validate(config):
@@ -213,14 +237,15 @@ class AdKiller:
         if type(enabled) is not bool:
             raise Rejected("启停值无效")
         with self.store.tx() as db:
-            self.store.require(actor, "moderation", db)
+            self.store.require(actor, "moderation", db, chat=chat)
             group = db.execute(
                 "SELECT enabled FROM mod_groups WHERE chat=?", (str(chat),)
             ).fetchone()
             if not group or not group[0]:
                 raise Rejected("请先启用此群的群管理")
             if (
-                not self.store.allowed(actor, "manager", db)
+                not scoped_moderator(self.store, actor, chat)
+                and not self.store.allowed(actor, "manager", db)
                 and not db.execute(
                     "SELECT 1 FROM mod_acl WHERE uid=? AND chat=?",
                     (str(actor), str(chat)),
@@ -259,9 +284,10 @@ class AdKiller:
     def acknowledge(self, chat, actor, version, count):
         """Close manually verified unknown results without replaying operations."""
         with self.store.tx() as db:
-            self.store.require(actor, "moderation", db)
+            self.store.require(actor, "moderation", db, chat=chat)
             if (
-                not self.store.allowed(actor, "manager", db)
+                not scoped_moderator(self.store, actor, chat)
+                and not self.store.allowed(actor, "manager", db)
                 and not db.execute(
                     "SELECT 1 FROM mod_acl WHERE uid=? AND chat=?",
                     (str(actor), str(chat)),
@@ -382,28 +408,21 @@ class AdKiller:
                 or EMAIL_RE.search(text)
             ):
                 matched.append("contact")
-            if rules["keywords"]["enabled"] and any(
-                all(normalize(word.strip()) in text for word in phrase.split("+"))
-                for phrase in config["keywords"]
+            if rules["keywords"]["enabled"] and matches_keywords(
+                text, config["keywords"]
             ):
                 matched.append("keywords")
             if not edited and not existing:
                 if rules["repeat"]["enabled"] and digest:
-                    prior = sum(
-                        seen["digest"] == digest
-                        or bool(
-                            seen["sample"]
-                            and SequenceMatcher(
-                                None, seen["sample"], digest_text, autojunk=False
-                            ).ratio()
-                            >= 0.88
-                        )
-                        for seen in self.store.db.execute(
-                            "SELECT digest,sample FROM ak_seen WHERE chat=? AND uid=? AND at>=? ORDER BY at DESC LIMIT 200",
-                            (group_id, uid, now - config["repeat_seconds"]),
-                        )
+                    prior = self.store.db.execute(
+                        "SELECT digest,sample FROM ak_seen WHERE chat=? AND uid=? AND at>=? ORDER BY at DESC LIMIT 200",
+                        (group_id, uid, now - config["repeat_seconds"]),
                     )
-                    if prior + 1 >= config["repeat_count"]:
+                    if matches_repeat(
+                        digest_text,
+                        ((seen["digest"], seen["sample"]) for seen in prior),
+                        config["repeat_count"],
+                    ):
                         matched.append("repeat")
                 if rules["flood"]["enabled"]:
                     prior = self.store.db.execute(
@@ -564,6 +583,8 @@ class AdKiller:
             self.pause(chat, "待核查：已有群管操作结果不明")
             return
         await self.runtime.bot.delete_message(chat, message)
+        if getattr(self.runtime, "activities", None):
+            self.runtime.activities.retract(chat, message)
         self.store.db.execute(
             "UPDATE ak_hits SET step='deleted' WHERE chat=? AND message=?",
             (chat, message),

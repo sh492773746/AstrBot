@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import hashlib
 import inspect
 import json
 import secrets
@@ -55,27 +56,27 @@ def _text_message(
         key: Stable per-segment operation identifier.
         text: Segment text.
         mentions: Segment-local UTF-16 mention descriptors.
-        private: Whether the target is a private session.
+        private: Legacy shared-call argument; group callers must pass False.
         created_at: Millisecond message timestamp, or a sizing upper bound.
         quote: Verified local inbox reference, never a model-supplied quote body.
 
     Returns:
         Complete application protobuf, including all transport metadata.
     """
+    if private is not False:
+        raise wire.ProtocolError("group_messages_only")
     inner = wire.ApplicationMessage(
         sender=wire.Source(id=int(account)),
         target=wire.Source(id=int(target)),
         created_at=created_at,
         device=1,
-        session=1 if private else 2,
+        session=2,
         version=2,
         format=0,
         client_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{instance}/{key}")),
         content=wire.Content(data=text),
     )
     if mentions:
-        if private:
-            raise wire.ProtocolError("group_mentions_only")
         inner.ClearField("content")
         inner.mentions.content.data = text
         for person in mentions:
@@ -161,6 +162,7 @@ class WangshangliaoAdapter(Platform):
     """Own one account's transport, ledger and sequential group workers."""
 
     supports_operation_ids = True
+    supports_welcome_recall = True
 
     @property
     def config(self):
@@ -171,7 +173,10 @@ class WangshangliaoAdapter(Platform):
 
     @config.setter
     def config(self, value):
-        self._transport_config = value
+        from .runtime_policy import strip_private_settings
+
+        self._transport_config = copy.deepcopy(value)
+        strip_private_settings(self._transport_config)
 
     @property
     def enabled_groups(self):
@@ -211,6 +216,7 @@ class WangshangliaoAdapter(Platform):
         self.member_refresh_locks = {}
         self.member_refresh_at = {}
         self.member_snapshots = {}
+        self.member_refresh_failures = {}
         self.invitation_read_lock = asyncio.Lock()
         self.invitation_read_at = {}
         self.workers = {}
@@ -319,13 +325,15 @@ class WangshangliaoAdapter(Platform):
                 raise wire.ProtocolError("reauth_required")
             self.http = aiohttp.ClientSession()
             self.business = BusinessClient(deployment, self.http)
+            self.business.diagnostics = self.diagnostics
             self.business.restore(saved["business"])
             self.diagnostics.emit("session", "restored")
             self.nim_account = saved["nim_id"]
             await self.ledger.open()
             # A cold start must not replay commands accepted before suspension.
             await self.ledger.db.execute(
-                "UPDATE inbox SET state='business_suspended',completed_at=? "
+                "UPDATE inbox SET state=CASE WHEN team LIKE 'private/%' "
+                "THEN 'private_retired' ELSE 'business_suspended' END,completed_at=? "
                 "WHERE account=? AND state='pending'",
                 (time.time(), self.account),
             )
@@ -409,6 +417,7 @@ class WangshangliaoAdapter(Platform):
                         "secondary_security_locked",
                         "secondary_security_phone_required",
                         "account_clearing",
+                        "client_check_failed",
                     }:
                         raise wire.ProtocolError(label) from None
                     self.diagnostics.emit(
@@ -639,12 +648,12 @@ class WangshangliaoAdapter(Platform):
     async def refresh_member_mapping(
         self, group: str, *, bounded: bool = False, max_age: float = 0
     ) -> dict | None:
-        """Publish a complete roster atomically, coalescing ingress refreshes.
+        """Publish a complete roster atomically, coalescing overlapping reads.
 
         Args:
             group: Enabled business group ID.
             bounded: Limit mismatch-triggered requests to one per thirty seconds.
-            max_age: Maximum age of a complete snapshot; zero forces a refresh.
+            max_age: Maximum snapshot age for non-executing reads; zero disables TTL.
 
         Returns:
             Validated roster, or None when a bounded refresh is throttled.
@@ -652,26 +661,184 @@ class WangshangliaoAdapter(Platform):
         Raises:
             ProtocolError: If the roster cannot establish consistent identities.
         """
-        previous = self.member_snapshots.get(group)
-        lock = self.member_refresh_locks.setdefault(group, asyncio.Lock())
-        async with lock:
-            now = time.monotonic()
+        from contextlib import nullcontext
+
+        account, business = self.account, self.business
+        nim = getattr(self, "nim", None)
+        bindings = getattr(self, "_member_snapshot_bindings", None)
+        if bindings is None:
+            bindings = self._member_snapshot_bindings = {}
+        failures = getattr(self, "member_refresh_failures", None)
+        if failures is None:
+            failures = self.member_refresh_failures = {}
+
+        def identity():
+            """Capture the account, transport and policy generation.
+
+            Returns:
+                Identity and lifecycle values that must survive every await.
+            """
+            config = getattr(self, "config", {})
+            enabled = config.get("enabled_groups")
+            if enabled is None:
+                enabled = self.enabled_groups
+            stopping = getattr(self, "stopping", None)
+            fields = getattr(self.business, "fields", None)
+            return (
+                self.account,
+                id(self.business),
+                id(getattr(self, "nim", None)),
+                self.nim_account,
+                self.groups.get(group),
+                getattr(self, "connection_state", None),
+                group in enabled,
+                config.get("enable", True),
+                config.get("_business_active"),
+                config.get("_business_epoch"),
+                config.get("_business_revision"),
+                config.get("_open_revisions", {}).get(group),
+                config.get("_open_native_roles", {}).get(group),
+                config.get("_open_paused"),
+                bool(stopping and stopping.is_set()),
+                str(fields[3]) if fields is not None else None,
+                bool(getattr(self.business, "jwt", True)),
+                getattr(self.business, "auth_error", ""),
+                getattr(self.business, "security_required", False),
+            )
+
+        def reusable_snapshot():
+            """Reject snapshots detached from current complete evidence.
+
+            Returns:
+                The bound snapshot, or None after any known invalidation.
+            """
             cached = self.member_snapshots.get(group)
+            binding = bindings.get(group)
+            state = self.group_directory_state.get(group)
             if (
                 cached
-                and cached[0] == self.account
-                and (
-                    cached is not previous
-                    or (max_age > 0 and now - cached[1] < max_age)
-                )
+                and binding
+                and binding[0] is cached
+                and binding[1] == original_identity
+                and binding[2] is state
+                and state.get("complete")
+                and binding[3] == self.members.get(group)
+                and cached[2].get("complete")
             ):
-                return copy.deepcopy(cached[2])
-            if bounded and now - self.member_refresh_at.get(group, float("-inf")) < 30:
-                return None
-            self.member_refresh_at[group] = now
+                return cached
+            return None
+
+        original_identity = identity()
+        requested_snapshot = self.member_snapshots.get(group)
+        # Authorization already owns HTTP. Never wait for a member lock held by
+        # a reader waiting for that HTTP lock, and never reuse its cached roster.
+        authorizing = (
+            getattr(business, "_authorization_task", None) is asyncio.current_task()
+        )
+        cached = reusable_snapshot()
+        if (
+            not authorizing
+            and max_age > 0
+            and not failures.get(group)
+            and cached
+            and time.monotonic() - cached[1] < max_age
+        ):
+            return copy.deepcopy(cached[2])
+        lock = self.member_refresh_locks.setdefault(group, asyncio.Lock())
+        async with nullcontext() if authorizing else lock:
+            now = time.monotonic()
+            rejection_count = 0
+            fetch_attempted = False
             try:
+                if identity() != original_identity:
+                    raise wire.ProtocolError("member_identity")
+                failure = failures.get(group)
+                if (
+                    failure
+                    and failure[0] == account
+                    and failure[1] is business
+                    and (len(failure) < 5 or failure[4] == original_identity)
+                ):
+                    rejection_count = failure[3] if len(failure) > 3 else 1
+                    delay = min(30, 2 ** (rejection_count - 1))
+                    remaining = delay - (now - failure[2])
+                    if remaining > 0:
+                        raise BusinessError("business_rejected", -1, remaining)
+                    if now - failure[2] > delay + 60:
+                        rejection_count = 0
+                cached = reusable_snapshot()
+                if (
+                    not authorizing
+                    and cached
+                    and (
+                        cached is not requested_snapshot
+                        or (max_age > 0 and now - cached[1] < max_age)
+                    )
+                ):
+                    return copy.deepcopy(cached[2])
+                if cached is None and (
+                    group in self.member_snapshots
+                    or group in bindings
+                    or self.group_directory_state.get(group, {}).get("complete")
+                ):
+                    self.member_snapshots.pop(group, None)
+                    bindings.pop(group, None)
+                    self.group_directory_state[group] = {
+                        "complete": False,
+                        "error": "member_directory_unavailable",
+                        "updated_at": time.time(),
+                    }
+                if (
+                    not authorizing
+                    and bounded
+                    and now - self.member_refresh_at.get(group, float("-inf")) < 30
+                ):
+                    return None
+                self.member_refresh_at[group] = now
+                directory_state = self.group_directory_state.get(group)
+                state_before = (
+                    dict(directory_state) if directory_state is not None else None
+                )
+                mapping_before = self.members.get(group, {}).copy()
+                fetch_attempted = True
                 fetch_started = time.monotonic()
-                page = await member_directory(self.business, group)
+                for attempt in range(2):
+                    if (
+                        identity() != original_identity
+                        or self.group_directory_state.get(group) is not directory_state
+                        or self.group_directory_state.get(group) != state_before
+                        or self.members.get(group, {}) != mapping_before
+                    ):
+                        raise wire.ProtocolError("member_identity")
+                    try:
+                        page = await member_directory(business, group)
+                    except BusinessError as exc:
+                        # An explicit failed read invalidates prior evidence even
+                        # while the single retry is sleeping under this lock.
+                        self.member_snapshots.pop(group, None)
+                        bindings.pop(group, None)
+                        directory_state = self.group_directory_state[group] = {
+                            "complete": False,
+                            "error": "member_directory_unavailable",
+                            "updated_at": time.time(),
+                        }
+                        state_before = dict(directory_state)
+                        if (
+                            not attempt
+                            and str(exc) == "business_rejected"
+                            and exc.number == -1
+                        ):
+                            await asyncio.sleep(1)
+                            continue
+                        raise
+                    break
+                if (
+                    identity() != original_identity
+                    or self.group_directory_state.get(group) is not directory_state
+                    or self.group_directory_state.get(group) != state_before
+                    or self.members.get(group, {}) != mapping_before
+                ):
+                    raise wire.ProtocolError("member_identity")
                 self.diagnostics.observe(
                     "member_directory", time.monotonic() - fetch_started
                 )
@@ -684,14 +851,34 @@ class WangshangliaoAdapter(Platform):
                     and mapping[self.account] != self.nim_account
                 ):
                     raise wire.ProtocolError("member_identity")
-            except (wire.ProtocolError, aiohttp.ClientError, TimeoutError):
+            except (
+                wire.ProtocolError,
+                aiohttp.ClientError,
+                TimeoutError,
+                asyncio.CancelledError,
+            ) as exc:
+                if (
+                    fetch_attempted
+                    and isinstance(exc, BusinessError)
+                    and str(exc) == "business_rejected"
+                    and exc.number == -1
+                ):
+                    failures[group] = (
+                        account,
+                        business,
+                        time.monotonic(),
+                        min(rejection_count + 1, 6),
+                        original_identity,
+                    )
                 self.member_snapshots.pop(group, None)
+                bindings.pop(group, None)
                 self.group_directory_state[group] = {
                     "complete": False,
                     "error": "member_directory_unavailable",
                     "updated_at": time.time(),
                 }
                 raise
+            failures.pop(group, None)
             self.members[group] = mapping
             self.member_snapshots[group] = (
                 self.account,
@@ -703,16 +890,44 @@ class WangshangliaoAdapter(Platform):
                 "error": "",
                 "updated_at": time.time(),
             }
+            bindings[group] = (
+                self.member_snapshots[group],
+                original_identity,
+                self.group_directory_state[group],
+                mapping.copy(),
+                business,
+                nim,
+            )
             return page
 
     async def ingest(self, outer: dict) -> None:
         """Authenticate custom group text, commit its inbox, then ACK its NIM ID."""
+        if outer.get(0) == "0":
+            peer = outer.get(2)
+            if (
+                self.nim_account
+                and outer.get(1) == self.nim_account
+                and isinstance(peer, str)
+                and 0 < len(peer.encode()) <= 1024
+                and peer != self.nim_account
+            ):
+                # Only the authenticated transport header is needed to retire
+                # this delivery. Never decrypt or retain a private message body.
+                await self.nim.acknowledge(0, outer[12])
+                self.diagnostics.emit("receive", "private_retired", outer[12])
+            return
         inner = None
         if outer.get(8) == "100":
             try:
-                inner = wire.open_message(
-                    self.business.deployment.key("message_key"), outer.get(10, "")
-                )
+                decode_started = time.perf_counter()
+                try:
+                    inner = wire.open_message(
+                        self.business.deployment.key("message_key"), outer.get(10, "")
+                    )
+                finally:
+                    self.diagnostics.observe(
+                        "message_decode", time.perf_counter() - decode_started
+                    )
                 self.receive_health["decoded_messages"] += 1
             except wire.ProtocolError as exc:
                 if str(exc) != "message_decode":
@@ -806,112 +1021,6 @@ class WangshangliaoAdapter(Platform):
                 await self.nim.acknowledge(int(outer[0]), outer[12])
                 return
         self.diagnostics.emit("receive", "received", str(outer.get(12, "")))
-        if outer[0] == "0":
-            if (
-                not self.nim_account
-                or outer[1] != self.nim_account
-                or outer[2] == self.nim_account
-            ):
-                return
-            if outer[8] != "100":
-                self.unsupported_pushes += 1
-                self.receive_health["unsupported_formats"] += 1
-                await self.nim.acknowledge(0, outer[12])
-                return
-            if (
-                inner.session != 1
-                or str(inner.target.id) != self.account
-                or str(inner.sender.id) == self.account
-            ):
-                raise wire.ProtocolError("private_message_identity")
-            # Keep both authenticated application identity and transport peer in the
-            # session key. Never infer a NIM ID from a business user ID.
-            peer = outer[2]
-            if not peer or len(peer.encode()) > 1024:
-                raise wire.ProtocolError("private_peer")
-            session = f"private/{inner.sender.id}/{wire.b64(peer.encode())}"
-            image = (
-                wire.image_metadata(inner)
-                if inner.format == 1
-                and peer.isascii()
-                and peer.isdecimal()
-                and not peer.startswith("0")
-                and 0 < int(peer) < 1 << 32
-                else None
-            )
-            supported = (
-                bool(image)
-                or inner.format == 0
-                and (inner.HasField("content") or inner.mentions.HasField("content"))
-            )
-            payload = {
-                "text": ""
-                if image
-                else inner.content.data
-                if inner.HasField("content")
-                else inner.mentions.content.data,
-                "sender": str(inner.sender.id),
-                "transport_peer": peer,
-                "name": inner.sender.name,
-                "created_at": message_timestamp(inner, outer),
-                "mentions": [],
-            }
-            if image:
-                payload.update(kind="image", image=image)
-            from .runtime_policy import runtime
-
-            service = runtime.open_service
-            if supported and not image and service is not None:
-                principal = "nim/" + peer
-                control = payload["text"].strip()
-                if (
-                    control in {"/chat", "/exit"}
-                    and (self.account, principal) in service.chat_tasks
-                ):
-                    await service.end_chat(self.account, principal)
-                elif principal in service.chat_users and not (
-                    runtime.recognize(control) or service.recognize_command(control)
-                ):
-                    payload["_ai_busy"] = True
-            if not supported:
-                self.receive_health["unsupported_formats"] += 1
-                payload = {"format": inner.format, "reason": "unsupported_format"}
-            state = (
-                "unsupported"
-                if not supported
-                else "business_suspended"
-                if not self.config.get("_business_active")
-                else "pending"
-            )
-            from .runtime_policy import runtime
-
-            admitted = False
-
-            def observe_private(envelope, received_at):
-                nonlocal admitted
-                runtime.observe(
-                    self._transport_config,
-                    self.account,
-                    session,
-                    outer[12],
-                    envelope,
-                    received_at,
-                )
-                admitted = True
-
-            created = await self.ledger.ingest(
-                self.account,
-                session,
-                outer[12],
-                payload,
-                state=state,
-                observe=observe_private,
-            )
-            await self.nim.acknowledge(0, outer[12])
-            # A duplicate may be committed work whose previous ACK failed.
-            if state == "pending" and (admitted or not created):
-                self.dispatch_wakeup.set()
-            return
         if outer[0] != "1":
             return
         from .runtime_policy import runtime
@@ -989,6 +1098,12 @@ class WangshangliaoAdapter(Platform):
             blacklist = getattr(service, "member_blacklist", None)
             if blacklist is not None:
                 await blacklist.receive(self, group, outer[12], notification)
+            raid = getattr(service, "raid_defense", None)
+            if raid is not None:
+                raid.wake(self, group)
+            welcome = getattr(service, "welcome", None)
+            if welcome is not None:
+                welcome.receive(self, group, outer[12], notification)
             await self.nim.acknowledge(1, outer[12])
             return
         state = "unsupported"
@@ -1027,13 +1142,19 @@ class WangshangliaoAdapter(Platform):
             if str(inner.sender.id) == self.account:
                 state = "self"
             elif (
-                inner.format in (1, 3, 9)
+                inner.format in (1, 3, 9, 39)
                 or inner.format == 0
                 and (inner.HasField("content") or inner.mentions.HasField("content"))
             ):
                 state = "pending"
-                # Official MessageFormat: image=1, video=3, merged forward=9.
-                media = {1: "image", 3: "video", 9: "forward"}.get(inner.format)
+                # Only authenticated identities/types enter moderation; game
+                # bodies are never interpreted as text, commands or AI input.
+                media = {
+                    1: "image",
+                    3: "video",
+                    9: "forward",
+                    39: "game",
+                }.get(inner.format)
                 payload = {
                     "text": ""
                     if media
@@ -1063,6 +1184,19 @@ class WangshangliaoAdapter(Platform):
                 }
                 if media:
                     payload["kind"] = media
+                    if media == "image":
+                        try:
+                            image = wire.image_metadata(
+                                inner,
+                                allow_sticker=True,
+                                allow_incomplete=True,
+                                explain=True,
+                            )
+                        except wire.ProtocolError as exc:
+                            image = None
+                            payload["image_metadata_error"] = str(exc)
+                        if image is not None:
+                            payload["image"] = image
                 if inner.HasField("reply"):
                     payload["reply"] = {
                         "server": str(inner.reply.server_id),
@@ -1139,26 +1273,18 @@ class WangshangliaoAdapter(Platform):
                     scans = []
                     args = [self.account, *groups]
                     for priority, (kind, limit) in enumerate(
-                        (("control", 2), ("command", 4), ("message", 12))
+                        (("command", 4), ("message", 12))
                     ):
                         slots = limit - sum(
                             value == kind for value in self.worker_classes.values()
                         )
                         if slots <= 0:
                             continue
-                        excluded = [
-                            (team, sender.removeprefix("control/"))
-                            for (
-                                team,
-                                sender,
-                            ), worker_kind in self.worker_classes.items()
-                            if (worker_kind == "control") == (kind == "control")
-                        ]
-                        head = "control_row" if kind == "control" else "first_row"
+                        excluded = list(self.workers)
                         sql = (
                             "SELECT i.team,i.sender,i.dispatch_class,"
                             f"i.rowid AS first_row,{priority} AS priority "
-                            f"FROM heads h JOIN inbox i ON i.rowid=h.{head} "
+                            "FROM heads h JOIN inbox i ON i.rowid=h.first_row "
                             "WHERE i.dispatch_class=?"
                         )
                         args.append(kind)
@@ -1173,16 +1299,15 @@ class WangshangliaoAdapter(Platform):
                         args.append(slots)
                         scans.append("SELECT * FROM (" + sql + ")")
                     if scans:
-                        # Share one pending scan. Ordinary heads include controls,
-                        # so a command cannot pass its sender's older control.
+                        # Share one pending scan while preserving each member's
+                        # ordering across commands and ordinary group messages.
                         sql = (
-                            "WITH heads AS (SELECT team,sender,MIN(rowid) AS first_row,"
-                            "MIN(CASE WHEN dispatch_class='control' THEN rowid END) "
-                            "AS control_row FROM inbox "
+                            "WITH heads AS (SELECT team,sender,MIN(rowid) AS first_row "
+                            "FROM inbox "
                             "WHERE account=? AND state='pending' "
-                            "AND (team LIKE 'private/%' OR team IN ("
+                            "AND team IN ("
                             + ",".join("?" for _ in groups)
-                            + ")) GROUP BY team,sender), ready AS ("
+                            + ") GROUP BY team,sender), ready AS ("
                             + " UNION ALL ".join(scans)
                             + ") SELECT team,sender,dispatch_class FROM ready "
                             "ORDER BY priority,first_row"
@@ -1195,13 +1320,9 @@ class WangshangliaoAdapter(Platform):
                                     team,
                                     single=True,
                                     sender=sender,
-                                    control=kind == "control",
                                 )
                             )
-                            lane = (
-                                team,
-                                "control/" + sender if kind == "control" else sender,
-                            )
+                            lane = (team, sender)
                             self.workers[lane] = task
                             self.worker_classes[lane] = kind
                             task.add_done_callback(lambda _: self.dispatch_wakeup.set())
@@ -1273,26 +1394,23 @@ class WangshangliaoAdapter(Platform):
         *,
         single: bool = False,
         sender: str | None = None,
-        control: bool = False,
     ) -> None:
         """Process one ordered member lane, leaving other members independent.
 
         Args:
-            group: Group or private session ID.
+            group: Group ID.
             single: Process just one item for fair scheduling.
             sender: Frozen member lane; None retains the maintenance drain API.
         """
+        if group.startswith("private/"):
+            return
         remaining = 1 if single else float("inf")
         while not self.stopping.is_set() and remaining > 0:
             remaining -= 1
             async with self.ledger.db.execute(
                 "SELECT message,payload,received_at FROM inbox WHERE account=? AND team=? "
                 "AND state='pending'"
-                + (
-                    " AND dispatch_class='control'"
-                    if control
-                    else " AND dispatch_class<>'control'"
-                )
+                + " AND dispatch_class IN ('command','message')"
                 + (" AND sender=?" if sender is not None else "")
                 + " ORDER BY rowid LIMIT 1",
                 (self.account, group, sender)
@@ -1304,10 +1422,7 @@ class WangshangliaoAdapter(Platform):
                 row is None
                 or self.connection_state != "online"
                 or not self.config.get("_business_active")
-                or (
-                    not group.startswith("private/")
-                    and group not in self.enabled_groups
-                )
+                or group not in self.enabled_groups
             ):
                 return
             mid, encoded, received_at = row
@@ -1357,71 +1472,53 @@ class WangshangliaoAdapter(Platform):
                 continue
             await self.ledger.mark(self.account, group, mid, "processing")
             message = AstrBotMessage()
-            private = group.startswith("private/")
-            message.type = (
-                MessageType.FRIEND_MESSAGE if private else MessageType.GROUP_MESSAGE
-            )
+            message.type = MessageType.GROUP_MESSAGE
             message.self_id = self.account
             message.session_id = f"{self.account}/{group}"
-            message.group_id = "" if private else group
+            message.group_id = group
             message.message_id = mid
             message.sender = MessageMember(payload["sender"], payload["name"])
             message.message_str = payload["text"]
             message.timestamp = payload["created_at"] // 1000
             message.raw_message = {
                 "message_id": mid,
-                "_transport_peer": (
-                    payload.get("transport_peer", "")
-                    if private
-                    else payload.get("recall_route", {}).get("peer", "")
-                ),
+                "_transport_peer": payload.get("recall_route", {}).get("peer", ""),
             }
-            if private and not message.raw_message["_transport_peer"]:
-                try:
-                    message.raw_message["_transport_peer"] = wire.unb64(
-                        group.split("/", 2)[2], 1024
-                    ).decode()
-                except (ValueError, UnicodeError, wire.ProtocolError):
-                    pass
-            eligible = private or mentioned(
+            eligible = mentioned(
                 payload["text"], str(self.nim_account or ""), payload["mentions"]
             )
-            message.message = (
-                [At(qq=self.account)] if eligible and not private else []
-            ) + [Plain(payload["text"])]
-            if not private:
-                reverse = {}
-                for business_id, peer in self.members.get(group, {}).items():
-                    reverse.setdefault(str(peer), []).append(business_id)
-                mapped = [At(qq=self.account)] if eligible else []
-                for peer in dict.fromkeys(payload.get("mentions", [])):
-                    if str(peer) == str(self.nim_account):
-                        continue
-                    identities = reverse.get(str(peer), [])
-                    if len(identities) == 1:
-                        mapped.append(At(qq=identities[0]))
-                # Only a transport-verified leading self-mention may be removed.
-                encoded_text = payload["text"].encode("utf-16-le")
-                for span in payload.get("mention_spans", []):
-                    end = span.get("end", 0)
-                    if (
-                        span.get("uid") == str(self.nim_account)
-                        and span.get("start") == 0
-                        and type(end) is int
-                        and 0 < end * 2 <= len(encoded_text)
-                    ):
-                        prefix = encoded_text[: end * 2].decode(
-                            "utf-16-le", errors="replace"
-                        )
-                        remainder = (
-                            encoded_text[end * 2 :]
-                            .decode("utf-16-le", errors="replace")
-                            .lstrip()
-                        )
-                        if prefix.rstrip() == "@" + span.get("nick", ""):
-                            message.message_str = remainder
-                            break
-                message.message = mapped + [Plain(message.message_str)]
+            reverse = {}
+            for business_id, peer in self.members.get(group, {}).items():
+                reverse.setdefault(str(peer), []).append(business_id)
+            mapped = [At(qq=self.account)] if eligible else []
+            for peer in dict.fromkeys(payload.get("mentions", [])):
+                if str(peer) == str(self.nim_account):
+                    continue
+                identities = reverse.get(str(peer), [])
+                if len(identities) == 1:
+                    mapped.append(At(qq=identities[0]))
+            # Only a transport-verified leading self-mention may be removed.
+            encoded_text = payload["text"].encode("utf-16-le")
+            for span in payload.get("mention_spans", []):
+                end = span.get("end", 0)
+                if (
+                    span.get("uid") == str(self.nim_account)
+                    and span.get("start") == 0
+                    and type(end) is int
+                    and 0 < end * 2 <= len(encoded_text)
+                ):
+                    prefix = encoded_text[: end * 2].decode(
+                        "utf-16-le", errors="replace"
+                    )
+                    remainder = (
+                        encoded_text[end * 2 :]
+                        .decode("utf-16-le", errors="replace")
+                        .lstrip()
+                    )
+                    if prefix.rstrip() == "@" + span.get("nick", ""):
+                        message.message_str = remainder
+                        break
+            message.message = mapped + [Plain(message.message_str)]
             event = WangshangliaoEvent(message, self, eligible)
             event.set_extra("wangshangliao_payload", payload)
             if managed_control:
@@ -1436,7 +1533,7 @@ class WangshangliaoAdapter(Platform):
                 await self._event_queue.put(event)
                 await event.processing_completion
                 await self.ledger.mark(self.account, group, mid, "processed")
-                self.diagnostics.emit("process", "completed", mid)
+                self.diagnostics.emit("process", "dispatch_finished", mid)
                 self.diagnostics.observe(
                     "event_total", time.monotonic() - processing_started
                 )
@@ -1454,11 +1551,13 @@ class WangshangliaoAdapter(Platform):
             finally:
                 self.events.discard(event)
 
-    async def get_moderation_members(self, group: str) -> dict:
+    async def get_moderation_members(self, group: str, *, max_age: float = 0) -> dict:
         """Fetch authenticated members for moderation identity checks.
 
         Args:
             group: Enabled business group ID.
+            max_age: Optional snapshot age for preliminary business checks only.
+                Native mutation paths retain the default fresh directory check.
 
         Returns:
             Platform member directory.
@@ -1466,11 +1565,35 @@ class WangshangliaoAdapter(Platform):
         Raises:
             ProtocolError: If the group is not enabled or the connection is offline.
         """
-        if self.connection_state != "online" or group not in self.config.get(
+        account, business = self.account, self.business
+        config = self.config
+        policy = tuple(
+            config.get(key)
+            for key in ("_business_active", "_business_epoch", "_business_revision")
+        )
+        if self.connection_state != "online" or group not in config.get(
             "enabled_groups", []
         ):
             raise wire.ProtocolError("moderation_identity")
-        return await self.refresh_member_mapping(group)
+        page = (
+            await self.refresh_member_mapping(group, max_age=max_age)
+            if max_age > 0
+            else await self.refresh_member_mapping(group)
+        )
+        config = self.config
+        if (
+            self.account != account
+            or self.business is not business
+            or self.connection_state != "online"
+            or group not in config.get("enabled_groups", [])
+            or policy
+            != tuple(
+                config.get(key)
+                for key in ("_business_active", "_business_epoch", "_business_revision")
+            )
+        ):
+            raise wire.ProtocolError("moderation_identity")
+        return page
 
     async def get_cached_members(self, group: str) -> dict:
         """Return a detached complete directory for non-executing reads.
@@ -1917,6 +2040,9 @@ class WangshangliaoAdapter(Platform):
         blacklist_intent=None,
         blacklist_fixture=None,
         blacklist_guard=None,
+        raid_intent=None,
+        delegated_mute: bool = False,
+        expected_nim: str | None = None,
     ) -> dict:
         """Serialize group toggles and pause schedules before manual changes.
 
@@ -1930,10 +2056,17 @@ class WangshangliaoAdapter(Platform):
             scheduled_check: Internal asynchronous schedule authorization callback.
             action_check: Versioned action identity and business authority callback.
             blacklist_intent: Durable canonical-join authority for blacklist actions.
+            delegated_mute: Trusted mute-only grant with a three-day maximum.
+            expected_nim: Frozen delegation target identity, rechecked before sending.
 
         Returns:
             Upstream operation evidence.
         """
+        from .policy import validate_delegated_mute
+
+        validate_delegated_mute(
+            operation, action, minutes, delegated_mute, expected_nim, action_check
+        )
         if action not in {"mute_all", "unmute_all"}:
             return await self._execute_moderation(
                 operation,
@@ -1946,6 +2079,9 @@ class WangshangliaoAdapter(Platform):
                 blacklist_intent=blacklist_intent,
                 blacklist_fixture=blacklist_fixture,
                 blacklist_guard=blacklist_guard,
+                raid_intent=raid_intent,
+                delegated_mute=delegated_mute,
+                expected_nim=expected_nim,
             )
         if blacklist_intent is not None or operation.startswith("blacklist/"):
             raise wire.ProtocolError("blacklist_intent_invalid")
@@ -2007,6 +2143,9 @@ class WangshangliaoAdapter(Platform):
         blacklist_intent=None,
         blacklist_fixture=None,
         blacklist_guard=None,
+        raid_intent=None,
+        delegated_mute: bool = False,
+        expected_nim: str | None = None,
     ) -> dict:
         """Execute a fixed action using the persistent operation ledger.
 
@@ -2020,6 +2159,8 @@ class WangshangliaoAdapter(Platform):
             scheduled_check: Recheck a fixed schedule immediately before submission.
             action_check: Recheck the versioned action before submission.
             blacklist_intent: Stored blacklist capability, independently rechecked.
+            delegated_mute: Trusted mute-only grant with a three-day maximum.
+            expected_nim: Frozen real-mention identity for delegation only.
 
         Returns:
             Accepted, verified or unknown operation result.
@@ -2032,12 +2173,46 @@ class WangshangliaoAdapter(Platform):
         from .database import AsyncDatabase, account_guard
         from .group_scope import group_revision
         from .moderation import execute
-        from .policy import authorize_action
+        from .policy import authorize_action, validate_delegated_mute
+
+        validate_delegated_mute(
+            operation, action, minutes, delegated_mute, expected_nim, action_check
+        )
+        if delegated_mute and (blacklist_intent is not None or raid_intent is not None):
+            raise wire.ProtocolError("delegated_mute_authority_invalid")
 
         guard = account_guard(self)
+        raid_action = operation.startswith("raid/") or raid_intent is not None
+        if raid_action:
+            from .group_scope import group_config
+            from .raid import authorize_raid
+
+            if (
+                not callable(action_check)
+                or group_config(self.config, str(group))
+                .get("moderation", {})
+                .get("raid_defense_enabled")
+                is not True
+            ):
+                raise wire.ProtocolError("raid_authorization_required")
+            await asyncio.to_thread(
+                authorize_raid,
+                self.config["id"],
+                raid_intent,
+                self.account,
+                operation,
+                action,
+                group,
+                member,
+                minutes,
+            )
+            guard()
         blacklist_action = (
             operation.startswith("blacklist/") or blacklist_intent is not None
         )
+        if raid_action:
+            client, account = self.business, self.account
+            revision = group_revision(self.config, str(group))
         if blacklist_action:
             client, account = self.business, self.account
             revision = group_revision(self.config, str(group))
@@ -2069,6 +2244,8 @@ class WangshangliaoAdapter(Platform):
             ("progressive/", "flood/")
         )
         expected_peer = self.members.get(str(group), {}).get(str(member))
+        if delegated_mute and expected_peer != expected_nim:
+            raise wire.ProtocolError("delegated_mute_target_changed")
         if blacklist_action and (
             expected_peer != blacklist_intent.peer
             or str(member) == self.account
@@ -2109,7 +2286,19 @@ class WangshangliaoAdapter(Platform):
             if not row or row != (self.account, str(group), str(member), 1):
                 raise wire.ProtocolError("private_confirmation_required")
         authorize_action(self.config, str(group), action)
-        await self.get_moderation_members(str(group))
+        ordinary_progressive_mute = progressive_mute and not (
+            blacklist_action
+            or raid_action
+            or delegated_mute
+            or is_managed_account(str(member))
+        )
+        if ordinary_progressive_mute:
+            # Native execution checks a fresh roster against the frozen peer.
+            client = self.business
+            if self.connection_state != "online":
+                raise wire.ProtocolError("moderation_identity")
+        else:
+            await self.get_moderation_members(str(group))
         guard()
         if self.stopping.is_set():
             raise wire.ProtocolError("not_online")
@@ -2121,6 +2310,34 @@ class WangshangliaoAdapter(Platform):
                 checked = action_check()
                 if inspect.isawaitable(checked):
                     await checked
+            if ordinary_progressive_mute and (
+                self.connection_state != "online" or self.business is not client
+            ):
+                raise wire.ProtocolError("moderation_identity")
+            if delegated_mute and (
+                self.members.get(str(group), {}).get(str(member)) != expected_nim
+            ):
+                raise wire.ProtocolError("delegated_mute_target_changed")
+            if raid_action:
+                if (
+                    group_config(self.config, str(group))
+                    .get("moderation", {})
+                    .get("raid_defense_enabled")
+                    is not True
+                ):
+                    raise wire.ProtocolError("raid_policy_changed")
+                await asyncio.to_thread(
+                    authorize_raid,
+                    self.config["id"],
+                    raid_intent,
+                    self.account,
+                    operation,
+                    action,
+                    group,
+                    member,
+                    minutes,
+                )
+                guard()
             if scheduled_check:
                 checked = scheduled_check()
                 if inspect.isawaitable(checked):
@@ -2169,6 +2386,8 @@ class WangshangliaoAdapter(Platform):
                 )
 
         parameters = {}
+        if delegated_mute:
+            parameters["delegated_mute"] = True
         if progressive_mute:
             from .test_rules import flood_fixture
 
@@ -2195,7 +2414,28 @@ class WangshangliaoAdapter(Platform):
             parameters["blacklist_intent"] = blacklist_intent
             parameters["blacklist_fixture"] = blacklist_fixture
             parameters["submission_guard"] = submission_guard
-        return await execute(
+        if raid_action:
+            parameters["raid_intent"] = raid_intent
+
+            def raid_submission_guard():
+                guard()
+                if self.business is not client or str(client.fields[3]) != account:
+                    raise wire.ProtocolError("moderation_identity")
+                if (
+                    group_revision(self.config, str(group)) != revision
+                    or group_config(self.config, str(group))
+                    .get("moderation", {})
+                    .get("raid_defense_enabled")
+                    is not True
+                    or self.members.get(str(group), {}).get(str(member))
+                    != expected_peer
+                    or self.stopping.is_set()
+                ):
+                    raise wire.ProtocolError("raid_policy_changed")
+                authorize_action(self.config, str(group), action)
+
+            parameters["submission_guard"] = raid_submission_guard
+        result = await execute(
             self.business,
             self.config["id"],
             self.account,
@@ -2206,11 +2446,18 @@ class WangshangliaoAdapter(Platform):
             text,
             minutes=minutes,
             expected_nim=expected_peer
-            if progressive_mute or blacklist_action
+            if progressive_mute or blacklist_action or raid_action or delegated_mute
             else None,
             authorize=authorize,
             **parameters,
         )
+        if action == "unmute" and result.get("status") in {"accepted", "verified"}:
+            from .runtime_policy import runtime
+
+            raid = getattr(runtime.open_service, "raid_defense", None)
+            if raid is not None:
+                await raid.release(self, str(group), str(member), operation=operation)
+        return result
 
     async def rename_member(
         self,
@@ -2327,7 +2574,13 @@ class WangshangliaoAdapter(Platform):
             )
 
     async def recall_violation(
-        self, group: str, mid: str, sender: str, *, authorize=None
+        self,
+        group: str,
+        mid: str,
+        sender: str,
+        *,
+        authorize=None,
+        departed_peer: str | None = None,
     ) -> str:
         """Recall a stored violation once, without retrying ambiguous results.
 
@@ -2336,6 +2589,8 @@ class WangshangliaoAdapter(Platform):
             mid: Stored server message ID.
             sender: Expected business sender ID.
             authorize: Optional trusted business authority check.
+            departed_peer: Preview-bound native peer for explicit manual recall
+                after departure; requires a trusted reauthorization callback.
 
         Returns:
             Accepted, rejected, or unknown transport status.
@@ -2346,10 +2601,22 @@ class WangshangliaoAdapter(Platform):
         from .database import account_guard
         from .policy import authorize_action
 
+        departed = departed_peer is not None
+        if departed and (
+            not callable(authorize)
+            or not isinstance(departed_peer, str)
+            or not departed_peer.isascii()
+            or not departed_peer.isdigit()
+            or not 0 < int(departed_peer) < 1 << 32
+            or sender == self.account
+            or is_managed_account(sender)
+        ):
+            raise wire.ProtocolError("recall_departed_authority")
         guard = account_guard(self)
         account, nim, ledger = self.account, self.nim, self.ledger
-        peer = self.members.get(group, {}).get(sender)
+        peer = departed_peer if departed else self.members.get(group, {}).get(sender)
         team = self.groups.get(group)
+        membership_checked = False
 
         async def check():
             guard()
@@ -2366,25 +2633,22 @@ class WangshangliaoAdapter(Platform):
                 or self.nim is not nim
                 or self.ledger is not ledger
                 or not peer
-                or self.members.get(group, {}).get(sender) != peer
+                or departed
+                and is_managed_account(sender)
+                or (
+                    membership_checked and sender in self.members.get(group, {})
+                    if departed
+                    else self.members.get(group, {}).get(sender) != peer
+                )
                 or not team
                 or self.groups.get(group) != team
             ):
                 raise wire.ProtocolError("recall_scope_changed")
 
         await check()
-        directory = await self.get_moderation_members(group)
-        await check()
-        roster = directory["groupMemberInfo"]
-        roles = {str(m["userId"]): m.get("groupRole") for m in roster}
-        if (
-            not directory.get("complete")
-            or roles.get(account) not in {"GROUP_ROLE_OWNER", "GROUP_ROLE_ADMIN"}
-            or roles.get(sender) != "GROUP_ROLE_MEMBER"
-        ):
-            raise wire.ProtocolError("moderation_permission")
         async with ledger.db.execute(
-            "SELECT payload FROM inbox WHERE account=? AND team=? AND message=?",
+            "SELECT payload,received_at FROM inbox "
+            "WHERE account=? AND team=? AND message=?",
             (account, group, mid),
         ) as cursor:
             row = await cursor.fetchone()
@@ -2398,11 +2662,52 @@ class WangshangliaoAdapter(Platform):
             or not mid.isdigit()
             or int(mid) <= 0
             or route.get("peer") != peer
+            or departed
+            and not time.time() - 86400 <= row[1] <= time.time() + 2
         ):
             raise wire.ProtocolError("recall_identity")
+        key = f"recall/{account}/{group}/{mid}"
+        async with ledger.db.execute(
+            "SELECT fingerprint,state FROM outbox WHERE key=?", (key,)
+        ) as cursor:
+            existing = await cursor.fetchone()
+        await check()
+        if existing:
+            if (
+                existing[0]
+                != hashlib.sha256(
+                    json.dumps(route, sort_keys=True).encode()
+                ).hexdigest()
+            ):
+                raise wire.ProtocolError("send_key_conflict")
+            # Read-only deduplication does not need another provider roster.
+            # The current owner holds send_lock until its receipt is saved.
+            # Wait for that owner, not another native submission or roster read.
+            if existing[1] == "sending":
+                async with self.send_lock:
+                    await check()
+                    receipt = await ledger.receipt(key)
+                return receipt["status"] if receipt else "unknown"
+            # Terminal unknown reservations are returned, never retried.
+            return existing[1]
+        directory = await self.get_moderation_members(group)
+        membership_checked = True
+        await check()
+        roster = directory["groupMemberInfo"]
+        roles = {str(m["userId"]): m.get("groupRole") for m in roster}
+        if (
+            not directory.get("complete")
+            or roles.get(account) not in {"GROUP_ROLE_OWNER", "GROUP_ROLE_ADMIN"}
+            or (
+                sender in roles
+                or any(str(member.get("nimId", "")) == peer for member in roster)
+                if departed
+                else roles.get(sender) != "GROUP_ROLE_MEMBER"
+            )
+        ):
+            raise wire.ProtocolError("moderation_permission")
         async with self.send_lock:
             await check()
-            key = f"recall/{account}/{group}/{mid}"
             _, state = await ledger.reserve(key, json.dumps(route, sort_keys=True))
             if state != "new":
                 return state
@@ -2432,7 +2737,7 @@ class WangshangliaoAdapter(Platform):
                 await ledger.finish(key, "unknown")
                 raise
             await ledger.finish(key, result)
-            self.diagnostics.emit("recall", result, mid)
+            self.diagnostics.emit("recall", result, mid, provider_code=code)
             return result
 
     async def quote_message(self, group, message):
@@ -2507,25 +2812,39 @@ class WangshangliaoAdapter(Platform):
         test_mid=None,
         proactive=False,
         auto_recall=False,
+        retain_recall=False,
+        welcome_recall=False,
         authorize=None,
         reply_to=None,
     ) -> str:
         """Persist intent before transport; uncertain sends are query-only.
 
         Args:
-            group: Verified group or private route.
+            group: Verified group route.
             key: Stable operation identifier.
             text: Bounded plain text.
             mentions: Native UTF-16 mention descriptors.
             test_mid: Optional developer-window correlation.
             proactive: Require a saved proactive-send grant.
             auto_recall: Persist a twelve-second self-recall after acceptance.
+            retain_recall: Retain the accepted native route without a recall timer.
+            welcome_recall: Recall this welcome after twenty seconds and supersede
+                previous accepted welcomes in this exact account/group.
             authorize: Optional trusted business check before submission.
             reply_to: Exact received group message to quote.
 
         Returns:
             Durable native send status.
         """
+        if group.startswith("private/"):
+            raise wire.ProtocolError("private_messages_retired")
+        if welcome_recall is not False and (
+            welcome_recall is not True
+            or not key.startswith(f"welcome/{self.account}/{group}/")
+            or auto_recall is True
+            or retain_recall is True
+        ):
+            raise wire.ProtocolError("welcome_recall_scope")
         from .database import account_guard
 
         guard = account_guard(self)
@@ -2557,10 +2876,9 @@ class WangshangliaoAdapter(Platform):
                 or self.business is not business
                 or self.ledger is not ledger
                 or self.nim_account != nim_account
-                or (not group.startswith("private/") and self.groups.get(group) != team)
+                or self.groups.get(group) != team
                 or (
-                    auto_recall is True
-                    and not group.startswith("private/")
+                    (auto_recall is True or retain_recall is True or welcome_recall)
                     and self.members.get(group, {}).get(account) != own_peer
                 )
             ):
@@ -2568,11 +2886,10 @@ class WangshangliaoAdapter(Platform):
 
         async with self.send_lock:
             await check()
-            private = group.startswith("private/")
             if (
                 not self.config.get("_business_active")
                 or not self.config.get("enable", True)
-                or (not private and group not in self.enabled_groups)
+                or group not in self.enabled_groups
             ):
                 raise wire.ProtocolError("business_service_inactive")
             if proactive and (
@@ -2585,37 +2902,11 @@ class WangshangliaoAdapter(Platform):
                 self.stopping.is_set()
                 or self.connection_state != "online"
                 or not self.config.get("_business_active")
-                or (not private and group not in self.enabled_groups)
-                or (not private and group not in self.groups)
+                or group not in self.enabled_groups
+                or group not in self.groups
             ):
                 raise wire.ProtocolError("not_online")
-            if private:
-                test_reply = bool(
-                    test_mid
-                    and self.test_window
-                    and self.test_window.reply(
-                        group, test_mid, key.rsplit("/part/", 1)[0]
-                    )
-                )
-                if (
-                    is_managed_account(group.split("/", 2)[1])
-                    and not test_reply
-                    and not (
-                        (window := getattr(self, "test_command_window", None))
-                        and window.send_command(self, group, text, key, consume=True)
-                    )
-                ):
-                    raise wire.ProtocolError("managed_bot_peer")
-                async with ledger.db.execute(
-                    "SELECT 1 FROM inbox WHERE account=? AND team=? LIMIT 1",
-                    (account, group),
-                ) as cursor:
-                    if await cursor.fetchone() is None:
-                        raise wire.ProtocolError("private_peer_unknown")
-                _, target, encoded_peer = group.split("/", 2)
-                transport_target = wire.unb64(encoded_peer, 1024).decode()
-            else:
-                target, transport_target = group, team
+            target, transport_target = group, team
             if not text or len(text.encode()) > 4096:
                 raise wire.ProtocolError("text_limit")
             inner = _text_message(
@@ -2625,16 +2916,20 @@ class WangshangliaoAdapter(Platform):
                 key,
                 text,
                 mentions,
-                private,
+                False,
                 int(time.time() * 1000),
                 quote=quote,
             )
             if inner.ByteSize() > 4096:
                 raise wire.ProtocolError("message_limit")
-            recall_reply = auto_recall is True and not private
+            recall_reply = (
+                auto_recall is True or retain_recall is True or welcome_recall
+            )
             fingerprint = json.dumps(
                 [group, text, mentions]
-                + ([True] if recall_reply else [])
+                + ([True] if auto_recall is True else [])
+                + (["retain_recall"] if retain_recall is True else [])
+                + (["welcome_recall"] if welcome_recall else [])
                 + ([quote] if quote is not None else []),
                 ensure_ascii=True,
             )
@@ -2672,13 +2967,13 @@ class WangshangliaoAdapter(Platform):
                 )
                 or not self.config.get("_business_active")
                 or not self.config.get("enable", True)
-                or (not private and group not in self.enabled_groups)
+                or group not in self.enabled_groups
             ):
                 await ledger.finish(key, "rejected")
                 return "rejected"
             try:
                 fields = [
-                    (0, b"0" if private else b"1"),
+                    (0, b"1"),
                     (1, transport_target.encode()),
                     (8, b"100"),
                     (10, attachment.encode()),
@@ -2700,8 +2995,8 @@ class WangshangliaoAdapter(Platform):
                         for index, value in enumerate(values)
                     )
                 code, body = await nim.request(
-                    7 if private else 8,
-                    1 if private else 2,
+                    8,
+                    2,
                     wire.properties(fields),
                 )
                 if code != 200:
@@ -2731,10 +3026,19 @@ class WangshangliaoAdapter(Platform):
                         str(nim_account),
                         client_id,
                         receipt[7].decode(),
-                        time.time() + 12,
+                        time.time() + (20 if welcome_recall else 12)
+                        if auto_recall is True or welcome_recall
+                        else time.time(),
                     )
                 await ledger.finish(
-                    key, "accepted", receipt[12].decode(), recall=recall
+                    key,
+                    "accepted",
+                    receipt[12].decode(),
+                    recall=recall,
+                    recall_state="pending"
+                    if auto_recall is True or welcome_recall
+                    else "retained",
+                    supersede_welcome=welcome_recall,
                 )
                 self.diagnostics.emit("send", "accepted", key)
                 return "accepted"
@@ -2755,6 +3059,7 @@ class WangshangliaoAdapter(Platform):
         test_mid=None,
         proactive=False,
         auto_recall=False,
+        retain_recall=False,
         authorize=None,
         reply_to=None,
     ):
@@ -2768,12 +3073,15 @@ class WangshangliaoAdapter(Platform):
             test_mid: Correlated developer-window inbound message.
             proactive: Require explicit target authorization.
             auto_recall: Recall each accepted group segment after twelve seconds.
+            retain_recall: Retain every accepted segment for explicit later recall.
             authorize: Synchronous or asynchronous original business authority.
             reply_to: Received group message quoted by the first segment only.
 
         Returns:
             Durable logical operation status.
         """
+        if group.startswith("private/"):
+            raise wire.ProtocolError("private_messages_retired")
         from .database import account_guard
 
         guard = account_guard(self)
@@ -2800,10 +3108,9 @@ class WangshangliaoAdapter(Platform):
                 or self.nim is not nim
                 or self.business is not business
                 or self.nim_account != nim_account
-                or (not group.startswith("private/") and self.groups.get(group) != team)
+                or self.groups.get(group) != team
                 or (
-                    auto_recall is True
-                    and not group.startswith("private/")
+                    (auto_recall is True or retain_recall is True)
                     and self.members.get(group, {}).get(self.account) != own_peer
                 )
             ):
@@ -2812,6 +3119,7 @@ class WangshangliaoAdapter(Platform):
         fingerprint = json.dumps(
             [group, text, mentions]
             + ([True] if auto_recall is True else [])
+            + (["retain_recall"] if retain_recall is True else [])
             + ([quote] if quote is not None else []),
             ensure_ascii=True,
         )
@@ -2826,8 +3134,7 @@ class WangshangliaoAdapter(Platform):
         try:
             if not text:
                 raise wire.ProtocolError("text_limit")
-            private = group.startswith("private/")
-            target = group.split("/", 2)[1] if private else group
+            target = group
             encoded = text.encode("utf-16-le")
             previous = 0
             for mention in mentions or []:
@@ -2873,7 +3180,7 @@ class WangshangliaoAdapter(Platform):
                         part_key,
                         text[:candidate],
                         candidate_mentions,
-                        private,
+                        False,
                         (1 << 63) - 1,
                         quote=quote if not accepted_parts else None,
                     )
@@ -2906,6 +3213,7 @@ class WangshangliaoAdapter(Platform):
                     proactive=proactive,
                     authorize=check,
                     **({"auto_recall": True} if auto_recall is True else {}),
+                    **({"retain_recall": True} if retain_recall is True else {}),
                     **(
                         {"reply_to": reply_to}
                         if quote is not None and not accepted_parts
@@ -2947,6 +3255,8 @@ class WangshangliaoAdapter(Platform):
         Raises:
             ProtocolError: If proactive sending is disabled or the target is invalid.
         """
+        if session.message_type is MessageType.FRIEND_MESSAGE:
+            raise wire.ProtocolError("private_messages_retired")
         if not self.config.get("proactive_send", {}).get("enabled", False):
             raise wire.ProtocolError("proactive_not_authorized")
         if session.platform_id != self.config["id"]:
@@ -2956,10 +3266,6 @@ class WangshangliaoAdapter(Platform):
             if target not in self.groups or target not in self.config.get(
                 "enabled_groups", []
             ):
-                raise wire.ProtocolError("session_target")
-        elif session.message_type is MessageType.FRIEND_MESSAGE:
-            target = session.session_id.removeprefix(f"{self.account}/")
-            if not target.startswith("private/") or len(target.split("/")) != 3:
                 raise wire.ProtocolError("session_target")
         else:
             raise wire.ProtocolError("session_type")

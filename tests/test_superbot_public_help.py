@@ -14,16 +14,24 @@ from data.plugins.astrbot_plugin_superbot.store import Rejected
 @pytest.mark.asyncio
 async def test_group_and_private_help_exclude_internal_docs(flow):  # noqa: F811
     s = flow
-    for call in (
-        lambda: s.flow.action(group_update(), {"action": "play"}),
-        lambda: s.runtime.ui.action(private(2), {"action": "rules"}),
+    for is_private, call in (
+        (False, lambda: s.flow.action(group_update(), {"action": "play"})),
+        (True, lambda: s.runtime.ui.action(private(2), {"action": "rules"})),
     ):
         s.bot.send_message.reset_mock()
         await call()
         text = "\n".join(c.kwargs["text"] for c in s.bot.send_message.await_args_list)
-        assert "/play" in text and "特殊回本" in text
+        if is_private:
+            assert "私聊不参与游戏" in text
+            assert "管理自己的群" in text
+            assert "特殊回本" not in text
+        else:
+            assert "玩法大全" in text and "特殊回本" in text
+            assert "50项" in text and "双人挑战" in text
+            assert "私聊不能下注、开桌或抽奖" in text
+            assert "默认授权" in text and "另行开通" not in text
+        assert "我的群" in text and "客服" in text
         assert "<blockquote expandable>" in text and "<b>" in text
-        assert "50项" in text and "双人挑战" in text
         for forbidden in (
             "tests/",
             "SQLite",
@@ -79,7 +87,7 @@ def test_public_service_knowledge_covers_current_boundaries():
 async def test_private_catalog_is_guidance_only(flow):  # noqa: F811
     ui = flow.runtime.ui
     labels = [button.text for row in ui.keyboard("2").keyboard for button in row]
-    assert "玩法大全" in labels and "加拿大28" not in labels
+    assert labels == ["我的群", "帮助", "客服"]
     for action in ("game",):
         flow.bot.send_message.reset_mock()
         await ui.action(private(2), {"action": action})

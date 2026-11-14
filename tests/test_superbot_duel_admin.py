@@ -11,6 +11,7 @@ from test_superbot_play_center import click, invite
 from test_superbot_text_game import text_service, update  # noqa: F401
 
 from data.plugins.astrbot_plugin_superbot.store import Rejected
+from data.plugins.astrbot_plugin_superbot.tenants import Tenants
 
 
 @pytest.mark.asyncio
@@ -39,10 +40,12 @@ async def test_admin_navigation_and_actual_save_button(text_service):
     s = text_service
     ui = s.runtime.ui
     ui.render = AsyncMock()
-    s.runtime.moderation.check = AsyncMock()
-    await ui.admin(private(1), {"action": "admin"}, "")
+    s.runtime.tenants = Tenants(s.runtime)
+    with s.store.tx() as db:
+        s.store.put(db, "modules", {**s.store.get("modules"), "moderation": True})
+    await ui.admin(private(1), {"action": "bot_control"}, "")
     labels = [label for label, _ in ui.render.await_args.args[2]]
-    assert "玩法管理" in labels and "全部功能启停" in labels
+    assert "🔌 功能总开关" in labels and "⚙️ 全局业务策略" in labels
     await ui.admin(private(1), {"action": "admin_game"}, "")
     assert {p["action"] for _, p in ui.render.await_args.args[2]} >= {
         "games_duel",
@@ -70,7 +73,7 @@ async def test_admin_navigation_and_actual_save_button(text_service):
     )
     with pytest.raises(Rejected):
         await ui.admin(private(1), save, "")
-    s.runtime.moderation.check.assert_awaited()
+    s.bot.get_chat_member.assert_awaited()
 
 
 @pytest.mark.asyncio

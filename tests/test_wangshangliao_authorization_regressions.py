@@ -219,18 +219,13 @@ async def test_cancel_after_durable_revocation_cannot_leave_authorized_cache(tmp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["admission", "commit"])
-async def test_role_loss_fences_private_confirmation_even_when_notice_waits_for_db(
+async def test_role_loss_fences_group_confirmation_even_when_notice_waits_for_db(
     setup, monkeypatch, phase
 ):
-    value, _, group_event = setup
+    value, _, event = setup
     value.roster.return_value["3"]["groupRole"] = "GROUP_ROLE_ADMIN"
-    event = native_event("确认授权", private=True)
-    event.platform = group_event.platform
     event.platform.dispatch_wakeup = asyncio.Event()
     event.message_obj.message_id = "confirm-message"
-    value.plugin.commands.selections[
-        (id(event.platform), "1", "2", event.unified_msg_origin)
-    ] = {"group": "5", "expires": time.monotonic() + 600}
     row = value.tenants[("1", "5")]
     untouched = copy.deepcopy(value.store.tenant("1", "6"))
     token = value.store.preview_manager(
@@ -378,8 +373,8 @@ async def test_exact_target_guard_rechecks_before_commit(setup, monkeypatch, cha
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("denial", ["native_role", "tenant", "identity"])
-async def test_early_denials_and_navigation_share_a_silent_cooldown(
+@pytest.mark.parametrize("denial", ["native_role", "tenant"])
+async def test_group_command_denials_share_a_silent_cooldown(
     setup, monkeypatch, denial
 ):
     from astrbot.builtin_stars.wangshangliao_moderation import open_service
@@ -395,67 +390,14 @@ async def test_early_denials_and_navigation_share_a_silent_cooldown(
         event.platform.config["_open_native_roles"]["5"] = "GROUP_ROLE_MEMBER"
     elif denial == "tenant":
         value.tenants[("1", "5")]["managers"] = ["3"]
-    else:
-        private = native_event("规则", private=True)
-        private.platform = event.platform
-        event = private
-        value.verify_actor = AsyncMock(
-            side_effect=ProtocolError("private_identity_unverified")
-        )
     assert await step(value, event, "规则", native=True, pace=False)
     clock[0] = 100.5
-    assert await step(value, event, "菜单", native=True, pace=False) == ""
+    assert await step(value, event, "规则", native=True, pace=False) == ""
     assert await step(value, event, "规则", native=True, pace=False) == ""
     clock[0] = 103.0
-    assert await step(value, event, "菜单", native=True, pace=False)
+    assert await step(value, event, "规则", native=True, pace=False)
     clock[0] = 103.5
     assert await step(value, event, "0", native=True, pace=False) == ""
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("control", ["取消", "/exit"])
-@pytest.mark.parametrize("paused", [False, True])
-async def test_exit_clears_state_before_cooldown_or_service_pause(
-    setup, monkeypatch, tmp_path, control, paused
-):
-    from astrbot.builtin_stars.wangshangliao_moderation import (
-        open_service,
-        private_interaction,
-    )
-
-    value, _, group_event = setup
-    monkeypatch.setattr(
-        private_interaction, "instance_dir", lambda _: tmp_path / "chat"
-    )
-    interaction = private_interaction.PrivateInteraction(SimpleNamespace())
-    interaction.active = 2
-    value.plugin.private_interaction = interaction
-    with closing(interaction.database("fixture")) as db, db:
-        db.execute(
-            "INSERT INTO chat_sessions VALUES('1','nim/902',?,0)",
-            (time.time() + 600,),
-        )
-    event = native_event("菜单", private=True)
-    event.platform = group_event.platform
-    clock = [100.0]
-    monkeypatch.setattr(
-        open_service,
-        "time",
-        SimpleNamespace(monotonic=lambda: clock[0], time=time.time),
-    )
-    await step(value, event, "菜单", native=True, pace=False)
-    state = value.navigation.sessions[value.navigation.key(event)]
-    state.confirm = "关闭防刷屏"
-    state.preview_message = "preview"
-    state.busy = True
-    value.settings["paused"] = paused
-    clock[0] = 100.5
-    assert await step(value, event, control, native=True, pace=False) == ""
-    assert state.closed
-    assert not state.confirm and state.pending is None and not state.preview_message
-    assert value.chat_generations[("1", "nim/902")] >= 1
-    with closing(interaction.database("fixture")) as db:
-        assert db.execute("SELECT expires FROM chat_sessions").fetchone()[0] == 0
 
 
 @pytest.mark.asyncio
@@ -485,92 +427,3 @@ async def test_control_manager_guard_preserves_pause_control_but_checks_members(
     members["3"]["nimId"] = "changed"
     with pytest.raises(OpenError, match="membership_changed"):
         guard()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failure",
-    [
-        "ingress_busy",
-        "personal_quota",
-        "global_quota",
-        "chat_cooldown",
-        "protocol",
-        "value",
-        "missing_model",
-        "missing_budget",
-        "provider",
-        "chat_busy",
-    ],
-)
-async def test_ordinary_ai_rejections_share_command_cooldown(
-    setup, monkeypatch, failure
-):
-    from astrbot.builtin_stars.wangshangliao_moderation import open_service
-
-    value, _, group_event = setup
-    event = native_event("hello", private=True)
-    event.platform = group_event.platform
-    value.plugin.private_interaction.handle = AsyncMock(return_value=False)
-    clock = [100.0]
-    monkeypatch.setattr(
-        open_service,
-        "time",
-        SimpleNamespace(monotonic=lambda: clock[0], time=time.time),
-    )
-    if failure == "ingress_busy":
-        event.get_extra("wangshangliao_payload")["_ai_busy"] = True
-        value.chat = AsyncMock()
-    elif failure in {"personal_quota", "global_quota", "chat_cooldown"}:
-        value.chat = AsyncMock(side_effect=OpenError(failure))
-    elif failure == "protocol":
-        value.chat = AsyncMock(side_effect=ProtocolError("provider_unavailable"))
-    elif failure == "value":
-        value.chat = AsyncMock(side_effect=ValueError("offline"))
-    elif failure != "missing_model":
-        value.model = {"provider_id": "missing"}
-        if failure != "missing_budget":
-            value.store.confirm_budget(
-                1, True, "missing", "offline hard cap", "dashboard/root"
-            )
-            value.budget = value.store.budget()
-        if failure == "chat_busy":
-            value.chat_users.add("nim/902")
-    assert await step(value, event, "hello", native=True, pace=False)
-    clock[0] = 100.1
-    assert await step(value, event, "hello again", native=True, pace=False) == ""
-    clock[0] = 100.2
-    assert await step(value, event, "菜单", native=True, pace=False) == ""
-    clock[0] = 103.0
-    assert await step(value, event, "菜单", native=True, pace=False)
-    clock[0] = 103.1
-    assert await step(value, event, "another question", native=True, pace=False) == ""
-    assert value.store.usage()["used"] == 0
-
-
-@pytest.mark.asyncio
-async def test_successful_ai_reply_does_not_use_the_command_rejection_cooldown(
-    setup, monkeypatch
-):
-    from astrbot.builtin_stars.wangshangliao_moderation import open_service
-
-    value, _, group_event = setup
-    event = native_event("hello", private=True)
-    event.platform = group_event.platform
-    value.plugin.private_interaction.handle = AsyncMock(return_value=False)
-    monkeypatch.setattr(
-        open_service,
-        "time",
-        SimpleNamespace(monotonic=lambda: 100.5, time=time.time),
-    )
-    value.command_at[("1", "nim/902")] = 100.0
-
-    async def answer(current):
-        await current.send(current.plain_result("offline AI answer"))
-
-    value.chat = AsyncMock(side_effect=answer)
-    assert (
-        await step(value, event, "hello", native=True, pace=False)
-        == "offline AI answer"
-    )
-    assert value.command_at[("1", "nim/902")] == 100.0

@@ -143,6 +143,45 @@ async def test_fixed_fixture_accepts_small_packet_draw_without_payments(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,pool,bonus,allowed",
+    [
+        ("lucky", 60, 40, True),
+        ("lucky", 2, 98, True),
+        ("lucky", 60, 41, False),
+        ("lucky", 100, 1, False),
+        ("lucky", 60, -1, False),
+        ("lucky", 60, 100000000, False),
+        ("ordinary", 60, 1, False),
+        ("prize", 0, 1, False),
+    ],
+)
+async def test_extra_bonus_is_included_in_fixed_total_test_budget(
+    control, mode, pool, bonus, allowed
+):
+    from astrbot.builtin_stars.wangshangliao_moderation.activity_store import database
+    from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
+
+    with database(control.receiver) as db:
+        db.execute(
+            "UPDATE lottery_settings SET packet_mode=?,total_amount=?,"
+            "luckiest_bonus=?,winners=2",
+            (mode, pool, bonus),
+        )
+    if not allowed:
+        before = control.window.outbound_remaining
+        with pytest.raises(OpenError, match="test_lottery_settings"):
+            await control.control("start")
+        assert control.rows("lotteries") == []
+        assert control.accepted == []
+        assert control.window.outbound_remaining == before
+        return
+    result = await control.control("start")
+    assert result["status"] == "accepted"
+    assert control.rows("lotteries")[0]["luckiest_bonus"] == bonus
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["draw", "cancel"])
 async def test_cannot_choose_or_create_another_fixture(control, action):
     from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError

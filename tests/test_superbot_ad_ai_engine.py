@@ -10,9 +10,9 @@ from test_superbot_ad_killer import enable, env, message  # noqa: F401
 from integrations.superbot_legacy.ad_ai_engine import AdAI
 
 
-def configure(env, mode="observe"):
+async def configure(env, mode="observe"):
     runtime = env.runtime
-    enable(env)
+    await enable(env)
     ai = runtime.ad_ai = AdAI(runtime)
     with runtime.store.tx() as db:
         runtime.store.put(db, "modules", {"ad_ai": True, "moderation": True})
@@ -52,7 +52,7 @@ async def drain(ai):
 
 @pytest.mark.asyncio
 async def test_observation_dedup_no_punishment(env):
-    ai = configure(env)
+    ai = await configure(env)
     ai.submit(message("买课程，私信我"))
     ai.submit(message("买课程，私信我"))
     await drain(ai)
@@ -68,7 +68,7 @@ async def test_observation_dedup_no_punishment(env):
 
 @pytest.mark.asyncio
 async def test_three_hits_mute_ten_minutes_without_ban(env):
-    ai = configure(env, "auto")
+    ai = await configure(env, "auto")
     for i in range(3):
         ai.submit(message("购买课程私信我", number=i + 1))
         await drain(ai)
@@ -80,7 +80,7 @@ async def test_three_hits_mute_ten_minutes_without_ban(env):
 
 @pytest.mark.asyncio
 async def test_edit_invalidates_queued_ad(env):
-    ai = configure(env, "auto")
+    ai = await configure(env, "auto")
     ai.submit(message("推广广告"))
     edited = message("/help")
     edited.edited_message, edited.message = edited.message, None
@@ -92,7 +92,7 @@ async def test_edit_invalidates_queued_ad(env):
 
 @pytest.mark.asyncio
 async def test_shutdown_gate_and_old_rule_win(env):
-    ai = configure(env, "auto")
+    ai = await configure(env, "auto")
     ai.submit(message("推广广告"))
     env.runtime.store.db.execute(
         """INSERT INTO ak_hits(chat,message,uid,rules,action,version,status,step,at)
@@ -108,7 +108,7 @@ async def test_shutdown_gate_and_old_rule_win(env):
 
 @pytest.mark.asyncio
 async def test_queue_bound_context_redaction_and_circuit(env):
-    ai = configure(env)
+    ai = await configure(env)
     ai.submit(message("联系 @someone https://example.com", number=1))
     ai.submit(message("大家好", number=2))
     snapshots = list(ai.queue._queue)
@@ -130,7 +130,7 @@ async def test_queue_bound_context_redaction_and_circuit(env):
 
 @pytest.mark.asyncio
 async def test_admin_never_classified(env):
-    ai = configure(env, "auto")
+    ai = await configure(env, "auto")
     ai.submit(message("推广广告", user=1))
     await drain(ai)
     ai.probability.assert_not_awaited()
@@ -139,7 +139,7 @@ async def test_admin_never_classified(env):
 
 @pytest.mark.asyncio
 async def test_missing_release_evidence_prevents_execution(env):
-    ai = configure(env, "auto")
+    ai = await configure(env, "auto")
     with env.runtime.store.tx() as db:
         env.runtime.store.put(db, "ad_ai_release", {})
     ai.submit(message("推广广告"))
@@ -155,7 +155,7 @@ async def test_missing_release_evidence_prevents_execution(env):
 
 @pytest.mark.asyncio
 async def test_runtime_requires_observation_age_and_distinct_reviews(env):
-    ai = configure(env, "auto")
+    ai = await configure(env, "auto")
     db = env.runtime.store.db
     db.execute("UPDATE ak_ai_groups SET observed_since=?", (env.now[0],))
     assert not ai.release_ready("-1001")
@@ -174,7 +174,7 @@ async def test_execution_can_complete_after_decision_deadline(env, monkeypatch):
 
     from integrations.superbot_legacy import ad_ai_engine
 
-    ai = configure(env, "auto")
+    ai = await configure(env, "auto")
     ai.submit(message("推广广告"))
     job = env.runtime.store.db.execute(
         "SELECT * FROM ak_ai_jobs WHERE message=1"
@@ -201,7 +201,7 @@ async def test_execution_rejects_expired_decision_before_claim(env, monkeypatch)
 
     from integrations.superbot_legacy import ad_ai_engine
 
-    ai = configure(env, "auto")
+    ai = await configure(env, "auto")
     ai.submit(message("test advertisement"))
     job = env.runtime.store.db.execute(
         "SELECT * FROM ak_ai_jobs WHERE message=1"

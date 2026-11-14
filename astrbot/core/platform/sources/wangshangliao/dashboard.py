@@ -29,6 +29,7 @@ async def save_configuration(
     from .runtime_policy import (
         BUSINESS_FIELDS,
         runtime,
+        strip_private_settings,
     )
     from .storage import Vault
 
@@ -36,6 +37,33 @@ async def save_configuration(
     expected = config.pop("_business_revision", "")
     config.pop("_business_active", None)
     config.pop("_business_epoch", None)
+    allowed = {
+        "id",
+        "type",
+        "enable",
+        "account_id",
+        "nickname",
+        "enabled_groups",
+        "reply_groups",
+        "ai_routes",
+        "proactive_send",
+        "moderation",
+        "developer_test",
+        "session_ref",
+        "login_method",
+        "name",
+    }
+    if set(config) - allowed or config.get("type") != "wangshangliao":
+        raise ValueError("platform_config_fields")
+    group_config = copy.deepcopy(config)
+    strip_private_settings(group_config)
+    for field, error in (
+        ("ai_routes", "ai_routes_invalid"),
+        ("developer_test", "developer_test_invalid"),
+        ("proactive_send", "proactive_targets_invalid"),
+    ):
+        if group_config.get(field) != config.get(field):
+            raise ValueError(error)
     business_change = None
     if current and runtime.snapshot(current):
         saved_business = runtime.snapshot(current).values()
@@ -49,33 +77,11 @@ async def save_configuration(
             business_change = proposed_business
         for key in BUSINESS_FIELDS:
             config.pop(key, None)
-
-    allowed = {
-        "id",
-        "type",
-        "enable",
-        "account_id",
-        "nickname",
-        "enabled_groups",
-        "reply_private",
-        "reply_groups",
-        "ai_routes",
-        "proactive_send",
-        "moderation",
-        "developer_test",
-        "session_ref",
-        "login_method",
-        "name",
-    }
-    if set(config) - allowed or config.get("type") != "wangshangliao":
-        raise ValueError("platform_config_fields")
     if config.get("login_method", "password") not in {"password", "sms"}:
         raise ValueError("login_method_invalid")
     groups = config.get("enabled_groups", [])
     from .policy import validate_policy
 
-    if type(config.get("reply_private", True)) is not bool:
-        raise ValueError("reply_private_invalid")
     replies = config.get("reply_groups", {})
     if not isinstance(replies, dict) or any(
         not isinstance(group, str)
@@ -87,13 +93,13 @@ async def save_configuration(
     ):
         raise ValueError("reply_groups_invalid")
     if current and "ai_routes" in current:
-        config.setdefault("ai_routes", copy.deepcopy(current["ai_routes"]))
+        group_current = copy.deepcopy(current)
+        strip_private_settings(group_current)
+        config.setdefault("ai_routes", group_current["ai_routes"])
     routes = config.get("ai_routes", {})
     if (
         not isinstance(routes, dict)
-        or set(routes) - {"admin_provider_id", "groups"}
-        or not isinstance(routes.get("admin_provider_id", ""), str)
-        or len(routes.get("admin_provider_id", "")) > 256
+        or set(routes) - {"groups"}
         or not isinstance(routes.get("groups", {}), dict)
         or len(routes.get("groups", {})) > 100
         or any(
@@ -106,7 +112,6 @@ async def save_configuration(
     ):
         raise ValueError("ai_routes_invalid")
     config["ai_routes"] = {
-        "admin_provider_id": routes.get("admin_provider_id", ""),
         "groups": dict(routes.get("groups", {})),
     }
     # Preserve opt-ins when an older dashboard omits newer policy fields.
@@ -146,8 +151,6 @@ async def save_configuration(
         or any(
             s
             not in (
-                "private_commands",
-                "private_ai",
                 "group_commands",
                 "group_ai",
                 "group_rules",
@@ -177,7 +180,10 @@ async def save_configuration(
         not isinstance(targets, list)
         or len(targets) > 1000
         or any(
-            not isinstance(target, str) or not target or len(target) > 2048
+            not isinstance(target, str)
+            or not target
+            or len(target) > 2048
+            or target.startswith("private/")
             for target in targets
         )
     ):
@@ -405,7 +411,6 @@ async def handle_registration(platform_manager, payload: dict, owner: str = "") 
                     payload.get("seconds", 300),
                     payload.get("budget", 10),
                 )
-                sender.test_command_window = adapter.test_window
                 logger.info(
                     "WSL developer window opened: bot=%s source=%s",
                     adapter.meta().id,

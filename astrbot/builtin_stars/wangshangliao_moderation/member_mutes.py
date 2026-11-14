@@ -4,12 +4,14 @@ import asyncio
 import hashlib
 import json
 import secrets
+import sqlite3
 import time
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from astrbot.core.platform.sources.wangshangliao.actions import ActionRequest
+from astrbot.core.platform.sources.wangshangliao.blacklist import BlacklistStore
 from astrbot.core.platform.sources.wangshangliao.directory import muted_member_ids
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
@@ -41,6 +43,113 @@ class Commit(Preview):
 REQUEST = TypeAdapter(
     Annotated[Read | Preview | Commit, Field(discriminator="operation")]
 )
+
+
+async def release_member(
+    adapter, group, member, peer, *, operation, actor, guard, store, version
+):
+    """Unmute one authorized member and end only the captured blacklist version.
+
+    Args:
+        adapter: Original receiving account.
+        group: Authenticated business group.
+        member: Verified business UID.
+        peer: Verified native identity of that UID.
+        operation: Single-use native operation identifier.
+        actor: Verified administrator identity or dashboard principal.
+        guard: Synchronous authority, lifecycle and target identity check.
+        store: Blacklist store for the receiving instance.
+        version: List version captured before submission or by the preview.
+
+    Returns:
+        Independent native receipt, verification and blacklist removal outcomes.
+
+    Raises:
+        OpenError: If the original authority is no longer valid.
+        ProtocolError: If the blacklist changed before submission.
+    """
+    account = str(adapter.account)
+    guard()
+    current_version, entries = await asyncio.to_thread(store.read, account, group)
+    guard()
+    entry = next((row for row in entries if row["member"] == member), None)
+    if current_version != version or entry and entry["peer"] != peer:
+        raise ProtocolError("blacklist_version_changed")
+    current = await muted_member_ids(
+        adapter, group, authorize=guard, expected_member=(member, peer)
+    )
+    guard()
+
+    async def authorize():
+        guard()
+        live_version, _ = await asyncio.to_thread(store.read, account, group)
+        guard()
+        if live_version != version:
+            raise ProtocolError("blacklist_version_changed")
+        live = await muted_member_ids(
+            adapter, group, authorize=guard, expected_member=(member, peer)
+        )
+        guard()
+        if member not in live:
+            raise ProtocolError("member_no_longer_muted")
+
+    verified = member not in current
+    result = {"status": "already_unmuted", "submitted": False}
+    if not verified:
+        result = await adapter.execute_action(
+            ActionRequest.bind(
+                adapter,
+                operation,
+                "unmute",
+                int(group),
+                member=int(member),
+                expected_nim=peer,
+            ),
+            authorize=authorize,
+        )
+        if result.get("status") in {"accepted", "verified"}:
+            try:
+                current = await muted_member_ids(
+                    adapter, group, authorize=guard, expected_member=(member, peer)
+                )
+                guard()
+                verified = member not in current
+            except (ProtocolError, OpenError, OSError, TimeoutError):
+                pass
+    outcome = {
+        **result,
+        "verified": verified,
+        "blacklist_status": "retained" if entry else "not_listed",
+    }
+    if not verified:
+        return outcome
+    try:
+        guard()
+        if entry:
+            # The store checks this version atomically with removal, preserving re-adds.
+            await asyncio.to_thread(
+                store.set_member,
+                account,
+                group,
+                member,
+                peer,
+                entry["name"],
+                enabled=False,
+                actor=actor,
+                guard=guard,
+                expected_version=version,
+            )
+            outcome["blacklist_status"] = "removed"
+        else:
+            live_version, _ = await asyncio.to_thread(store.read, account, group)
+            guard()
+            if live_version != version:
+                outcome["blacklist_status"] = "changed"
+    except (ProtocolError, OpenError):
+        outcome["blacklist_status"] = "changed"
+    except (sqlite3.Error, OSError, TimeoutError):
+        outcome["blacklist_status"] = "failed"
+    return outcome
 
 
 async def member_mutes(rpc, call):
@@ -104,8 +213,18 @@ async def member_mutes(rpc, call):
         }
     if member not in muted:
         raise OpenError("member_no_longer_muted")
+    blacklist = BlacklistStore(adapter.config["id"])
+    blacklist_version, entries = await asyncio.to_thread(blacklist.read, account, group)
+    guard()
+    entry = next((row for row in entries if row["member"] == member), None)
     target = json.dumps(
-        {"tenant": tenant, "member": member, "peer": peer}, sort_keys=True
+        {
+            "tenant": tenant,
+            "member": member,
+            "peer": peer,
+            "blacklist_version": blacklist_version,
+        },
+        sort_keys=True,
     )
 
     def reserve():
@@ -129,7 +248,11 @@ async def member_mutes(rpc, call):
                         time.time() + 600,
                     ),
                 )
-                return {"confirmation": token, "expires_in": 600}
+                return {
+                    "confirmation": token,
+                    "expires_in": 600,
+                    "removes_blacklist": entry is not None,
+                }
             digest = hashlib.sha256(request.confirmation.encode()).hexdigest()
             preview = db.execute(
                 "SELECT * FROM capabilities WHERE digest=?", (digest,)
@@ -174,36 +297,17 @@ async def member_mutes(rpc, call):
     if request.operation == "preview":
         return reserved
 
-    async def submission_guard():
-        guard()
-        current = await muted_member_ids(
-            adapter, group, authorize=guard, expected_member=(member, peer)
-        )
-        guard()
-        if member not in current:
-            raise ProtocolError("member_no_longer_muted")
-
-    result = await adapter.execute_action(
-        ActionRequest.bind(
-            adapter,
-            reserved,
-            "unmute",
-            int(group),
-            member=int(member),
-            expected_nim=peer,
-        ),
-        authorize=submission_guard,
+    result = await release_member(
+        adapter,
+        group,
+        member,
+        peer,
+        operation=reserved,
+        actor=call.actor,
+        guard=guard,
+        store=blacklist,
+        version=blacklist_version,
     )
-    verified = False
-    if result.get("status") in {"accepted", "verified"}:
-        try:
-            current = await muted_member_ids(
-                adapter, group, authorize=guard, expected_member=(member, peer)
-            )
-            guard()
-            verified = member not in current
-        except (ProtocolError, OpenError):
-            pass
 
     def log_receipt():
         with service.store.connect(write=True) as db:
@@ -217,7 +321,8 @@ async def member_mutes(rpc, call):
                     "member": member,
                     "operation": reserved,
                     "status": result.get("status", "unknown"),
-                    "verified": verified,
+                    "verified": result["verified"],
+                    "blacklist_status": result["blacklist_status"],
                 },
             )
 
@@ -225,5 +330,6 @@ async def member_mutes(rpc, call):
     return {
         "operation": reserved,
         "status": result.get("status", "unknown"),
-        "verified": verified,
+        "verified": result["verified"],
+        "blacklist_status": result["blacklist_status"],
     }

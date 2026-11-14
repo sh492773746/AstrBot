@@ -142,6 +142,52 @@ async def test_invalid_or_stale_requests_never_reach_transport(adapter, changes)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "change",
+    ["callback", "marker", "prefix", "identity", "scope", "kick", "duration", "type"],
+)
+async def test_delegated_cap_needs_explicit_authority_and_bound_target(adapter, change):
+    intent = replace(
+        request(adapter),
+        operation="delegate-mute/3/test",
+        delegated_mute=True,
+        expected_nim="n2",
+        minutes=4320,
+    )
+    check = AsyncMock()
+    if change == "callback":
+        check = None
+    elif change == "marker":
+        intent = replace(intent, delegated_mute=False, minutes=128)
+    elif change == "prefix":
+        intent = replace(intent, operation="ordinary")
+    elif change == "identity":
+        intent = replace(intent, expected_nim=None)
+    elif change == "scope":
+        intent = replace(intent, expected_nim="another-peer")
+    elif change == "kick":
+        intent = replace(intent, action="kick")
+    elif change == "type":
+        intent = replace(intent, delegated_mute=1)
+    else:
+        intent = replace(intent, minutes=4321)
+    with pytest.raises(ProtocolError):
+        await adapter.execute_action(intent, authorize=check)
+    adapter.execute_moderation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_three_day_delegation_does_not_raise_ordinary_cap(adapter):
+    check = AsyncMock()
+    for minutes in (1441, 4320):
+        with pytest.raises(ProtocolError, match="action_parameters_invalid"):
+            await adapter.execute_action(
+                request(adapter, minutes=minutes), authorize=check
+            )
+    adapter.execute_moderation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "operation", ["automatic-kick/old", "message/5/2", "content/5/2", "progressive/old"]
 )
 async def test_legacy_automatic_kick_intent_cannot_use_v1(adapter, operation):

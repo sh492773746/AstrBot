@@ -47,7 +47,7 @@ async def test_old_broadcast_settings_cannot_reenable(rounds):
             await s.service.configure(s.runtime.ui, private(), {"action": op}, "")
     assert "bet" not in GROUP_SHORTCUTS and "game" not in GROUP_SHORTCUTS
     assert {"games", "points", "checkin"} <= GROUP_SHORTCUTS.keys()
-    assert not {"play", "bets"} & GROUP_SHORTCUTS.keys()
+    assert "play" not in GROUP_SHORTCUTS and "bets" not in GROUP_SHORTCUTS
 
 
 @pytest.mark.asyncio

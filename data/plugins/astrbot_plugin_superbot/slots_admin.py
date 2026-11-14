@@ -2,11 +2,14 @@
 
 import json
 
+from .game_navigation import game_back, scoped_game_page
 from .game_switches import approve_rollout, blocker
 from .slots import RULES, group_stakes
 from .store import Rejected
+from .tenants import platform_group
 
 
+@scoped_game_page
 async def action(ui, update, payload):
     """Expose group switches and exact table records under game authority.
 
@@ -22,11 +25,15 @@ async def action(ui, update, payload):
         raise Rejected("请私聊管理老虎机。")
     name = payload["action"]
     if name == "slots_groups":
-        rows = store.db.execute(
-            "SELECT chat,title FROM platform_mod_groups g WHERE enabled=1 AND "
-            "(? OR EXISTS(SELECT 1 FROM mod_acl a WHERE a.chat=g.chat AND a.uid=?)) ORDER BY chat",
-            (store.allowed(uid, "manager"), uid),
-        ).fetchall()
+        from .group_visibility import visible_groups
+
+        rows = await visible_groups(
+            runtime,
+            uid,
+            store.db.execute(
+                "SELECT chat,title FROM platform_mod_groups WHERE enabled=1 ORDER BY chat"
+            ).fetchall(),
+        )
         page = max(0, min(int(payload.get("page", 0)), max(0, (len(rows) - 1) // 8)))
         buttons = [
             (r["title"], {"action": "slots_group", "chat": r["chat"]})
@@ -169,14 +176,20 @@ async def action(ui, update, payload):
         f"当前托管：{escrow}积分\n本群开桌档位：{' / '.join(map(str, group_stakes(store, chat)))}\n"
         f"同桌玩家与发起者投入相同。\n\n📖 固定规则\n{RULES}",
         [
-            (
-                "关闭" if enabled else "开启",
-                {
-                    "action": "slots_preview",
-                    "chat": chat,
-                    "version": version,
-                    "enabled": not enabled,
-                },
+            *(
+                []
+                if platform_group(store, chat)
+                else [
+                    (
+                        "本群开桌档位",
+                        {
+                            "action": "tenant_edit",
+                            "chat": chat,
+                            "field": "slots_stakes",
+                            "game": "slots",
+                        },
+                    )
+                ]
             ),
             *[
                 (
@@ -185,8 +198,7 @@ async def action(ui, update, payload):
                 )
                 for t in tables
             ],
-            ("返回选群", {"action": "slots_groups"}),
-            ("本群玩法总览", {"action": "games_group_view", "chat": chat}),
-        ],
+        ]
+        + game_back(ui, chat, "slots"),
         fold_sections=True,
     )

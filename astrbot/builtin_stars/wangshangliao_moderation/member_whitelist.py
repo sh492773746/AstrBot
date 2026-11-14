@@ -2,6 +2,7 @@
 
 import asyncio
 import secrets
+import sqlite3
 import time
 from typing import Annotated, Literal
 
@@ -12,6 +13,7 @@ from .member_exemptions import read_exemptions, set_exemption
 from .open_store import OpenError
 
 TOKEN = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{16,64}$")]
+UID = Annotated[str, Field(pattern=r"^[1-9][0-9]{0,19}$")]
 
 
 class Scope(BaseModel):
@@ -44,8 +46,18 @@ class Commit(Scope):
     token: TOKEN
 
 
+class History(Scope):
+    operation: Literal["history"]
+    member_ids: list[UID] = Field(min_length=1, max_length=5)
+    list_version: int = Field(ge=0)
+    period: Literal["recent", "today", "yesterday"] = "recent"
+    query: str = Field(default="", max_length=64)
+
+
 REQUEST = TypeAdapter(
-    Annotated[Read | Search | Preview | Commit, Field(discriminator="operation")]
+    Annotated[
+        Read | Search | Preview | Commit | History, Field(discriminator="operation")
+    ]
 )
 
 
@@ -74,6 +86,7 @@ class MemberWhitelist:
         self.service = service
         self.pending = {}
         self.chat_search = {}
+        self.history_slots = asyncio.Semaphore(2)
 
     def cancel(self, event):
         """Invalidate this conversation's unresolved member selections and previews.
@@ -102,13 +115,17 @@ class MemberWhitelist:
         selection="",
         index=0,
         token="",
+        member_ids=None,
+        list_version=None,
+        period="recent",
+        history_query="",
     ):
         """Authorize fresh native membership before each read, selection or commit.
 
         Args:
             adapter: Existing authenticated collector.
             group: Server-selected current group, never a member-provided scope.
-            operation: Read, search, preview, commit, or native mention-only direct.
+            operation: Read, search, preview, commit, dashboard history or native direct.
             actor: Verified caller audit identity.
             session: Exact authenticated conversation or dashboard principal.
             event: Native event, absent only for the authenticated dashboard.
@@ -118,6 +135,10 @@ class MemberWhitelist:
             selection: Server-issued search token.
             index: One-based choice from that exact search.
             token: Server-issued immutable preview token.
+            member_ids: At most five exact saved whitelist members for history.
+            list_version: Expected whitelist audit version for a history read.
+            period: Today, yesterday or the retained two-day window.
+            history_query: Optional literal message-content filter.
 
         Returns:
             Bounded current members, an immutable preview or committed result.
@@ -125,6 +146,8 @@ class MemberWhitelist:
         Raises:
             OpenError: If identity, permission, selection or version changed.
         """
+        if event is not None and event.is_private_chat():
+            raise OpenError("private_messages_retired")
         service = self.service
         account = str(adapter.account)
         tenant = dict(service.tenants.get((account, group), {}))
@@ -246,6 +269,59 @@ class MemberWhitelist:
             )
         if operation == "read":
             return {"version": version, "members": visible}
+        if operation == "history":
+            from .speech_activity import day_window
+
+            history_day = day_window(time.time())[1]
+            if (
+                event is not None
+                or list_version != version
+                or not isinstance(member_ids, list)
+                or not 1 <= len(member_ids) <= 5
+                or len(set(member_ids)) != len(member_ids)
+                or any(uid not in entries for uid in member_ids)
+            ):
+                raise OpenError("member_whitelist_changed")
+            path = getattr(getattr(adapter, "ledger", None), "path", None)
+            if not path:
+                raise OpenError("member_whitelist_history_unavailable")
+            if self.history_slots.locked():
+                raise OpenError("service_busy")
+            selected = [
+                row for uid in member_ids for row in visible if row["id"] == uid
+            ]
+            expected = {uid: entries[uid] for uid in member_ids}
+            async with self.history_slots:
+                try:
+                    result = await asyncio.to_thread(
+                        service.plugin.speech_activity.history,
+                        adapter.config["id"],
+                        account,
+                        group,
+                        path,
+                        selected,
+                        period=period,
+                        query=history_query,
+                    )
+                except (sqlite3.Error, OSError, ValueError):
+                    raise OpenError("member_whitelist_history_unavailable") from None
+            guard()
+            latest_version, latest_entries = await asyncio.to_thread(
+                read_exemptions,
+                adapter.config["id"],
+                account,
+                group,
+                include_names=True,
+                include_automatic=True,
+            )
+            guard()
+            if (
+                latest_version != version
+                or day_window(time.time())[1] != history_day
+                or any(latest_entries.get(uid) != expected[uid] for uid in member_ids)
+            ):
+                raise OpenError("member_whitelist_changed")
+            return {"version": version, **result}
         if operation == "direct":
             mentions = (
                 (event.get_extra("wangshangliao_payload") or {}).get("mentions", [])
@@ -298,6 +374,37 @@ class MemberWhitelist:
             if value in self.pending
         }
         if operation == "search":
+            payload = (
+                event.get_extra("wangshangliao_payload") or {}
+                if event is not None
+                else {}
+            )
+            if (
+                mode == "remove"
+                and event is not None
+                and (
+                    query.startswith("@")
+                    or isinstance(payload.get("mentions"), list)
+                    and any(
+                        str(peer) != str(adapter.nim_account)
+                        for peer in payload["mentions"]
+                    )
+                )
+            ):
+                try:
+                    mentions = payload.get("mentions", [])
+                    if not isinstance(mentions, list) or not any(
+                        str(peer) != str(adapter.nim_account) for peer in mentions
+                    ):
+                        raise OpenError("member_whitelist_remove_target")
+                    query, peer = await service.member_blacklist.target(event, members)
+                    if query in entries and entries[query]["peer"] != peer:
+                        raise OpenError("member_whitelist_changed")
+                except OpenError as exc:
+                    if str(exc) == "member_whitelist_changed":
+                        raise
+                    raise OpenError("member_whitelist_remove_target") from None
+                guard()
             if (
                 mode not in {"add", "remove"}
                 or not isinstance(query, str)
@@ -451,6 +558,8 @@ class MemberWhitelist:
         Returns:
             Literal workflow feedback, never a model-generated success claim.
         """
+        if event.is_private_chat():
+            return ""
         action, _, argument = command.partition(" ")
         session = self.service.navigation.key(event)
         if action == "添加白名单":
@@ -491,7 +600,7 @@ class MemberWhitelist:
             )
         if action == "移除白名单":
             if not argument:
-                return "请输入「" + action + " 对方名称」，从本群搜索结果中选择。"
+                return "请在本群真正@一名成员并发送「删白」，或发送「删白 对方名称」；收到搜索结果后选择并确认，当前尚未移出任何成员。"
             operation = "search"
             options = {
                 "mode": "remove",
@@ -521,7 +630,7 @@ class MemberWhitelist:
             lines = [
                 f"{n}. {row['name']} · UID {row['id']}"
                 + (
-                    f" · 昨日前30名（昨日{row['count']}条）"
+                    f" · 自动白名单（达标时{row['count']}条，7天无有效聊天退出）"
                     if row.get("source") == "daily_top30"
                     else ""
                 )
@@ -533,10 +642,11 @@ class MemberWhitelist:
                     + ("\n".join(lines) or "暂无本群成员。")
                     + (
                         "\n添加：群内真正@一名成员＋「白名单」，直接加入，无需搜索或确认。"
-                        "\n移除：发送「移除白名单 名称」，搜索后选择并确认。"
+                        "\n移除：真正@一名成员＋「删白」，或发送「删白 名称」，收到搜索结果后选择并确认。"
                         "\n仅豁免本群自动禁言、撤回；不授予管理权限，不会自动解除已有禁言。"
-                        "\n昨日前30名且昨日有效发言超过100条自动进入，撤回消息不计数；"
-                        "移出后今日不自动加回。"
+                        "\n昨日前20名且昨日有效发言至少101条自动进入，"
+                        "每次有效文字聊天刷新7天保留期；连续7天未有效聊天退出。"
+                        "撤回消息不计数；手动移出不按历史资格加回，须重新达标。"
                     )
                 )
             return "【本群成员搜索结果】\n" + (

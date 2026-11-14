@@ -22,6 +22,7 @@ from scripts import check_wsl_open_load as benchmark
 @pytest.fixture(autouse=True)
 def optional_affinity_api(monkeypatch):
     """Model Linux affinity APIs in isolated tests on other POSIX runners."""
+
     def unsupported(*_):
         raise NotImplementedError("No native affinity API on this test runner")
 
@@ -30,14 +31,15 @@ def optional_affinity_api(monkeypatch):
             monkeypatch.setattr(benchmark.os, name, unsupported, raising=False)
 
 
-def test_synthetic_consultation_binding_keeps_two_slow_models_and_rules(tmp_path):
+@pytest.mark.parametrize("seconds", [1, 2])
+def test_synthetic_group_models_keep_real_native_ingress_and_billing(tmp_path, seconds):
     result = subprocess.run(
         [
             sys.executable,
             "-c",
             "import asyncio\n"
             "from scripts.check_wsl_open_load import worker\n"
-            "asyncio.run(worker(1))\n",
+            f"asyncio.run(worker({seconds}))\n",
         ],
         cwd=Path(benchmark.__file__).resolve().parents[1],
         env={
@@ -64,13 +66,92 @@ def test_synthetic_consultation_binding_keeps_two_slow_models_and_rules(tmp_path
         )
     )
     assert report["model_requests"] == 2
-    assert report["messages"] == 100
+    assert report["model_replies"] == 2
+    assert report["model_profile_kind"] == "group"
+    assert report["messages"] == seconds * 100
     assert report["groups"] == 20
     assert report["slow_ai_did_not_block_rules"] is True
     assert report["atomic_plan_cost_reservations"] is True
     assert report["native_decode_dispatch_storage"] is True
-    assert report["private_flood_rejected"] > 0
+    for field in (
+        "group_ingress_decoded",
+        "group_ingress_stored",
+        "group_ingress_dispatched",
+        "group_ingress_processed",
+    ):
+        assert report[field] == seconds * 100 + 2
+    assert report["group_dispatch_counts"] == {
+        str(1000 + index): seconds * 5 + int(index < 2) for index in range(20)
+    }
+    assert report["private_flood_ignored"] == seconds * 200
+    assert report["private_flood_acks"] == seconds * 200
+    assert report["private_flood_decryptions"] == 0
+    assert report["private_flood_key_reads"] == 0
+    assert report["private_flood_ledger_rows"] == 0
+    assert "private_flood_rejected" not in report
+    assert report["queue_peaks"]["private"] == 0
+    assert report["message_ledger_synchronous"] == "FULL"
+    assert report["message_ledger_statements"]["INSERT"] > 0
+    assert report["message_ledger_statements"]["UPDATE"] > 0
+    reserved, settled = report["billing_reservations"], report["billing_charges"]
+    assert len(reserved) == len(settled) == 2
+    assert len({row["pool"] for row in reserved}) == 2
+    assert {row["group_id"] for row in reserved} == {"1000", "1001"}
+    assert {row["request"] for row in reserved} == {row["request"] for row in settled}
+    assert all(
+        row["state"] == "dispatched" and row["reserved_micro"] > 0 for row in reserved
+    )
+    assert all(
+        row["state"] == "settled" and 0 < row["charged_micro"] <= row["reserved_micro"]
+        for row in settled
+    )
     assert report["rule_p95_ms"] < 1000
+
+
+@pytest.mark.parametrize("direct_worker", [False, True])
+def test_finance_cli_fails_before_affinity_imports_or_io(
+    monkeypatch, capsys, direct_worker
+):
+    argv = ["benchmark", "--finance", "--seconds", "10"]
+    if direct_worker:
+        argv.append("--worker")
+    monkeypatch.setattr(benchmark.sys, "argv", argv)
+
+    def unexpected(*_, **__):
+        pytest.fail("Retired finance must fail before worker or resource setup")
+
+    monkeypatch.setattr(benchmark, "apply_affinity", unexpected)
+    monkeypatch.setattr(benchmark, "placement", unexpected)
+    monkeypatch.setattr(benchmark, "worker", unexpected)
+    monkeypatch.setattr(benchmark.sqlite3, "connect", unexpected)
+    monkeypatch.setattr(benchmark.subprocess, "Popen", unexpected)
+    monkeypatch.setattr(benchmark.tempfile, "TemporaryDirectory", unexpected)
+    monkeypatch.setattr(benchmark.Path, "read_text", unexpected)
+    with pytest.raises(SystemExit) as error:
+        benchmark.main()
+    assert error.value.code == 2
+    assert benchmark.FINANCE_RETIRED in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_finance_worker_fails_before_imports_affinity_or_io(monkeypatch):
+    original = builtins.__import__
+
+    def unexpected(*_, **__):
+        pytest.fail("Retired finance must not perform setup or I/O")
+
+    def reject_runtime_imports(name, *args, **kwargs):
+        if name == "aiohttp" or name.startswith("astrbot"):
+            unexpected()
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(benchmark, "apply_affinity", unexpected)
+    monkeypatch.setattr(benchmark, "placement", unexpected)
+    monkeypatch.setattr(benchmark.tempfile, "TemporaryDirectory", unexpected)
+    monkeypatch.setattr(benchmark.sqlite3, "connect", unexpected)
+    monkeypatch.setattr(builtins, "__import__", reject_runtime_imports)
+    with pytest.raises(ValueError, match="--finance is retired"):
+        await benchmark.worker(10, finance=True)
 
 
 @pytest.mark.parametrize(
@@ -333,13 +414,20 @@ def test_main_baseline_and_load_keep_reader_mask_and_pass_only_worker_mask(
             ),
         )
 
-    output = tmp_path / "evidence"
-    output.mkdir()
+    assert benchmark.EVIDENCE_ROOT == "/opt/backups"
+    output = tmp_path / ("configured-evidence" if explicit else "default-evidence")
+    if explicit:
+        monkeypatch.setenv("ASTRBOT_WSL_EVIDENCE_ROOT", str(output))
+    else:
+        monkeypatch.delenv("ASTRBOT_WSL_EVIDENCE_ROOT", raising=False)
     real_path = benchmark.Path
 
     def local_path(*args):
         path = real_path(*args)
-        return output if str(path) == "/opt/backups" else path
+        if str(path) == benchmark.EVIDENCE_ROOT:
+            assert not explicit, "Configured evidence root must override the default"
+            return output
+        return path
 
     argv = ["benchmark", "--database", str(database), "--seconds", "10"]
     if explicit:
@@ -396,6 +484,7 @@ def test_main_baseline_and_load_keep_reader_mask_and_pass_only_worker_mask(
             for item in placement["reader"].values()
         )
     assert len(list(output.glob("*.json"))) == 1
+    assert output.stat().st_mode & 0o777 == 0o700
     queries = result["production_queries"]
     assert queries["acceptance_mode"] == (
         "absolute_query_report" if report_mode else "relative_growth"
@@ -404,5 +493,7 @@ def test_main_baseline_and_load_keep_reader_mask_and_pass_only_worker_mask(
     assert queries["within_ten_percent"] is (not large_growth)
     assert queries["baseline_p95_ms"] == pytest.approx(9)
     assert queries["under_load_p95_ms"] == pytest.approx(90 if large_growth else 9)
-    saved = json.loads(next(output.glob("*.json")).read_text())
+    report = next(output.glob("*.json"))
+    assert report.stat().st_mode & 0o777 == 0o600
+    saved = json.loads(report.read_text())
     assert saved["production_queries"] == queries

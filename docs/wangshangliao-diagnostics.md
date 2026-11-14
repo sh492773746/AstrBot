@@ -103,6 +103,42 @@ AstrBot侧前缀为`Cashier standalone`。旧公共`control.sock`已停用，这
 
 ## 常见问题定位
 
+### 解析、排队与图片耗时（2026-10-31）
+
+`GET /api/v1/bots/stats`中本实例的`performance.timings`按阶段保留最近最多1000个
+样本，提供`count`、`samples`、`p50_ms`、`p95_ms`、`p99_ms`和`max_ms`。
+百分位采用最近秩法；`count`是进程内累计次数，`samples`才是本次分位数的样本数。
+重启后样本重新累计，不足1000时不能称为1000样本验收。
+
+- `message_decode`：应用层认证、解密、解压和协议解析，不含排队、数据库写入或处罚。
+- `queue_wait`／`event_total`：原有主流程排队和处理耗时，不包含分离执行的图片审核。
+- `rule_total`：固定规则命中后从收件到规则工作任务结束的耗时；实际处罚仍须核对回执。
+- `media_queue`／`media_download`／`media_recognizer`／`media_total`：图片任务等待、
+  下载、本地子进程识别及总耗时；失败、跳过和取消也会计入已走过的阶段。
+
+正常当前版本认证封包不再提前构造仅失败时需要的结构诊断；两层认证、路由、
+大小限制及未认证明文隔离不变。目录发现每账号最多一个后台任务，不再阻挡群AI、
+定时图文和黑名单的调度检查；上游HTTP仍有自己的锁与超时，不能由此承诺处罚立即完成。
+关闭服务时先取消并等待目录任务，再关闭依赖组件；失败不会自动重放处罚。
+
+### 图片审核没有撤回（2026-10-28）
+
+先核对本机器人、本群三个独立开关及有效白名单，再关联原消息与`stage=media_rules`。
+`status.media_inspection.failed`不为0时，不能仅凭消息队列为0认定图片已正常识别。
+失败现在区分`authorization_failed_or_unknown`、`download_failed_or_unknown`、
+`recognizer_failed_or_unknown`和`enforcement_failed_or_unknown`，不记录URL、OCR正文或异常原文。
+`image_digits`／`image_qr`是识别命中，实际撤回须另查原消息的撤回审计。
+原生`size=100`占位值或CDN重压缩可与下载字节数不符，不再以相等校验拦截，
+但仍限制实际下载、格式、像素、原生宽高及有效时间。
+失败或过期旧图片不自动追撤；补修后只处理新消息，不把原图隔离重放当作实群处罚验收。
+
+2026-10-31补充：此前四条`recognizer_failed_or_unknown`经只读复现均为动态GIF，
+不是识别超时。保留现有JPEG／PNG／WEBP静态图格式及像素限制，不自动扩大审核范围。
+不支持的格式／动画分别记`media_image_unsupported_format`和
+`media_image_unsupported_animation`，增加`status.media_inspection.skipped`，不再增加`failed`；
+跳过不是审核通过或已撤回。真正失败的`error`区分图像无效、OCR超时／失败、
+识别器不可用及外层子进程超时，仅输出固定标签，不保留图片、OCR正文或异常原文。
+
 当前公共群先核对「群管理」的运行数量、暂停开关、管理员名单及机器人平台角色。
 `开通`要求真实邀请者是当前平台群主／管理员，来源不明和旧邀请冲突都不授权。
 `open_activation / unconfirmed`不是成功开通，需核对成员和结果，不连续重发。

@@ -71,6 +71,11 @@ async def read_native_audit(db, account, group, rules, peers, own_peer):
                 "prohibited_image",
                 "prohibited_video",
                 "prohibited_forward",
+                "restricted_video",
+                "restricted_forward",
+                "image_qr",
+                "image_digits",
+                "consecutive_digits",
             }
             else "not_recorded",
         )

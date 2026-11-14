@@ -67,20 +67,12 @@ class UI:
         self.runtime = runtime
         self.store = runtime.store
         self.moderation_ui = ModerationUI(self)
+        from .onboarding import Onboarding
+
+        self.onboarding = Onboarding(runtime)
 
     def keyboard(self, uid):
-        labels = [
-            "我的群",
-            "广告投递",
-            "玩法大全",
-            "群聊解禁",
-            "签到积分",
-            "客服",
-            "帮助",
-            "我的",
-        ]
-        if self.store.allowed(uid):
-            labels.append("⚙️ 管理")
+        labels = ["我的群", "帮助", "客服"]
         return ReplyKeyboardMarkup(
             [
                 [
@@ -103,6 +95,18 @@ class UI:
                 and self.store.allowed(uid)
             )
         for _, payload in buttons:
+            if payload.get("action") in {
+                "admin_ads",
+                "admin_points",
+                "admin_game",
+                "modules",
+                "mod_home",
+                "avatar_admin",
+            } or (
+                payload.get("action") == "form"
+                and payload.get("form") in {"grant", "revoke"}
+            ):
+                payload.setdefault("menu_version", 2)
             if payload.get("action") in (
                 "ad_decide",
                 "ad_wallet_pay",
@@ -142,6 +146,10 @@ class UI:
 
     async def home(self, update):
         self.store.clear_dialog(str(update.effective_user.id))
+        if await self.onboarding.private(
+            update, self.keyboard(str(update.effective_user.id))
+        ):
+            return
         user = update.effective_user
         name = (
             getattr(user, "full_name", None)
@@ -196,6 +204,37 @@ class UI:
         await self.render(update, text, buttons, fold_sections=False)
 
     async def action(self, update, payload, token=""):
+        """Revalidate group-bound management before dispatch.
+
+        Args:
+            update: Authenticated Telegram update.
+            payload: Stored callback payload.
+            token: Callback identity.
+        """
+        name, chat = payload["action"], payload.get("chat")
+        prefixes = (
+            "mod_",
+            "wheel_",
+            "k3_",
+            "slots_",
+            "mines_",
+            "games_group_",
+            "hours_",
+            "schedule_",
+            "semantic_",
+            "activity_",
+            "interaction_",
+        )
+        if chat and name.startswith(prefixes):
+            from .group_authority import GroupAuthority
+
+            async with GroupAuthority(self.runtime).session(
+                update.effective_user.id, chat, allow_paused=True
+            ):
+                return await self._action(update, payload, token)
+        return await self._action(update, payload, token)
+
+    async def _action(self, update, payload, token=""):
         """Render queries or execute confirmed deterministic actions.
 
         Args:
@@ -205,14 +244,64 @@ class UI:
         """
         uid = str(update.effective_user.id)
         action = payload["action"]
+        if action.startswith(("activity_", "interaction_")):
+            from .activity_ui import action as activity_action
+
+            return await activity_action(self, update, payload)
+        if action in {"admin", "mod_home"} or (
+            token
+            and payload.get("menu_version") != 2
+            and (
+                action
+                in {
+                    "admin_ads",
+                    "admin_points",
+                    "admin_game",
+                    "modules",
+                    "avatar_admin",
+                }
+            )
+        ):
+            self.store.clear_dialog(uid)
+            from .tenant_ui import action as tenant_action
+
+            return await tenant_action(self, update, {"action": "tenant_home"})
+        if action in {"ads", "ad_new", "ad_browse"}:
+            from .tenant_ui import action as tenant_action
+
+            return await tenant_action(
+                self, update, {"action": "tenant_ad_search"}, token
+            )
+        if action in {
+            "ad_package",
+            "ad_submit",
+            "ad_renew",
+            "deposit",
+            "deposit_create",
+            "deposit_qr",
+            "deposits",
+            "ad_wallet_preview",
+            "ad_wallet_pay",
+        }:
+            raise Rejected(
+                "旧充值及余额支付入口已停用。请发送“广告投递”，选择群后按直付订单付款；历史记录保留。"
+            )
         if action.startswith("support"):
             from .support_menu import action as support_action
 
             return await support_action(self, update, payload)
+        if action.startswith("semantic_"):
+            from .semantic_review_ui import action as semantic_action
+
+            return await semantic_action(self, update, payload, token)
         if action.startswith("tenant_"):
             from .tenant_ui import action as tenant_action
 
             return await tenant_action(self, update, payload, token)
+        if action.startswith("schedule_"):
+            from .game_schedule import action as schedule_action
+
+            return await schedule_action(self, update, payload)
         if action.startswith("ad_") and payload.get("id"):
             existing = self.store.db.execute(
                 "SELECT tenant FROM ads WHERE id=?", (payload["id"],)
@@ -228,14 +317,14 @@ class UI:
                         token,
                     )
                 raise Rejected(
-                    "此订单属于独立群主，请从我的直付广告处理，旧按钮不可使用。"
+                    "此订单属于独立群主，请通过原订单通知打开详情，旧按钮不可使用。"
                 )
         if (
             action.startswith("avatar_")
             and getattr(self.runtime, "tenants", None)
             and not self.runtime.tenants.resource_allowed(uid)
         ):
-            raise Rejected("本经营主体未获付费制图授权，请联系平台。")
+            raise Rejected("本群制图已关闭、暂停或达到总控显式限额，请联系管理员。")
         if action.startswith("hours_"):
             from .game_hours import action as hours_action
 
@@ -453,20 +542,9 @@ class UI:
                 buttons + back,
             )
         if action == "help":
-            from .onboarding import invitation
-
-            invitation_text, invitation_buttons = invitation(self.runtime)
-            buttons = [("我的订单与积分", {"action": "account"})]
-            if modules.get("moderation") and hasattr(self.runtime, "community"):
-                buttons.append(("群规与说明", {"action": "cm_public_groups"}))
-            if modules.get("points"):
-                buttons.append(("领取积分", {"action": "points"}))
             return await self.render(
                 update,
-                (Path(__file__).parent / "docs/player-help.md").read_text()
-                + "\n\n"
-                + invitation_text,
-                buttons + invitation_buttons + back,
+                (Path(__file__).parent / "docs/private-help.md").read_text(),
                 fold_sections=True,
             )
         if action == "grant_accept":
@@ -546,55 +624,13 @@ class UI:
                 back,
             )
         if action == "account":
-            if self.store.get("group_points_enabled", False):
-                rows = self.store.db.execute(
-                    "SELECT COALESCE(g.title,w.chat),w.balance FROM group_wallets w "
-                    "LEFT JOIN mod_groups g ON g.chat=w.chat WHERE w.uid=? ORDER BY w.chat",
-                    (uid,),
-                ).fetchall()
-                text = f"我的\nUID：{uid}\n积分按群独立，不跨群通用：\n" + (
-                    "\n".join(f"{r[0]}：{r[1]}积分" for r in rows) or "暂无群积分。"
-                )
-            else:
-                rows = self.store.db.execute(
-                    "SELECT delta,reason FROM ledger WHERE uid=? ORDER BY at DESC LIMIT 12",
-                    (uid,),
-                ).fetchall()
-                text = (
-                    f"我的\nUID：{uid}\n积分：{self.store.balance(uid)}\n近期积分记录：\n"
-                    + "\n".join(f"{r[0]:+d} {r[1]}" for r in rows)
-                )
-            if getattr(self.runtime, "payments", None):
-                text = (
-                    f"广告余额：{money(self.runtime.payments.balance(uid))} USDT\n仅用于广告消费，不可用于真实投注，不可兑换模拟下注积分。\n"
-                    + text
-                )
             return await self.render(
                 update,
-                text,
+                "个人中心已移至群内；请在目标群发送 /my 或“我的”。\n积分和个人记录按群独立。个人资金钱包、充值与余额支付已停用。",
                 [
-                    ("充值 USDT", {"action": "deposit"}),
-                    ("充值记录", {"action": "deposits"}),
-                    ("我的广告订单", {"action": "ad_orders"}),
-                    ("我的下注", {"action": "bets"}),
-                    ("分群积分记录", {"action": "points"}),
-                    ("我的追号", {"action": "chases"}),
-                ]
-                + (
-                    [("专属头像", {"action": "avatar_home"})]
-                    if getattr(self.runtime, "avatar", None)
-                    and self.runtime.avatar.enabled()
-                    else []
-                )
-                + (
-                    [
-                        ("我的举报", {"action": "cm_mine"}),
-                        ("我的警告", {"action": "cm_my_warnings"}),
-                    ]
-                    if hasattr(self.runtime, "community")
-                    else []
-                )
-                + back,
+                    ("我的群", {"action": "tenant_home"}),
+                    ("帮助", {"action": "help"}),
+                ],
             )
         if action == "ads":
             return await self.render(
@@ -602,7 +638,6 @@ class UI:
                 "发布广告：选择广告位、提交内容，付款和审核通过后安排发布。",
                 [
                     ("群主广告位（直付）", {"action": "tenant_catalog"}),
-                    ("我的直付广告", {"action": "tenant_my_ads"}),
                     ("发布广告", {"action": "ad_new"}),
                     ("我的广告", {"action": "ad_orders"}),
                 ]
@@ -711,15 +746,6 @@ class UI:
                 buttons.append(
                     ("取消订单／退款", {"action": "ad_cancel_preview", "id": row["id"]})
                 )
-            if (
-                row["status"] == "pending"
-                and not row["paid"]
-                and p["currency"].upper() == "USDT"
-            ):
-                buttons.insert(
-                    0,
-                    ("广告余额付款", {"action": "ad_wallet_preview", "id": row["id"]}),
-                )
             return await self.render(
                 update,
                 f"投放群／频道：{group_name}\n状态：{AD_STATES.get(row['status'], '处理中')}\n审核：{'已通过' if row['approved'] else '待审核'}，核款：{'已付款' if row['paid'] else '未付款'}\n{row['body']}\n价格：{p['price']} {p['currency']}\n退款：{PAYMENT_STATES.get(row['refund_state'], '无' if not row['refund_state'] else '待核查')}\n付款来源：{PAYMENT_STATES.get(row['payment_source'], '未付款')}\n到期（北京时间）：{datetime.fromtimestamp(row['expires'], ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M') if row['expires'] else '尚未开始'}\n处理说明：{row['error'] or '无'}",
@@ -825,8 +851,7 @@ class UI:
                 fold_sections=True,
             )
         if action == "rules":
-            text = (Path(__file__).parent / "docs" / "player-help.md").read_text()
-            return await self.render(update, text, back, fold_sections=True)
+            return await self.action(update, {"action": "help"})
         if action == "bets":
             rows = self.store.db.execute(
                 "SELECT issue,play,amount,status,payout,points_chat FROM bets WHERE uid=? ORDER BY at DESC LIMIT 20 OFFSET ?",
@@ -903,17 +928,44 @@ class UI:
         await self.admin(update, payload, token)
 
     async def admin(self, update, payload, token):
+        """Reauthorize direct administrative entry points, not only UI callbacks."""
+        chat = payload.get("chat")
+        action = payload["action"]
+        key = payload.get("id") or payload.get("data", {}).get("id")
+        if action.startswith("ad_") and key:
+            order = self.store.db.execute(
+                "SELECT package FROM ads WHERE id=?", (key,)
+            ).fetchone()
+            if order:
+                target = str(json.loads(order["package"])["target"])
+                if self.store.db.execute(
+                    "SELECT 1 FROM tenant_groups WHERE chat=?", (target,)
+                ).fetchone():
+                    if chat and str(chat) != target:
+                        raise Rejected("订单不属于当前群。")
+                    chat = target
+                    payload = {**payload, "chat": target}
+        if chat:
+            from .group_authority import GroupAuthority
+
+            async with GroupAuthority(self.runtime).session(
+                update.effective_user.id, chat, allow_paused=True
+            ):
+                return await self._admin(update, payload, token)
+        return await self._admin(update, payload, token)
+
+    async def _admin(self, update, payload, token):
         uid = str(update.effective_user.id)
         action = payload["action"]
+        if action == "admin":
+            return await self.action(update, payload, token)
         key = payload.get("id") or payload.get("data", {}).get("id")
         if key and action.startswith("ad_"):
             order = self.store.db.execute(
                 "SELECT tenant FROM ads WHERE id=?", (key,)
             ).fetchone()
             if order and order["tenant"] != "platform":
-                raise Rejected("独立经营者的订单请从我的群或我的直付广告处理")
-        self.store.require(uid, chat=payload.get("chat"))
-        self.store.clear_dialog(uid)
+                raise Rejected("独立经营者的订单请从我的群或原订单通知处理")
         if action.startswith("games_group_"):
             from .game_groups_admin import action as group_games_action
 
@@ -934,6 +986,10 @@ class UI:
             from .wheel_admin import action as wheel_action
 
             return await wheel_action(self, update, payload)
+        if action.startswith("mod_"):
+            return await self.moderation_ui.action(update, payload, token)
+        self.store.require(uid, chat=payload.get("chat"))
+        self.store.clear_dialog(uid)
         if action in {"channels", "channel_add", "channel_preview", "channel_save"}:
             from .channels import action as channel_action
 
@@ -942,9 +998,7 @@ class UI:
             return await run_wizard(
                 self, update, payload["form"], payload["values"], payload.get("page", 0)
             )
-        if action.startswith("mod_"):
-            return await self.moderation_ui.action(update, payload, token)
-        back = [("返回管理", {"action": "admin"})]
+        back = [("返回本BOT总控", {"action": "bot_control"})]
         if action in {"room_manage", "room_edit", "room_preview", "room_save"}:
             self.store.require(uid, "game")
             self.store.clear_dialog(uid)
@@ -1022,33 +1076,54 @@ class UI:
                 ]
                 + back,
             )
-        if action == "admin":
+        if action == "bot_control":
+            self.store.require(uid)
             choices = []
-            for scope, label in [
-                ("ads", "广告管理"),
-                ("points", "积分管理"),
-                ("game", "玩法管理"),
-            ]:
-                if self.store.allowed(uid, scope):
-                    choices.append((label, {"action": "admin_" + scope}))
             if self.store.allowed(uid, "manager"):
-                choices.append(("全部功能启停", {"action": "modules"}))
+                choices.append(("🔌 功能总开关", {"action": "modules"}))
                 if getattr(self.runtime, "avatar", None):
-                    choices.append(("专属头像管理", {"action": "avatar_admin"}))
-            if uid == self.store.owner:
+                    choices.append(("🎨 付费制图管理", {"action": "avatar_admin"}))
+            if self.store.allowed(uid, "game") or self.store.allowed(uid, "points"):
+                choices.append(("⚙️ 全局业务策略", {"action": "bot_policies"}))
+            if self.store.allowed(uid, "ads"):
+                choices.append(("📋 历史广告维护", {"action": "admin_ads"}))
+            if self.store.is_superadmin(uid):
                 choices += [
+                    ("🏪 接入与收款规则", {"action": "tenant_platform"}),
+                    ("🔐 授权管理", {"action": "bot_access"}),
+                    ("语义复核", {"action": "semantic_global"}),
+                ]
+            return await self.render(
+                update,
+                "🛡 **本BOT总控**\n仅处理全局策略与授权；修改可能影响多个群。\n"
+                "单群功能、奖励和订单，请从底部「我的群」进入。",
+                choices + [("返回首页", {"action": "home"})],
+            )
+        if action == "bot_policies":
+            self.store.require(uid)
+            choices = [
+                (label, {"action": target})
+                for scope, label, target in (
+                    ("points", "积分默认策略", "admin_points"),
+                    ("game", "玩法策略与异常", "admin_game"),
+                )
+                if self.store.allowed(uid, scope)
+            ]
+            return await self.render(
+                update,
+                "⚙️ **全局业务策略**\n本群设置请从「我的群」进入；这里保留全局默认值和维护工具。",
+                choices + back,
+            )
+        if action == "bot_access":
+            self.store.require(uid, owner=True)
+            return await self.render(
+                update,
+                "🔐 **授权管理**\n超管权限相同，可授权其他超管或业务管理员，也可撤权；不改变群归属。\n超管包含全局配置、跨群复核与授权权限，请只授权可信账号。",
+                [
                     ("生成授权链接", {"action": "form", "form": "grant"}),
                     ("撤销权限与链接", {"action": "form", "form": "revoke"}),
                 ]
-            if self.store.allowed(uid, "moderation"):
-                choices.append(("群管理", {"action": "mod_home"}))
-            return await self.render(
-                update,
-                "⚙️ 管理中心\n仅显示已授权功能；选择下方业务。\n\n"
-                "📋 管理范围\n广告：广告位、审核、核款。\n积分：奖励与调整。\n"
-                "玩法：加拿大28、对赌、转盘、老虎机及扫雷接龙。\n全部功能启停：各功能总开关。\n"
-                "授权与撤权仅首位超管可操作。",
-                choices + [("返回首页", {"action": "home"})],
+                + back,
             )
         if action == "modules":
             self.store.require(uid, "manager")
@@ -1093,7 +1168,7 @@ class UI:
                 "专属头像：新头像制作；额度、任务和投递在专属头像管理查看。\n"
                 "\n📌 启停边界\n关闭功能停止新业务；已受理下注与已锁定对赌继续结算，广告到期清理继续。\n"
                 "对赌同时受玩法中心总开关控制；逐群设置请进入「玩法管理」。\n"
-                "关闭玩法中心会暂停未来追号；关闭群管理会关闭定时禁言及广告杀手策略，重新开启总开关不会自动恢复这些策略。\n"
+                "关闭玩法中心会暂停未来追号；关闭群管理会关闭定时禁言及广告执行策略，重新开启总开关不会自动恢复这些策略。\n"
                 "广告充值由独立后台配置，不在此直接变更。",
                 [
                     (
@@ -1282,6 +1357,9 @@ class UI:
                 "FROM platform_mod_groups g LEFT JOIN duel_groups d ON d.chat=g.chat "
                 "WHERE g.enabled=1 ORDER BY g.title,g.chat"
             ).fetchall()
+            from .group_visibility import visible_groups
+
+            duel_groups = await visible_groups(self.runtime, uid, duel_groups)
             page = max(
                 0, min(int(payload.get("page", 0)), max(0, (len(duel_groups) - 1) // 8))
             )
@@ -1385,7 +1463,7 @@ class UI:
                 )
             return await self.admin(update, {"action": "admin_game"}, token)
         if action == "ad_queue":
-            self.store.require(uid, "ads")
+            self.store.require(uid, "ads", chat=payload.get("chat"))
             paid = int(bool(payload.get("paid", True)))
             category = payload.get("category", "paid" if paid else "unpaid")
             conditions = {
@@ -1404,8 +1482,9 @@ class UI:
             rows = self.store.db.execute(
                 "SELECT a.id,a.status,a.uid,a.paid,u.username FROM platform_ads a LEFT JOIN user_labels u ON u.uid=a.uid WHERE ("
                 + conditions[category]
-                + ") ORDER BY a.at DESC LIMIT 20 OFFSET ?",
-                (page * 20,),
+                + ") AND (? IS NULL AND NOT EXISTS (SELECT 1 FROM tenant_groups g WHERE g.chat=json_extract(a.package,'$.target')) "
+                "OR json_extract(a.package,'$.target')=?) ORDER BY a.at DESC LIMIT 20 OFFSET ?",
+                (payload.get("chat"), payload.get("chat"), page * 20),
             ).fetchall()
             return await self.render(
                 update,
@@ -1441,7 +1520,7 @@ class UI:
                 fold_sections=True,
             )
         if action == "ad_review":
-            self.store.require(uid, "ads")
+            self.store.require(uid, "ads", chat=payload.get("chat"))
             row = self.store.db.execute(
                 "SELECT * FROM ads WHERE id=?", (payload["id"],)
             ).fetchone()
@@ -1520,7 +1599,7 @@ class UI:
                 fold_sections=True,
             )
         if action == "proof_view":
-            self.store.require(uid, "ads")
+            self.store.require(uid, "ads", chat=payload.get("chat"))
             row = self.store.db.execute(
                 "SELECT proof FROM ads WHERE id=?", (payload["id"],)
             ).fetchone()
@@ -1532,15 +1611,15 @@ class UI:
                 caption="用户提交的凭证，不能代替实际到账核验",
             )
         if action in {"ad_paid_preview", "ad_test_paid_preview"}:
-            self.store.require(uid, "ads")
+            self.store.require(uid, "ads", chat=payload.get("chat"))
             row = self.store.db.execute(
                 "SELECT * FROM ads WHERE id=?", (payload["id"],)
             ).fetchone()
             if not row or row["status"] != "pending":
                 raise Rejected("订单不在待处理状态")
             test = action == "ad_test_paid_preview"
-            if test and str(uid) != self.store.owner:
-                raise Rejected("测试免付款仅首位超管可用")
+            if test and not self.store.is_superadmin(uid):
+                raise Rejected("测试免付款仅超管可用")
             package = json.loads(row["package"])
             label = "测试免付款发布" if test else "确认实际收款"
             return await self.render(
@@ -1567,14 +1646,14 @@ class UI:
                 fold_sections=True,
             )
         if action == "ad_paid":
-            self.store.require(uid, "ads")
+            self.store.require(uid, "ads", chat=payload.get("chat"))
             row = self.store.db.execute(
                 "SELECT version FROM ads WHERE id=?", (payload["id"],)
             ).fetchone()
             if not row or row["version"] != payload["version"]:
                 raise Rejected("订单已变化，请重新打开")
-            if payload.get("test") and str(uid) != self.store.owner:
-                raise Rejected("测试免付款仅首位超管可用")
+            if payload.get("test") and not self.store.is_superadmin(uid):
+                raise Rejected("测试免付款仅超管可用")
             if payload.get("test"):
                 self.runtime.ads.moderate(
                     uid, payload["id"], "paid", f"测试免付款；管理员 {uid} 确认"
@@ -1595,7 +1674,7 @@ class UI:
                 [("查看订单", {"action": "ad_review", "id": payload["id"]})],
             )
         if action == "ad_decide_preview":
-            self.store.require(uid, "ads")
+            self.store.require(uid, "ads", chat=payload.get("chat"))
             row = self.store.db.execute(
                 "SELECT body,paid FROM ads WHERE id=? AND status='pending'",
                 (payload["id"],),
@@ -1755,20 +1834,93 @@ class UI:
         raise Rejected("操作不存在，请返回首页")
 
     async def input(self, update, dialog):
-        if dialog.get("form") == "tenant_input":
+        if dialog.get("form") in {
+            "activity_input",
+            "activity_review",
+            "activity_fulfil",
+            "activity_cancel",
+            "activity_stats",
+            "activity_grant",
+        }:
+            from .activity_ui import input_text
+            from .group_authority import GroupAuthority
+
+            async with GroupAuthority(self.runtime).session(
+                update.effective_user.id, dialog["chat"], allow_paused=True
+            ):
+                return await input_text(self, update, dialog)
+        if dialog.get("form") == "wheel_field":
+            from .tenants import group_admin
+
+            async with group_admin(
+                self.runtime,
+                str(update.effective_user.id),
+                str(dialog["payload"]["chat"]),
+            ):
+                return await self._input(update, dialog)
+        return await self._input(update, dialog)
+
+    async def _input(self, update, dialog):
+        if dialog.get("form", "").startswith("semantic_"):
+            from .semantic_review_ui import input_text
+
+            return await input_text(self, update, dialog)
+        if dialog.get("form") == "tenant_gift":
+            from .tenant_ui import gift_input
+
+            return await gift_input(self, update, dialog)
+        if dialog.get("form") == "game_schedule":
+            from .game_schedule import input_text
+
+            return await input_text(self, update, dialog)
+        if dialog.get("form") in {"tenant_input", "tenant_input_steps"}:
             from .tenant_ui import input_text
 
             return await input_text(self, update, dialog)
         if dialog.get("form") == "wheel_field":
             from .wheel_admin import action as wheel_action
 
+            value = (update.message.text or "").strip()
+            if dialog["payload"]["field"] == "stakes":
+                uid = str(update.effective_user.id)
+                self.store.require(uid, "game", chat=dialog["payload"]["chat"])
+                values = list(dialog.get("values", []))
+                if value == "上一步":
+                    values = values[:-1]
+                elif value != "完成":
+                    if not value.isascii() or not value.isdigit():
+                        raise Rejected("每次只发送一个整数档位；填完发送“完成”。")
+                    amount = int(value)
+                    if not 5 <= amount <= 1000 or amount % 5:
+                        raise Rejected("每档需为5—1000且是5的倍数。")
+                    if amount in values or len(values) >= 4:
+                        raise Rejected("档位不能重复，最多4档；发送“完成”或“上一步”。")
+                    values.append(amount)
+                if value != "完成":
+                    self.store.dialog(uid, {**dialog, "values": values})
+                    return await self.render(
+                        update,
+                        f"已选档位：{' / '.join(map(str, values)) or '暂无'}\n继续发送一个档位；“完成”预览，“上一步”撤销，/cancel 取消。",
+                        [
+                            (
+                                "取消",
+                                {
+                                    "action": "wheel_group",
+                                    "chat": dialog["payload"]["chat"],
+                                },
+                            )
+                        ],
+                    )
+                if not values:
+                    raise Rejected("请至少填写一个档位。")
+                value = values
             return await wheel_action(
                 self,
                 update,
                 {
                     **dialog["payload"],
                     "action": "wheel_preview",
-                    "value": (update.message.text or "").strip(),
+                    "value": value,
                 },
             )
         if dialog.get("form") == "ap_field":
@@ -1877,18 +2029,8 @@ class UI:
                 ],
             )
         if dialog.get("form") == "deposit":
-            text = (update.message.text or "").strip()
-            if not text.isascii() or not text.isdigit() or not 1 <= int(text) <= 10000:
-                raise Rejected("请输入1—10000的整数金额")
             self.store.clear_dialog(str(update.effective_user.id))
-            return await self.render(
-                update,
-                f"创建约 {text} USDT 的充值单？实际金额会附带小数尾数，全部到账金额均计入广告余额。",
-                [
-                    ("生成充值单", {"action": "deposit_create", "amount": int(text)}),
-                    ("取消", {"action": "account"}),
-                ],
-            )
+            raise Rejected("广告余额充值已停用，请发送“广告投递”选择直付目标群。")
         uid = str(update.effective_user.id)
         text = (update.message.text or update.message.caption or "").strip()
         form = dialog["form"]
@@ -1961,7 +2103,7 @@ FORMS = {
     "points": "请发送：开或关 签到积分 每次聊天积分 间隔秒数（至少15秒） 每日聊天上限 群ID列表（逗号分隔，无则-）\n例：开 10 1 15 20 -100123,-100456",
     "adjust": "请发送：群ID 目标UID 增减积分 原因\n例：-100123 123456 10 活动奖励；扣分使用负数。只调整指定群积分。",
     "room": "请发送：房间编号 开或关 最小下注 单笔上限 单期上限\n房间：room18 special double room27 room28 room32\n例：room18 开 1 200000 200000",
-    "grant": "请发送：目标账号 全功能 有效天数\n账号支持数字UID、@用户名、t.me/用户名；用户名需对方先私聊发送 /start。\n全功能包含全部业务管理，但不能授权或撤权；例：@example 全功能 30",
+    "grant": "请发送：目标账号 超管或全功能 有效天数（1—365）\n账号支持数字UID、@用户名、t.me/用户名；用户名需对方先私聊发送 /start。\n超管与首位超管具有相同业务权限，包括授权、撤权及跨群复核；全功能仅包含业务管理，不能授权或撤权。\n例：@example 超管 365",
     "revoke": "请发送要收回权限的目标数字 UID，同时撤销该用户未领取链接。",
     "package": "请按顺序发送10行：\n广告位编号（字母数字）\n显示名称\n普通或置顶\n价格\n币种代码\n目标群/频道数字ID\n30天或月\n置顶名额数\n收款说明\n开或关\n例：普通广告位也需填写期限与名额，但不执行置顶。",
     "paid": "请填写实际到账核验说明（金额、到账时间、交易流水号）。",
@@ -2006,10 +2148,16 @@ def parse_form(form, text, dialog):
             "total": int(parts[4]),
         }
     if form == "grant" and len(parts) == 3:
-        scopes = {"广告": "ads", "积分": "points", "游戏": "game", "全功能": "manager"}
+        scopes = {
+            "广告": "ads",
+            "积分": "points",
+            "游戏": "game",
+            "全功能": "manager",
+            "超管": "superadmin",
+        }
         words = parts[1].replace("，", ",").split(",")
         if any(w not in scopes for w in words):
-            raise Rejected("权限请填写全功能；兼容广告、积分、游戏的旧授权格式")
+            raise Rejected("权限请填写超管或全功能；兼容广告、积分、游戏的旧授权格式")
         return {
             "target": parts[0],
             "scopes": [scopes[w] for w in words],

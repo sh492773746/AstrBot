@@ -39,7 +39,8 @@ async def test_chat_gate_role_change_and_fresh_conversation(tmp_path):
     assert request.contexts == [] and request.conversation == "new-history"
     assert "普通用户口径" in request.system_prompt and request.func_tool is None
     assert "1—3个短句" in request.system_prompt
-    assert "广告投递：未开启" in request.system_prompt
+    assert "广告投递：先选择目标群" in request.system_prompt
+    assert "充值及余额支付已停用" in request.system_prompt
     with store.tx() as db:
         store.put(db, "modules", {"points": True})
         store.put(
@@ -92,3 +93,40 @@ async def test_chat_gate_role_change_and_fresh_conversation(tmp_path):
     await plugin.chat_guard(event, request)
     assert "普通用户口径" in request.system_prompt
     store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("usdt_enabled", [False, True])
+@pytest.mark.parametrize("ads_enabled", [False, True])
+async def test_chat_snapshot_never_reopens_retired_wallet(
+    tmp_path, usdt_enabled, ads_enabled
+):
+    with_store = Store(tmp_path / "wallet-snapshot.db", "1")
+    try:
+        plugin = Main(
+            SimpleNamespace(),
+            {"platform_id": "dedicated", "usdt_enabled": usdt_enabled},
+        )
+        plugin.store = with_store
+        with with_store.tx() as db:
+            with_store.put(db, "modules", {"ads": ads_enabled})
+        plugin.chat_sessions[("2", "2")] = (time.monotonic() + 100, (), False)
+        event = SimpleNamespace(
+            get_platform_id=lambda: "dedicated",
+            get_sender_id=lambda: "2",
+            get_group_id=lambda: "",
+            is_private_chat=lambda: True,
+            stop_event=MagicMock(),
+        )
+        request = SimpleNamespace(system_prompt="", func_tool=object())
+        await plugin.chat_guard(event, request)
+        event.stop_event.assert_not_called()
+        assert request.func_tool is None
+        assert "广告投递：先选择目标群" in request.system_prompt
+        assert "该群当前投递入口核验" in request.system_prompt
+        assert "充值及余额支付已停用" in request.system_prompt
+        assert "直付订单" in request.system_prompt
+        assert "广告充值：已配置开启" not in request.system_prompt
+        assert "创建充值单以「我的」菜单" not in request.system_prompt
+    finally:
+        with_store.close()

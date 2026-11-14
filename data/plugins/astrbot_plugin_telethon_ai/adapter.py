@@ -1,13 +1,17 @@
 """Telethon transport feeding AstrBot's standard event/config/persona pipeline."""
 
 import asyncio
-import fcntl
 import re
 import time
 from contextlib import ExitStack
 from pathlib import Path
 
 from filelock import FileLock
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import At, Plain
@@ -236,6 +240,8 @@ class TelethonAdapter(Platform):
         with ExitStack() as locks:
             # Shared flock allows both gateway accounts, excluding the collector's exclusive lock.
             if data is not None:
+                if fcntl is None:
+                    raise RuntimeError("Shared collector locking requires a POSIX host")
                 guard = locks.enter_context((data / "collector.lock").open("a"))
                 fcntl.flock(guard.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
             locks.enter_context(

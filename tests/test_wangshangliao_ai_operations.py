@@ -77,21 +77,13 @@ async def test_legacy_proposals_and_confirmations_always_reject(action, scope):
     assert set(vars(service)) == {"drafts"}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "action", FORMER_ACTIONS + ["config_preview", "config_confirm"]
-)
-@pytest.mark.parametrize("admin", [False, True])
-async def test_retired_chat_entry_never_dispatches_fixed_management(action, admin):
-    plugin = object.__new__(Main)
-    plugin.commands = SimpleNamespace(execute=AsyncMock())
-    event = SimpleNamespace(
-        get_platform_name=lambda: "wangshangliao",
-        is_private_chat=lambda: True,
-        is_admin=lambda: admin,
+def test_private_management_method_and_tool_registration_do_not_exist():
+    assert not hasattr(Main, "private_management")
+    root = Path(__file__).resolve().parents[1]
+    tree = ast.parse(
+        (root / "astrbot/builtin_stars/wangshangliao_moderation/main.py").read_text()
     )
-    assert json.loads(await plugin.private_management(event, action, "{}")) == {
-        "status": "rejected",
-        "reason": "ai_management_retired",
-    }
-    plugin.commands.execute.assert_not_awaited()
+    assert not any(
+        isinstance(node, ast.Constant) and node.value == "wsl_private_management"
+        for node in ast.walk(tree)
+    )

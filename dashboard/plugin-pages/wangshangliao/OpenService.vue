@@ -1,23 +1,23 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, toRaw, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from "vue";
 import { ArrowUpCircle, KeyRound, RefreshCw, Save, ShieldCheck } from "@lucide/vue";
 import { getPlatformInstanceName } from "../../src/utils/platformInstanceName.mjs";
 import AIProfileEditor from "./AIProfileEditor.vue";
 import AIPlansPanel from "./AIPlansPanel.vue";
-import FinanceGrantsPanel from "./FinanceGrantsPanel.vue";
 import GroupRulesEditor from "./GroupRulesEditor.vue";
 import MemberBlacklistPanel from "./MemberBlacklistPanel.vue";
 import MemberWhitelistPanel from "./MemberWhitelistPanel.vue";
 import RuleAutomationPanel from "./RuleAutomationPanel.vue";
-import SupportSettingsPanel from "./SupportSettingsPanel.vue";
+import RaidDefensePanel from "./RaidDefensePanel.vue";
+import WelcomePanel from "./WelcomePanel.vue";
 import ComponentRuntimePanel from "./ComponentRuntimePanel.vue";
 import type { MemberBlacklistApi } from "./memberBlacklistControl";
 
 const props = defineProps<{ bridge: { apiGet: Function; apiPost: Function }; view?: string }>();
 const viewNames: Record<string, string> = {
-  groups: "开通", rules: "规则", consultation: "客服AI咨询", "admin-guidance": "管理员指引AI",
+  groups: "开通", rules: "规则",
   "group-ai": "群聊与热群AI",
-  plans: "套餐与额度", model: "模型与预算", finance: "结算授权",
+  plans: "套餐与额度", model: "模型与预算",
   runtime: "服务总控", audit: "群管审计",
 };
 const localView = ref("groups");
@@ -25,6 +25,10 @@ const view = computed(() => props.view && props.view in viewNames ? props.view :
 const visited = ref(new Set<string>());
 watch(view, value => visited.value.add(value), { immediate: true });
 const state = ref<any>(null);
+const selectableGroups = computed(() => {
+  const accounts = new Set((state.value?.accounts || []).map((a: any) => a.account));
+  return (state.value?.groups || []).filter((g: any) => accounts.has(g.account));
+});
 const busy = ref(false);
 const error = ref("");
 const notice = ref("");
@@ -53,9 +57,6 @@ const profileDefaults = {
   config_id: "", persona_id: "", provider_id: "", temperature: null,
   top_p: null, max_tokens: null, history_turns: null,
 };
-const privateProfile = ref<Record<string, any>>({ ...profileDefaults });
-const supportAccount = ref("");
-const adminProfile = ref<Record<string, any>>({ ...profileDefaults });
 const defaultGroupProfile = ref<Record<string, any>>({ ...profileDefaults });
 const tenantProfile = ref<Record<string, any>>({ ...profileDefaults });
 const useDefaultGroupProfile = ref(true);
@@ -66,18 +67,17 @@ function savedProfile(kind: string, account = "", group = "") {
     r.kind === kind && r.account === account && r.group_id === group);
 }
 async function saveProfile(kind: string, forGroup = false) {
-  const account = forGroup ? tenant.value.account : kind === "consultation" ? supportAccount.value : "";
+  if (kind !== "group" || (forGroup && !tenant.value)) return;
+  const account = forGroup ? tenant.value.account : "";
   const group = forGroup ? tenant.value.group_id : "";
   const selection = forGroup ? (useDefaultGroupProfile.value ? null : tenantProfile.value)
-    : kind === "consultation" ? privateProfile.value
-      : kind === "admin_guidance" ? adminProfile.value : defaultGroupProfile.value;
+    : defaultGroupProfile.value;
   await api("ai_profile", {
     kind, account, group_id: group, version: savedProfile(kind, account, group)?.version || 0,
     selection, ...(forGroup ? { tenant_version: tenant.value.version } : {}),
   });
   await reload();
-  notice.value = kind === "admin_guidance"
-    ? "管理员指引配置已保存，权限分流已启用" : "AI对话配置已保存";
+  notice.value = "群聊AI配置已保存";
 }
 const budgetEvidence = ref("");
 const budgetConfirmed = ref(false);
@@ -99,9 +99,16 @@ const resumeGroupAI = ref(false);
 const endpoint = "open-service";
 
 async function api(action: string, payload: any = {}) {
-  return await props.bridge.apiPost(endpoint, {
-    action, payload: JSON.parse(JSON.stringify(payload)),
-  });
+  try {
+    return await props.bridge.apiPost(endpoint, {
+      action, payload: JSON.parse(JSON.stringify(payload)),
+    });
+  } catch (error: any) {
+    if (error?.message === "Request failed with status code 502") {
+      throw new Error("管理接口暂时不可用（502）。请稍后点击刷新；若刚执行保存、拉黑或禁言，请先核对结果，勿重复提交。");
+    }
+    throw error;
+  }
 }
 const blacklistApi: MemberBlacklistApi = api;
 async function run(task: () => Promise<void>) {
@@ -122,31 +129,19 @@ async function reload() {
   state.value = current;
   adminText.value = (state.value.admins || []).join("\n");
   model.value = { provider_id: state.value.model?.provider_id || "" };
-  if (!(state.value.accounts || []).some((a: any) => a.account === supportAccount.value)) {
-    supportAccount.value = state.value.accounts?.[0]?.account || "";
-  }
-  privateProfile.value = { ...(savedProfile("consultation", supportAccount.value)?.selection || profileDefaults) };
-  adminProfile.value = { ...(savedProfile("admin_guidance")?.selection || profileDefaults) };
   defaultGroupProfile.value = { ...(savedProfile("group")?.selection || profileDefaults) };
   budgetProvider.value = state.value.ai_budget?.provider || model.value.provider_id;
   budgetConfirmed.value = Boolean(state.value.ai_budget?.confirmed);
   budgetEvidence.value = "";
   await choose();
 }
-watch(supportAccount, () => {
-  privateProfile.value = { ...(savedProfile("consultation", supportAccount.value)?.selection || profileDefaults) };
-});
-async function provisionProfile(account: string) {
-  await api("provision_profiles", { account });
-  await reload();
-  notice.value = "独立配置与人格已核验";
-}
 async function choose() {
   const sequence = ++selectionSequence;
   code.value = "";
   pendingTenant.value = null;
   pendingAdmission.value = null;
-  const row = state.value?.groups.find((g: any) => `${g.account}/${g.group_id}` === selected.value);
+  const row = selectableGroups.value.find((g: any) => `${g.account}/${g.group_id}` === selected.value);
+  if (!row) selected.value = "";
   tenant.value = row ? structuredClone(toRaw(row)) : null;
   keywordText.value = row?.rules.keywords.join("\n") || "";
   selectedManagers.value = [...(row?.managers || [])];
@@ -164,7 +159,7 @@ async function choose() {
       && ["pending", "legacy", "verified"].includes(row.admission || "legacy")
       && (row.cleanup_epoch || 0) <= (row.cleanup_done || 0)) {
     const response = await api("tenant_members", {account: row.account, group_id: row.group_id});
-    if (sequence !== selectionSequence) return;
+    if (sequence !== selectionSequence || selected.value !== `${row.account}/${row.group_id}`) return;
     members.value = response.members;
     tenant.value.native_capability = response.native_capability || tenant.value.native_capability;
     membersReady.value = true;
@@ -185,6 +180,7 @@ async function saveGroupAI() {
 async function saveTenant() {
   if (!tenant.value) return;
   const row = tenant.value;
+  const sequence = selectionSequence;
   const rules = { ...row.rules, keywords: keywordText.value.split("\n").map(w => w.trim()).filter(Boolean) };
   const saved = state.value.groups.find((g: any) => g.account === row.account && g.group_id === row.group_id);
   if (!rules.custom_rules?.length && !("custom_rules" in saved.rules)) delete rules.custom_rules;
@@ -194,8 +190,10 @@ async function saveTenant() {
     managers: view.value === "groups" ? [...selectedManagers.value] : [...saved.managers],
     rules: view.value === "rules" ? rules : structuredClone(toRaw(saved.rules)),
   };
-  if (JSON.stringify(saved.managers) !== JSON.stringify(payload.managers)) {
+  if (JSON.stringify(saved.managers) !== JSON.stringify(payload.managers)
+      || Boolean(saved.rules.raid_defense_enabled) !== Boolean(payload.rules.raid_defense_enabled)) {
     const preview = await api("tenant_preview", payload);
+    if (sequence !== selectionSequence || selected.value !== `${row.account}/${row.group_id}`) return;
     pendingTenant.value = { payload, confirmation: preview.confirmation, previous: saved.managers };
     return;
   }
@@ -206,11 +204,13 @@ async function saveTenant() {
 async function previewRulesProvision() {
   const row = tenant.value;
   if (!row || selectedManagers.value.length !== 1) return;
+  const sequence = selectionSequence;
   const payload = {
     account: row.account, group_id: row.group_id, version: row.version,
     manager: selectedManagers.value[0],
   };
   const preview = await api("rules_provision_preview", payload);
+  if (sequence !== selectionSequence || selected.value !== `${row.account}/${row.group_id}`) return;
   pendingTenant.value = {
     payload, confirmation: preview.confirmation, previous: [],
     action: "rules_provision",
@@ -219,8 +219,10 @@ async function previewRulesProvision() {
 async function previewAIAdmission() {
   const row = tenant.value;
   if (!row?.active || !row.rules_only) return;
+  const sequence = selectionSequence;
   const payload = { account: row.account, group_id: row.group_id, version: row.version };
   const preview = await api("ai_admission_preview", payload);
+  if (sequence !== selectionSequence || selected.value !== `${row.account}/${row.group_id}`) return;
   pendingAdmission.value = { ...payload, confirmation: preview.confirmation };
 }
 async function confirmAIAdmission() {
@@ -260,6 +262,7 @@ function membershipStatus(row: any): string {
   return row.active ? (row.paused ? "本群已暂停" : row.rules_only ? "已开通 · 仅规则" : "已开通") : "待开通";
 }
 onMounted(() => run(reload));
+onBeforeUnmount(() => { selectionSequence++; });
 </script>
 
 <template>
@@ -296,7 +299,7 @@ onMounted(() => run(reload));
       <div class="fields">
         <label>试用每日共享次数<input :value="20" type="number" readonly /></label>
         <label>全站每日调用安全上限<input v-model.number="state.settings.global_limit" type="number" min="1" max="100000" /></label>
-        <label class="check"><input v-model="state.settings.paused" type="checkbox" :true-value="1" :false-value="0" />暂停开放服务（含私聊AI和命令）</label>
+        <label class="check"><input v-model="state.settings.paused" type="checkbox" :true-value="1" :false-value="0" />暂停群聊开放服务</label>
         <label>AI免每日次数账号（仍受费用预算保护）<textarea v-model="adminText" rows="2" /></label>
       </div>
       <button type="button" :disabled="busy" @click="run(saveLimits)"><Save :size="16" />保存额度与状态</button>
@@ -305,7 +308,7 @@ onMounted(() => run(reload));
       <div v-show="['groups', 'rules', 'group-ai', 'plans'].includes(view)" class="tenant-scope">
       <label>群聊<select v-model="selected" aria-label="群聊" :disabled="busy" @change="run(choose)">
         <option value="">选择群聊</option>
-        <option v-for="g in state.groups" :key="`${g.account}/${g.group_id}`" :value="`${g.account}/${g.group_id}`">
+        <option v-for="g in selectableGroups" :key="`${g.account}/${g.group_id}`" :value="`${g.account}/${g.group_id}`">
           {{ g.name }} · {{ state.accounts.find((a: any) => a.account === g.account)?.nickname || g.account }} · {{ membershipStatus(g) }}
         </option>
       </select></label>
@@ -324,7 +327,7 @@ onMounted(() => run(reload));
         <div v-if="pendingAdmission" role="alertdialog" aria-label="确认正式AI准入" class="confirmation">
           <strong>升级正式AI准入 · {{ tenant.name }}</strong>
           <p>机器人 {{ pendingAdmission.account }} · 群 {{ pendingAdmission.group_id }}</p>
-          <p>保留本群审核规则与管理员；AI仍关闭，不授予套餐、客服编辑或财务权限。</p>
+          <p>保留本群审核规则与管理员；AI仍关闭，不授予套餐或财务权限。</p>
           <p>AI发话仍须承担人本人确认、有效额度及预算核验。</p>
           <div class="actions">
             <button type="button" :disabled="busy" @click="run(confirmAIAdmission)">
@@ -360,7 +363,7 @@ onMounted(() => run(reload));
           :disabled="busy || Boolean(pendingTenant) || selectedManagers.length !== 1 || Boolean(invalidManagers.length)"
           @click="run(previewRulesProvision)"><ShieldCheck :size="16" />预览规则开通</button>
         <div v-if="pendingTenant" role="alertdialog" aria-label="确认管理员变更" class="confirmation">
-          <strong>{{ pendingTenant.action ? '确认规则开通' : '确认管理员变更' }} · {{ tenant.name }}</strong>
+          <strong>{{ pendingTenant.action ? '确认规则开通' : '确认群配置变更' }} · {{ tenant.name }}</strong>
           <p>原管理员：{{ pendingTenant.previous.join('、') }}</p>
           <p>新管理员：{{ (pendingTenant.payload.managers || [pendingTenant.payload.manager]).join('、') || '无' }}</p>
           <p v-if="pendingTenant.action">仅规则 · AI关闭 · 不开通套餐或财务权限</p>
@@ -380,6 +383,18 @@ onMounted(() => run(reload));
       </template>
       <p v-else class="capability">请选择要管理的群聊。</p>
       </div>
+      <div v-if="view === 'rules' && pendingTenant && tenant" class="confirmation"
+        role="alertdialog" aria-label="确认防袭群变更">
+        <strong>{{ tenant.name }} · 防袭群{{ pendingTenant.payload.rules.raid_defense_enabled ? '开启' : '关闭' }}</strong>
+        <div class="actions">
+          <button type="button" :disabled="busy" @click="run(async () => {
+            const draft = pendingTenant; pendingTenant = null;
+            await api('tenant', { ...draft.payload, confirmation: draft.confirmation });
+            await reload(); notice = '防袭群设置已确认';
+          })"><ShieldCheck :size="16" />确认变更</button>
+          <button type="button" :disabled="busy" @click="pendingTenant = null">取消</button>
+        </div>
+      </div>
       <div v-show="view === 'rules'">
       <template v-if="tenant?.active">
         <button v-if="state.queue_health?.some((q: any) => q.account === tenant.account && q.review_groups.includes(tenant.group_id))"
@@ -387,12 +402,24 @@ onMounted(() => run(reload));
         <div class="fields">
           <label class="check"><input v-model="tenant.rules.advertising" type="checkbox" />广告审核与递进禁言</label>
           <label class="check"><input v-model="tenant.rules.flood" type="checkbox" />防刷屏</label>
+          <label class="check"><input v-model="tenant.rules.raid_defense_enabled" type="checkbox" />防袭群</label>
           <label class="check"><input v-model="tenant.rules.video_whitelist_only" type="checkbox" />仅白名单成员可发视频</label>
+          <label class="check"><input v-model="tenant.rules.recall_forward" type="checkbox" />撤回合并聊天记录（白名单除外）</label>
+          <label class="check"><input v-model="tenant.rules.image_qr_recall" type="checkbox" />撤回二维码图片（本地识别）</label>
+          <label class="check"><input v-model="tenant.rules.image_digits_recall" type="checkbox" />撤回含数字图片（也包括截图、时间、金额）</label>
           <label>广告审核关键词<textarea v-model="keywordText" rows="4" /></label>
         </div>
         <GroupRulesEditor :model-value="tenant.rules.custom_rules || []" :disabled="busy"
           @update:model-value="tenant.rules.custom_rules = $event" />
-        <button type="button" :disabled="busy || !membersReady" @click="run(saveTenant)"><Save :size="16" />保存规则</button>
+        <button type="button" :disabled="busy || !membersReady || Boolean(pendingTenant)" @click="run(saveTenant)"><Save :size="16" />保存规则</button>
+        <RaidDefensePanel v-if="view === 'rules'"
+          :key="`${tenant.account}/${tenant.group_id}/${tenant.version}`"
+          :api="api" :account="tenant.account" :group="tenant.group_id"
+          :tenant-version="tenant.version" :disabled="busy" />
+        <WelcomePanel v-if="view === 'rules' && state.features?.group_welcome"
+          :key="`${tenant.account}/${tenant.group_id}/${tenant.version}`"
+          :api="api" :account="tenant.account" :group="tenant.group_id"
+          :tenant-version="tenant.version" :disabled="busy" />
         <MemberWhitelistPanel v-if="view === 'rules'"
           :key="`${tenant.account}/${tenant.group_id}/${tenant.version}`"
           :api="api" :account="tenant.account" :group="tenant.group_id"
@@ -451,30 +478,6 @@ onMounted(() => run(reload));
           @saved="run(reload)" />
         <p v-else-if="!state.billing" class="capability">套餐状态暂不可用，请刷新核对。</p>
       </div>
-      <FinanceGrantsPanel v-if="visited.has('finance')" v-show="view === 'finance'" :bridge="bridge" />
-      <div v-show="view === 'consultation'">
-      <label>机器人账号<select v-model="supportAccount" :disabled="busy">
-        <option v-for="account in state.accounts" :key="account.account" :value="account.account">
-          {{ account.nickname || account.account }} · {{ account.account }}
-        </option>
-      </select></label>
-      <SupportSettingsPanel v-if="supportAccount && visited.has('consultation')"
-        :key="supportAccount" :api="api" :account="supportAccount" :disabled="busy"
-        :profiles="state.ai_profiles" :choices="profileChoices" :providers="state.providers"
-        @saved="run(reload)" />
-      </div>
-      <div v-show="view === 'admin-guidance'">
-      <p class="capability" role="status">{{ savedProfile('admin_guidance') ? '独立配置已保存' : '独立配置尚未保存' }}</p>
-      <p v-if="state.guidance_status" class="capability" role="status">
-        {{ state.guidance_status.profile_ready ? '配置可解析' : '配置待核实' }} ·
-        {{ state.guidance_status.manual_current ? '操作手册已同步' : '操作手册待同步' }} ·
-        {{ state.guidance_status.manual_entries }}/{{ state.guidance_status.manual_expected }}项 · 只读指引
-      </p>
-      <button type="button" :disabled="busy" @click="run(() => provisionProfile(''))"><ShieldCheck :size="16" />创建服务端专用配置与人格</button>
-      <AIProfileEditor v-model="adminProfile" :choices="profileChoices"
-        :providers="state.providers" label="管理员指引" private-chat />
-      <button type="button" :disabled="busy" @click="run(() => saveProfile('admin_guidance'))"><Save :size="16" />保存管理员指引配置</button>
-      </div>
       <div v-show="view === 'group-ai'">
       <h3>群聊 / 热群AI默认配置</h3>
       <AIProfileEditor v-model="defaultGroupProfile" :choices="profileChoices"
@@ -484,7 +487,7 @@ onMounted(() => run(reload));
       <div v-show="view === 'model'">
       <h3>共用备用模型与预算</h3>
       <div class="fields">
-        <label>模型<select v-model="model.provider_id" aria-label="AI咨询模型">
+        <label>模型<select v-model="model.provider_id" aria-label="群聊AI备用模型">
           <option value="">选择模型</option>
           <option v-for="p in state.providers" :key="p.id" :value="p.id">{{ p.id }} · {{ p.model }}</option>
         </select></label>

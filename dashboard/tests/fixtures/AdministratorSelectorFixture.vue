@@ -19,6 +19,6 @@
 import { ref } from 'vue'
 import ConfigItemRenderer from '@/components/shared/ConfigItemRenderer.vue'
 
-const administrators = ref(['20000001', 'legacy-account'])
+const administrators = ref(['31846829', 'legacy-account'])
 const readonly = ref(false)
 </script>

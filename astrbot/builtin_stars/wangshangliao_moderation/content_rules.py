@@ -76,6 +76,19 @@ def classify(text: str, *, name: str = "") -> str:
             compact,
         )
     )
+    if re.fullmatch(
+        r"(?:[☜☞☚☛👈👉][\ufe0f\U0001f3fb-\U0001f3ff]{0,2}){1,8}"
+        r"(?:几(?:十|百)款|多[台苔]有[扶福])"
+        r"(?:[,，:：!！。~～]{0,4}(?:祝|㊗|\ufe0f){0,4}(?:兄弟们|大家)一路[长常][洪红虹])?"
+        r"[,，:：!！。~～]{0,4}",
+        compact,
+    ) or re.fullmatch(
+        r"拿[扶福](?:[+➕]|加(?:我)?|[:：])[:：]?"
+        r"(?:\([1-9一二三四五六七八九][0-9〇零一二三四五六七八九]{4,11}\)|"
+        r"[1-9一二三四五六七八九][0-9〇零一二三四五六七八九]{4,11})[!！。]*",
+        compact,
+    ):
+        return "external_promotion"
     if (
         re.fullmatch(
             r"(?:新用户)?注册(?:就|即|即可)?(?:送|赠送)"
@@ -156,6 +169,15 @@ def classify(text: str, *, name: str = "") -> str:
         invitation
         or native_contact
         or re.search(r"(?:想看|看看|全部).{0,12}(?:在这里|给你发)", compact)
+        or (
+            re.search(
+                r"(?<![0-9〇零一二三四五六七八九])"
+                r"[1-9一二三四五六七八九][0-9〇零一二三四五六七八九]{4,11}"
+                r"(?![0-9〇零一二三四五六七八九])",
+                compact,
+            )
+            and re.search(r"(?:每天|每日|不定时|实时).{0,8}爆料", compact)
+        )
     ):
         return "external_promotion"
     if (
@@ -199,6 +221,17 @@ def classify(text: str, *, name: str = "") -> str:
             )
         )
         or native_contact
+        or (
+            re.search(
+                r"(?:录屏找|审核找|业务联系|联系)[:：]?[1-9]\d{4,11}(?!\d)",
+                compact,
+            )
+            and re.search(
+                r"注册.{0,16}(?:送|赠)|转发.{0,12}朋友圈|"
+                r"充值.{0,20}(?:返现|秒[返反]|包赔)",
+                compact,
+            )
+        )
     )
     if not destination:
         return ""
@@ -213,7 +246,9 @@ def classify(text: str, *, name: str = "") -> str:
     ):
         return "adult_promotion"
     if re.search(
-        r"注册链接|充值.{0,12}(?:返|送)|首次充值|转线|下级|包下分|团队担保|开业福利|分享\d+个群|转发.{0,8}(?:朋友圈|红包)|接单|加我|联系我|私聊我",
+        r"注册链接|充值.{0,12}(?:返|送)|充值.{0,20}(?:返现|秒[返反]|包赔)|"
+        r"首次充值|转线|下级|包下分|团队担保|开业福利|分享\d+个群|"
+        r"转发.{0,8}(?:朋友圈|红包)|接单|加我|联系我|私聊我",
         compact,
     ):
         return "external_promotion"
@@ -232,8 +267,21 @@ def content_category(payload: dict, policy: dict) -> str:
     """
     if payload.get("kind") == "video" and policy.get("video_whitelist_only") is True:
         return "restricted_video"
+    if payload.get("kind") == "forward" and policy.get("recall_forward") is True:
+        return "restricted_forward"
     if policy.get("advertising_enabled") is False:
         return ""
+    from .keyword_blacklist import matches as blacklist_match
+
+    if blacklist_match(payload.get("text", "")):
+        return "blacklist_keyword"
+    if re.search(r"[0-9]{6,}", unicodedata.normalize("NFKC", payload.get("text", ""))):
+        return "consecutive_digits"
+    if (
+        len(re.split(r"\r\n|[\r\n\u2028\u2029]", payload.get("text", ""), maxsplit=7))
+        > 7
+    ):
+        return "external_promotion"
     return keyword_category(payload.get("text", ""), policy) or classify(
         payload.get("text", ""), name=payload.get("name", "")
     )
@@ -488,6 +536,7 @@ async def enforce(
     *,
     assessment=None,
     execution_check=None,
+    recall_queue=None,
 ) -> bool:
     """Recall fresh violations and apply explicitly authorized mute escalation.
 
@@ -498,11 +547,12 @@ async def enforce(
         payload: Authenticated content kind, text and recall routing evidence.
         assessment: Optional validated semantic decision for this exact message.
         execution_check: Optional caller-owned authority check, repeated before effects.
+        recall_queue: Optional runtime owning bounded independent recall cleanup.
 
     Returns:
         Whether a high-confidence candidate was consumed.
     """
-    from .action_receipts import ModerationActions
+    from .action_receipts import ACTION_ERRORS, ModerationActions
     from .member_exemptions import is_exempt
 
     adapter = ModerationActions(adapter, group)
@@ -516,15 +566,12 @@ async def enforce(
     ):
         return False
     policy = adapter.config.get("moderation", {})
-    video = (
-        payload.get("kind") == "video" and policy.get("video_whitelist_only") is True
-    )
-    if (
-        policy.get("advertising_enabled") is False
-        and not video
-        and (not assessment or assessment.get("category") != "message_flood")
-    ):
-        return False
+    if assessment and assessment.get("category") in {"image_qr", "image_digits"}:
+        # OCR assessments are admitted only by the private media worker below.
+        from .media_moderation import verified_assessment
+
+        if not verified_assessment(adapter, group, mid, payload, assessment):
+            return False
     category = (
         assessment["category"]
         if assessment
@@ -532,7 +579,11 @@ async def enforce(
         and assessment.get("message_id") == str(mid)
         and assessment.get("category")
         not in {"prohibited_image", "prohibited_video", "prohibited_forward"}
-        and (assessment.get("category") != "restricted_video" or video)
+        and (
+            assessment.get("category")
+            not in {"restricted_video", "restricted_forward", "consecutive_digits"}
+            or assessment.get("category") == content_category(payload, policy)
+        )
         else (
             content_category(
                 payload,
@@ -545,6 +596,26 @@ async def enforce(
             )
         )
     )
+    # Fixed sanctions bypass ordinary warning cycles. Blacklisting still needs
+    # its stronger, matching durable ingress evidence.
+    if assessment and (fixed_category := content_category(payload, policy)) in {
+        "blacklist_keyword",
+        "consecutive_digits",
+    }:
+        category = fixed_category
+    # A confirmed flood takes precedence over the payload's recall-only restriction.
+    recall_only = category in {
+        "restricted_video",
+        "restricted_forward",
+        "image_qr",
+        "image_digits",
+    }
+    if (
+        policy.get("advertising_enabled") is False
+        and not recall_only
+        and category != "message_flood"
+    ):
+        return False
     if not category:
         category = await contextual_category(adapter, group, mid, payload)
     if not category:
@@ -575,7 +646,7 @@ async def enforce(
         ):
             raise ProtocolError("moderation_member_exempt")
         authorize_action(adapter.config, group, "recall")
-        if category != "restricted_video":
+        if not recall_only:
             authorize_action(adapter.config, group, "mute")
         if (
             not frozen_policy.get("automation_enabled")
@@ -602,6 +673,11 @@ async def enforce(
             stamp /= 1000
     except (ValueError, TypeError):
         stamp = 0
+    if not since <= stamp <= now + 60 or now - stamp > 300:
+        adapter.diagnostics.emit(
+            "content_rules", "historical_or_unknown_time", mid, group=group
+        )
+        return True
     root = instance_dir(adapter.config["id"])
     root.mkdir(parents=True, exist_ok=True)
     path = root / "moderation.sqlite3"
@@ -612,36 +688,65 @@ async def enforce(
         store.observe, account, group, mid, sender, category, now, since
     ):
         return True
-    status = "review_only"
+    status = "preflight_failed"
     warning = "none"
+    error, provider_code = "", None
+    recall_ready = None
     try:
-        if not since <= stamp <= now + 60 or now - stamp > 300:
-            status = "historical_or_unknown_time"
-            return True
-        roster = await adapter.get_moderation_members(group)
+        # A finished mute batch only adds independent recalls. Rechecking its
+        # entire roster here would compete with those recalls' native checks.
+        continued_flood = (
+            category == "message_flood"
+            and recall_queue is not None
+            and await asyncio.to_thread(
+                store.flood_continuation,
+                account,
+                group,
+                sender,
+                str(payload.get("recall_route", {}).get("peer", "")),
+                str(revision),
+                payload.get("_ingress_flood", {}).get("received_at", 0),
+                scope=payload.get("_test_rule_window", ""),
+            )
+        )
         guard()
-        matches = [
-            m
-            for m in roster.get("groupMemberInfo", [])
-            if str(m.get("userId")) == sender
-        ]
-        if not roster.get("complete") or len(matches) != 1:
-            status = "identity_unverified"
-            return True
-        member = matches[0]
-        if sender == account or member.get("groupRole") in {
-            "GROUP_ROLE_OWNER",
-            "GROUP_ROLE_ADMIN",
-        }:
-            status = "administrator_exempt"
-            return False
-        if member.get("groupRole") != "GROUP_ROLE_MEMBER" or str(
-            member.get("nimId")
-        ) != adapter.members.get(group, {}).get(sender):
-            status = "identity_unverified"
-            return True
+        member = {}
+        if continued_flood:
+            gauges = getattr(adapter.diagnostics, "gauges", {})
+            gauges["flood_preflight_reused"] = (
+                gauges.get("flood_preflight_reused", 0) + 1
+            )
+        else:
+            # New batches retain the preliminary check; every actual action
+            # additionally requires the native port's fresh role/identity check.
+            roster = (
+                await adapter.get_moderation_members(group, max_age=1)
+                if recall_queue is not None and category != "blacklist_keyword"
+                else await adapter.get_moderation_members(group)
+            )
+            guard()
+            matches = [
+                m
+                for m in roster.get("groupMemberInfo", [])
+                if str(m.get("userId")) == sender
+            ]
+            if not roster.get("complete") or len(matches) != 1:
+                status = "identity_unverified"
+                return True
+            member = matches[0]
+            if sender == account or member.get("groupRole") in {
+                "GROUP_ROLE_OWNER",
+                "GROUP_ROLE_ADMIN",
+            }:
+                status = "administrator_exempt"
+                return False
+            if member.get("groupRole") != "GROUP_ROLE_MEMBER" or str(
+                member.get("nimId")
+            ) != adapter.members.get(group, {}).get(sender):
+                status = "identity_unverified"
+                return True
         authorize_action(adapter.config, group, "recall")
-        if category == "restricted_video":
+        if recall_only:
             guard()
             status = "unknown"
             result = await adapter.execute_action(
@@ -659,15 +764,117 @@ async def enforce(
             status = (
                 "recalled"
                 if result.get("status") in {"accepted", "verified"}
+                else "execution_rejected"
+                if result.get("status") == "rejected"
                 else "unknown"
             )
             return True
         authorize_action(adapter.config, group, "mute")
-        if category == "message_flood":
+
+        async def recall_complete(recall_status, completed):
+            """Save independent recall evidence without erasing a mute receipt.
+
+            Args:
+                recall_status: Actual cleanup status, never queue admission.
+                completed: Independent original sanction result.
+            """
+            await asyncio.to_thread(
+                store.finish,
+                account,
+                group,
+                mid,
+                ("recalled" if completed.get("action") == "recall" else "muted")
+                if completed.get("status") in {"accepted", "verified"}
+                else "execution_rejected"
+                if completed.get("status") == "rejected"
+                else "unknown",
+                recall_status,
+                error=error,
+                provider_code=provider_code,
+            )
+
+        if category in {"blacklist_keyword", "consecutive_digits"}:
+            if category == "blacklist_keyword":
+                from .keyword_blacklist import enforce as enforce_fixed
+            else:
+                from .numeric_moderation import enforce as enforce_fixed
+
+            result = await enforce_fixed(
+                adapter, group, str(mid), payload, member, guard
+            )
+
+            async def recall_fixed():
+                """Recall this original message through current native authority.
+
+                Returns:
+                    Actual accepted, verified, rejected or unknown outcome.
+                """
+                try:
+                    guard()
+                    receipt = await adapter.execute_action(
+                        ActionRequest.bind(
+                            adapter,
+                            f"recall/{account}/{group}/{mid}",
+                            "recall",
+                            int(group),
+                            member=int(sender),
+                            expected_nim=str(member["nimId"]),
+                            message=str(mid),
+                        ),
+                        authorize=guard,
+                    )
+                    return receipt.get("status", "unknown")
+                except Exception as exc:
+                    return getattr(exc, "action_status", "rejected")
+
+            ready = asyncio.Event()
+
+            async def cleanup_fixed():
+                """Resolve a queued recall independently of its mute result."""
+                recall_status = "rejected"
+                try:
+                    await ready.wait()
+                    recall_status = "unknown"
+                    recall_status = await recall_fixed()
+                finally:
+                    await ready.wait()
+                    await recall_complete(
+                        recall_status,
+                        {**result, "status": recall_status}
+                        if result.get("action") == "recall"
+                        else result,
+                    )
+
+            async def cancel_fixed():
+                """Close a never-started recall without a native submission."""
+                await ready.wait()
+                await recall_complete(
+                    "rejected",
+                    {**result, "status": "rejected"}
+                    if result.get("action") == "recall"
+                    else result,
+                )
+
+            if recall_queue is not None and recall_queue.defer_recalls(
+                adapter, 1, cleanup_fixed, cancel=cancel_fixed
+            ):
+                result["recall_status"] = "pending"
+                result["_recall_ready"] = ready
+            else:
+                result["recall_status"] = await recall_fixed()
+                if result.get("action") == "recall":
+                    result["status"] = result["recall_status"]
+        elif category == "message_flood":
             from .flood import enforce as enforce_flood
 
             result = await enforce_flood(
-                adapter, group, str(mid), payload, store=store, guard=guard
+                adapter,
+                group,
+                str(mid),
+                payload,
+                store=store,
+                guard=guard,
+                recall_queue=recall_queue,
             )
         elif policy.get("progressive_mute"):
             from astrbot.core.platform.sources.wangshangliao.progressive import (
@@ -675,11 +882,18 @@ async def enforce(
             )
 
             result = await progressive_enforce(
-                adapter, group, sender, str(mid), execution_check=guard
+                adapter,
+                group,
+                sender,
+                str(mid),
+                execution_check=guard,
+                recall_queue=recall_queue,
+                recall_complete=recall_complete,
             )
         else:
             result = None
         if result is not None:
+            recall_ready = result.get("_recall_ready")
             warning = result.get("recall_status", "unknown")
             # Notification failure must not erase an accepted original sanction.
             status = (
@@ -691,12 +905,17 @@ async def enforce(
                     else "muted"
                 )
                 if result.get("status") in {"accepted", "verified"}
+                else "execution_rejected"
+                if result.get("status") == "rejected"
+                else "recall_pending"
+                if result.get("status") == "pending"
                 else "unknown"
             )
             if (
                 "_open_groups" in adapter.config
                 and result.get("warning_number")
-                and warning in {"accepted", "verified"}
+                and result.get("warning_recall_status", warning)
+                in {"accepted", "verified"}
             ):
                 guard()
                 nick = (
@@ -708,22 +927,28 @@ async def enforce(
                     ).strip()[:100]
                     or sender
                 )
-                await adapter.execute_action(
-                    ActionRequest.bind(
-                        adapter,
-                        f"open-warning/{account}/{group}/{mid}",
-                        "warning",
-                        int(group),
-                        member=int(sender),
-                        expected_nim=str(member["nimId"]),
-                        mention_name=nick,
-                        text=f"@{nick} 第{result['warning_number']}次"
-                        + ("刷屏" if category == "message_flood" else "广告违规")
-                        + "，消息已撤回。每轮前三次警告，之后依次禁言1、3、10分钟；"
-                        "10分钟处罚结束后重新累计。",
-                    ),
-                    authorize=guard,
+                request = ActionRequest.bind(
+                    adapter,
+                    f"open-warning/{account}/{group}/{mid}",
+                    "warning",
+                    int(group),
+                    member=int(sender),
+                    expected_nim=str(member["nimId"]),
+                    mention_name=nick,
+                    text=f"@{nick} 第{result['warning_number']}次"
+                    + ("刷屏" if category == "message_flood" else "广告违规")
+                    + (
+                        "，触发消息已撤回，其余消息后台清理。"
+                        if recall_ready is not None
+                        else "，消息已撤回。"
+                    )
+                    + "每轮前三次警告，之后依次禁言1、3、10分钟；"
+                    "10分钟处罚结束后重新累计。",
                 )
+                if recall_queue is not None:
+                    await recall_queue.defer_warning(adapter, request, guard)
+                else:
+                    await adapter.execute_action(request, authorize=guard)
             return True
         row, prior = await asyncio.to_thread(
             store.claim, account, group, mid, sender, since, now
@@ -736,6 +961,46 @@ async def enforce(
         if not adapter.config.get("moderation", {}).get("automation_enabled"):
             status = "disabled"
             return True
+        should_mute = bool(prior[0] and prior[1])
+        mute_failure = None
+        try:
+            if should_mute:
+                if policy.get("auto_kick", {}).get(group) is True:
+                    from astrbot.core.platform.sources.wangshangliao.automatic import (
+                        mute_and_escalate,
+                    )
+
+                    result = await mute_and_escalate(
+                        adapter,
+                        f"content/{group}/{mid}",
+                        group,
+                        sender,
+                        mid,
+                        execution_check=guard,
+                    )
+                else:
+                    result = await adapter.execute_action(
+                        ActionRequest.bind(
+                            adapter,
+                            f"content/{group}/{mid}",
+                            "mute",
+                            int(group),
+                            member=int(sender),
+                        ),
+                        authorize=guard,
+                    )
+                status = (
+                    "muted"
+                    if result.get("status") in {"accepted", "verified"}
+                    else "execution_rejected"
+                    if result.get("status") == "rejected"
+                    else "unknown"
+                )
+        except Exception as exc:
+            mute_failure = exc
+        # A failed mute must not skip independent recalls; cancellation and
+        # revoked authority must not start additional actions.
+        guard()
         try:
             await adapter.execute_action(
                 ActionRequest.bind(
@@ -751,38 +1016,10 @@ async def enforce(
             )
         except Exception:
             adapter.diagnostics.emit("recall", "failed_or_unknown", mid, failed=True)
+        if mute_failure is not None:
+            raise mute_failure
         guard()
-        if prior[0] and prior[1]:
-            if policy.get("auto_kick", {}).get(group) is True:
-                from astrbot.core.platform.sources.wangshangliao.automatic import (
-                    mute_and_escalate,
-                )
-
-                result = await mute_and_escalate(
-                    adapter,
-                    f"content/{group}/{mid}",
-                    group,
-                    sender,
-                    mid,
-                    execution_check=guard,
-                )
-            else:
-                result = await adapter.execute_action(
-                    ActionRequest.bind(
-                        adapter,
-                        f"content/{group}/{mid}",
-                        "mute",
-                        int(group),
-                        member=int(sender),
-                    ),
-                    authorize=guard,
-                )
-            status = (
-                ("kicked" if result.get("action") == "kick" else "muted")
-                if result.get("status") in {"accepted", "verified"}
-                else "unknown"
-            )
-        else:
+        if not should_mute:
             consequence = "自动处理不踢人；踢出需管理员私聊确认。"
             result = await adapter.execute_action(
                 ActionRequest.bind(
@@ -805,15 +1042,56 @@ async def enforce(
             )
             status = "warned" if warning in {"accepted", "verified"} else "unknown"
     except Exception as exc:
+        error = str(exc) if str(exc) in ACTION_ERRORS else "operation_failed"
+        number = getattr(exc, "number", None)
+        provider_code = (
+            number if type(number) is int and -(1 << 31) <= number < 1 << 31 else None
+        )
+        if status not in {"recalled", "muted", "kicked", "warned"}:
+            status = (
+                "execution_rejected"
+                if getattr(exc, "action_status", None) == "rejected"
+                else "preflight_failed"
+                if status == "preflight_failed"
+                else "unknown"
+            )
         adapter.diagnostics.emit(
             "content_rules",
-            "failed_or_unknown",
+            status,
             mid,
             failed=True,
-            error=str(exc) if isinstance(exc, ProtocolError) else "operation_failed",
+            error=error,
+            provider_code=provider_code,
+            group=group,
         )
     finally:
-        await asyncio.to_thread(store.finish, account, group, mid, status, warning)
+        saved = asyncio.create_task(
+            asyncio.to_thread(
+                store.finish,
+                account,
+                group,
+                mid,
+                status,
+                warning,
+                error=error,
+                provider_code=provider_code,
+            )
+        )
+        cancelled = None
+        try:
+            # A cancelled await cannot release cleanup while its DB thread
+            # can still overwrite the terminal recall receipt.
+            while not saved.done():
+                try:
+                    await asyncio.shield(saved)
+                except asyncio.CancelledError as exc:
+                    cancelled = exc
+            saved.result()
+        finally:
+            if recall_ready is not None:
+                recall_ready.set()
+        if cancelled is not None:
+            raise cancelled
     return True
 
 
@@ -837,6 +1115,10 @@ def flood_category(adapter, group, mid, payload):
     policy = adapter.config.get("moderation", {})
     sender = str(payload.get("sender", ""))
     now = time.time()
+    if policy.get("raid_defense_enabled") and payload.get("_ingress_raid", {}).get(
+        "observing"
+    ):
+        return ""
     if (
         group.startswith("private/")
         or not group

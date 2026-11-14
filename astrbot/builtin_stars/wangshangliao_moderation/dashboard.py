@@ -6,6 +6,7 @@ import hashlib
 import json
 import sqlite3
 import time
+import unicodedata
 from contextlib import closing
 from decimal import Decimal, InvalidOperation
 
@@ -21,8 +22,13 @@ from astrbot.core.platform.sources.wangshangliao.diagnostics import (
     ERROR_LABELS,
     Diagnostics,
 )
+from astrbot.core.platform.sources.wangshangliao.event import is_managed_account
 from astrbot.core.platform.sources.wangshangliao.identity import account_nickname
 from astrbot.core.platform.sources.wangshangliao.policy import validate_policy
+from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
+    BUSINESS_FIELDS,
+    strip_private_settings,
+)
 from astrbot.core.platform.sources.wangshangliao.schedule_store import (
     database as schedule_database,
 )
@@ -37,11 +43,19 @@ from astrbot.dashboard.responses import ApiError, ok
 from .activities import clean as clean_activity_text
 from .activity_store import database as activity_database
 from .cashback_store import CashbackError
-from .friend_auto import FriendAutoApproval
+from .lottery_rules import (
+    DEFAULT_ENTRY_PHRASE,
+    packet_plan,
+    validate_entry_phrase,
+    validate_luckiest_bonus,
+    validate_reserved_members,
+)
+from .lottery_time import beijing_time, parse_start_at
 from .recall_audit import read_native_audit
-from .settings import business_revision
+from .settings import business_revision, validate_settings
 
 PLUGIN_NAME = "wangshangliao_moderation"
+LOTTERY_MEMBER_LOOKUP_SECONDS = 15
 BLACKLIST_MINUTES_ERROR = (
     "黑名单禁言时长未修改：请输入1—41760整分钟，默认41760分钟（29天）；"
     "只影响之后的群内拉黑和真实重入，不追罚旧名单或重设已有禁言，普通禁言24小时上限不变。"
@@ -79,30 +93,36 @@ class DashboardPage:
         self.save_lock = asyncio.Lock()
         self.directory_lock = asyncio.Lock()
         self.directory_refresh_at = {}
-        self.friend_auto = FriendAutoApproval(context)
 
     def register(self):
         """Register the plugin-local routes when the plugin starts."""
         self.active = True
         # Plugin reloads replace matching routes but do not remove retired ones.
         routes = self.context.registered_web_apis
-        routes[:] = [api for api in routes if api[0] != f"/{PLUGIN_NAME}/friends"]
+        routes[:] = [
+            api
+            for api in routes
+            if api[0]
+            not in {f"/{PLUGIN_NAME}/friends", f"/{PLUGIN_NAME}/friend-approval"}
+        ]
         for endpoint, handler, method in (
             ("settings", self.settings, "GET"),
             ("settings", self.save, "POST"),
             ("audit", self.audit, "GET"),
             ("speech-activity", self.speech_activity, "GET"),
             ("speech-report", self.speech_report, "GET"),
+            ("video-relay", self.video_relay, "GET"),
+            ("video-relay", self.video_relay, "POST"),
             ("cashback-logs", self.cashback_logs, "GET"),
             ("cashier", self.cashier, "POST"),
             ("invitations", self.invitations, "GET"),
             ("activities", self.activities, "GET"),
             ("activities", self.save_activities, "POST"),
+            ("lottery-members", self.lottery_members, "GET"),
+            ("lottery-control", self.lottery_control, "POST"),
             ("schedule", self.schedule, "GET"),
             ("schedule", self.pause_schedule, "POST"),
             ("groups", self.groups, "GET"),
-            ("friend-approval", self.friend_approval, "GET"),
-            ("friend-approval", self.friend_approval, "POST"),
             ("cards", self.cards, "POST"),
             ("test-window", self.test_window, "GET"),
             ("test-window", self.test_window, "POST"),
@@ -112,7 +132,11 @@ class DashboardPage:
             ("open-service", self.open_service, "GET"),
             ("open-service", self.open_service, "POST"),
         ):
-            if method == "POST" and endpoint not in {"open-service", "cashier"}:
+            if method == "POST" and endpoint not in {
+                "open-service",
+                "cashier",
+                "video-relay",
+            }:
                 handler = self.governed_control(handler)
             self.context.register_web_api(
                 f"/{PLUGIN_NAME}/{endpoint}",
@@ -151,7 +175,7 @@ class DashboardPage:
 
     async def open_service(self):
         """Dispatch authenticated total-control operations inside AstrBot."""
-        from .open_rpc import OpenCall
+        from .open_rpc import OpenCall, require_group_call
         from .open_store import OpenError
 
         await self.authorize()
@@ -189,11 +213,30 @@ class DashboardPage:
                 actor="dashboard/" + request.username,
                 payload=payload,
             )
+            require_group_call(call)
             if not integrated.active:
                 raise OpenError("service_unavailable")
             async with integrated.rpc.lock:
                 return ok(await integrated.rpc.dispatch(call))
         except OpenError as exc:
+            if str(exc) == "private_messages_retired":
+                raise ApiError("私信功能已移除。", status_code=410) from None
+            if body["action"] == "message_recalls":
+                messages = {
+                    "recall_time_range_invalid": "只能预览最近24小时内的时间段，请按北京时间核对截止时间和时长。",
+                    "recall_selection_limit": "命中范围过大：单次最多500条，请缩短最近时间后重新预览。",
+                    "recall_previous_unconfirmed": "其中有过撤回请求且结果未确认，已停止。请先核对原回执，不会自动重试。",
+                    "recall_no_flood_messages": "最近时间内没有可核实且尚未撤回的刷屏消息，请核对成员和时间范围。",
+                    "recall_member_changed": "目标已离群、身份变化或属于受保护成员，请刷新成员目录重新选择。",
+                    "recall_member_required": "请搜索并选择当前群内一名明确的普通成员。",
+                    "recall_job_missing": "当前机器人和群中没有这个任务，请刷新进度。",
+                    "recall_job_busy": "这个机器人正在处理另一批撤回，请等待结束或停止原任务。",
+                    "confirmation_invalid": "撤回预览已过期、已使用或不属于当前账号和群，请重新预览。",
+                    "service_paused": "机器人或当前群已暂停，请先核对服务状态；已提交的任务仍可查看和停止。",
+                    "operation_revoked": "群状态或操作权限已变化，本次未继续提交；请刷新核对。",
+                }
+                if str(exc) in messages:
+                    raise ApiError(messages[str(exc)], status_code=409) from None
             if str(exc) in {
                 "advertisement_image_invalid",
                 "advertisement_image_scope",
@@ -226,6 +269,8 @@ class DashboardPage:
                 "billing_price_changed",
                 "business_rules_changed",
                 "business_confirmation_invalid",
+                "welcome_changed",
+                "welcome_confirmation_invalid",
             }:
                 raise ApiError(
                     "开放服务设置或参数已变化，请刷新核对后重新保存。", status_code=409
@@ -266,6 +311,9 @@ class DashboardPage:
                     status_code=409,
                 ) from None
             billing_messages = {
+                "welcome_arguments": "欢迎语参数无效，请刷新当前群页面后重试。",
+                "raid_arguments": "防袭群参数无效，请刷新当前群页面后重试。",
+                "raid_protection_changed": "本轮防护已结束或已变化，请刷新状态后重新预览。",
                 "member_list_conflict": "名单未修改：该成员已在本群另一份名单中，请先移除另一名单，再重新添加。黑白名单不能同时添加，历史记录不会自动删除。",
                 "blacklist_permission": "黑名单未修改：请先核对当前群、本人及机器人的原生管理权限和本群授权，然后刷新。",
                 "blacklist_changed": "黑名单未修改：当前群配置、名单或禁言时长版本、成员身份已变化。请刷新；成员操作须重新搜索，时长设置请重新预览。",
@@ -277,6 +325,9 @@ class DashboardPage:
                 "blacklist_narrow": "匹配成员过多，未修改黑名单。请填写更完整的成员名称，缩小搜索范围。",
                 "blacklist_query": "请填写有效的成员名称后搜索；不会根据昵称或账号直接猜人执行。",
                 "blacklist_target": "黑名单未修改：请原生回复一条同群成员消息或真正@一名成员，不要同时指定多人。",
+                "blacklist_member_unavailable": "黑名单未修改，未提交禁言或解禁：当前群成员名单中找不到该成员，可能已退群或成员资料尚未同步。请先核实其是否仍在本群；不能仅据此确认已退群。",
+                "blacklist_identity_changed": "黑名单未修改，未提交禁言或解禁：当前成员身份绑定不一致或不唯一，请联系机器人负责人核对成员资料。",
+                "blacklist_target_conflict": "黑名单未修改，未提交禁言或解禁：@成员与回复对象不是同一人，请只保留一个目标后重新操作。",
                 "blacklist_quote": "黑名单未修改：原生引用无法在同群消息记录中核实，请重新回复目标原消息或真正@一人。",
                 "blacklist_arguments": "黑名单参数无效，未修改名单。请刷新当前群页面，重新搜索、预览并确认。",
                 "test_blacklist_accounts": "黑名单验收未开始：必须使用既定的三个接入账号，不能替换账号或新增连接。",
@@ -300,6 +351,7 @@ class DashboardPage:
                     "若已设置仍报错，请核对登录状态或联系旺商聊客服。不要把安全码发给机器人。"
                 ),
                 "finance_directory_unavailable": "群成员身份暂时无法核验，本次没有授予财务权限，请稍后刷新。",
+                "member_directory_rejected": "旺商聊暂时拒绝读取本群成员名单，无法核实管理员和目标身份。本次未使用旧名单继续操作；请稍后刷新，仍失败请联系机器人负责人检查成员接口。",
                 "finance_test_window_required": "请先为指定测试账号和测试群打开受控测试窗口。",
                 "finance_test_changed": "测试结账状态已变化，请刷新后重试。",
                 "test_lottery_not_due": "红包抽奖尚未到设定开奖时间，请到时再执行；不会提前公布或占用开奖回执。",
@@ -612,6 +664,237 @@ class DashboardPage:
             raise ApiError("请使用管理面板登录账号", status_code=403)
         return request._request.app.state.services.bots
 
+    async def video_relay(self):
+        """Manage relay drafts and explicit single-video previews and delivery.
+
+        Returns:
+            Scoped configuration, single-use preview or durable native receipt.
+
+        Raises:
+            ApiError: If authentication, scope, fields or confirmation are invalid.
+        """
+        from .open_store import OpenError
+        from .video_relay import control
+        from .video_relay_delivery import (
+            delivery_control,
+            expire_previews,
+            fetch_cms_categories,
+            refresh_native_evidence,
+        )
+        from .video_relay_fixture import inspect_test_videos, is_fixture_request
+        from .video_relay_fixture import posting_guard as test_posting_guard
+
+        service = await self.authorize()
+        writing = request._request.method == "POST"
+        if writing:
+            raw = bytearray()
+            async for chunk in request._request.stream():
+                raw.extend(chunk)
+                if len(raw) > 16384:
+                    raise ApiError("视频转发配置过大。", status_code=413)
+            try:
+                body = json.loads(raw)
+            except (ValueError, UnicodeError):
+                raise ApiError("视频转发参数无效。", status_code=400) from None
+        else:
+            body = dict(request.query)
+        operation = body.get("operation") if isinstance(body, dict) else None
+        keys = {"bot_id", "group_id"}
+        if writing:
+            keys |= {"operation", "version", "revision"}
+            if operation == "preview":
+                keys |= {"config"}
+            elif operation == "preview_video":
+                if "category_id" in body:
+                    keys.add("category_id")
+                if "max_video_mb" in body:
+                    keys.add("max_video_mb")
+                if "vod_id" in body:
+                    keys.add("vod_id")
+            elif operation not in {"preview_test_video", "cancel_active"}:
+                keys |= {"token"}
+        elif operation in {"inspect_test_video", "categories"}:
+            keys.add("operation")
+        if (
+            not isinstance(body, dict)
+            or set(body) != keys
+            or any(
+                not isinstance(body.get(k), str) or not body[k]
+                for k in ("bot_id", "group_id")
+            )
+            or writing
+            and (
+                operation
+                not in {
+                    "preview",
+                    "commit",
+                    "preview_video",
+                    "preview_test_video",
+                    "send_video",
+                    "cancel_video",
+                    "cancel_active",
+                }
+                or type(body["version"]) is not int
+                or body["version"] < 0
+                or not isinstance(body["revision"], str)
+                or operation in {"commit", "send_video", "cancel_video"}
+                and (
+                    not isinstance(body["token"], str)
+                    or not 16 <= len(body["token"]) <= 128
+                )
+                or "category_id" in body
+                and (
+                    type(body["category_id"]) is not int
+                    or not 0 <= body["category_id"] <= 2147483647
+                )
+                or "max_video_mb" in body
+                and (
+                    type(body["max_video_mb"]) is not int
+                    or not 1 <= body["max_video_mb"] <= 112
+                )
+                or "vod_id" in body
+                and (
+                    type(body["vod_id"]) is not int or not 0 < body["vod_id"] < 1 << 63
+                )
+            )
+        ):
+            raise ApiError("视频转发参数无效。", status_code=400)
+        try:
+            config = service.get_bot(body["bot_id"])["bot"]
+        except ValueError:
+            raise ApiError("旺商聊实例不存在。", status_code=404) from None
+        group = body["group_id"]
+        adapter = self._adapter(body["bot_id"])
+        if (
+            config.get("type") != "wangshangliao"
+            or not config.get("enable", True)
+            or group not in config.get("enabled_groups", [])
+            or adapter is None
+        ):
+            raise ApiError("请选择已启用机器人的当前群。", status_code=409)
+        guard = self._scope_guard(service, config, group, adapter)
+        guard()
+        try:
+            path = instance_dir(body["bot_id"]) / "video-relay-control.sqlite3"
+            if not writing and operation == "inspect_test_video":
+                result = await inspect_test_videos(adapter, group, guard)
+            elif not writing and operation == "categories":
+                result = await fetch_cms_categories(
+                    path, str(adapter.account), group, guard
+                )
+            elif operation in {
+                "preview_video",
+                "preview_test_video",
+                "send_video",
+                "cancel_video",
+                "cancel_active",
+            }:
+                governance = getattr(
+                    getattr(self, "plugin", None), "open_service", None
+                )
+                if operation not in {"cancel_video", "cancel_active"} and (
+                    governance is None or not governance.active
+                ):
+                    raise ApiError(
+                        "当前群管理服务不可用，未准备或发送视频。", status_code=409
+                    )
+                rules = governance.rule_replies if governance is not None else None
+                if (
+                    operation not in {"cancel_video", "cancel_active"}
+                    and governance is not None
+                ):
+                    try:
+                        async with asyncio.timeout(15):
+                            await refresh_native_evidence(
+                                governance, adapter, group, guard
+                            )
+                    except TimeoutError:
+                        raise ApiError(
+                            "刷新群管理权限超时，请稍后重试；本次未下载或发送视频。",
+                            status_code=409,
+                        ) from None
+                fixture = (
+                    await is_fixture_request(
+                        path,
+                        str(adapter.account),
+                        group,
+                        "dashboard:" + request.username,
+                        revision(config),
+                        body,
+                    )
+                    if operation not in {"cancel_video", "cancel_active"}
+                    else False
+                )
+                rule = (
+                    await asyncio.to_thread(rules.read, str(adapter.account), group)
+                    if operation not in {"cancel_video", "cancel_active"}
+                    and not fixture
+                    else None
+                )
+                if rule is not None and not rule.get("version"):
+                    raise ApiError(
+                        "请先在本群规则页预览并确认保存规则，再预览视频。",
+                        status_code=409,
+                    )
+
+                async def posting_guard():
+                    guard()
+                    if fixture:
+                        await test_posting_guard(governance, adapter, group, guard)
+                    elif rule is not None:
+                        await asyncio.to_thread(
+                            rules.send_guard, adapter, rule, posting=True
+                        )
+                    guard()
+
+                result = await delivery_control(
+                    path,
+                    adapter,
+                    group,
+                    "dashboard:" + request.username,
+                    revision(config),
+                    body,
+                    guard,
+                    posting_guard,
+                    refresh_authority=lambda: refresh_native_evidence(
+                        governance, adapter, group, guard
+                    ),
+                )
+            else:
+                if not writing:
+                    await expire_previews(path)
+                result = await control(
+                    path,
+                    str(adapter.account),
+                    group,
+                    "dashboard:" + request.username,
+                    revision(config),
+                    body,
+                    guard,
+                )
+        except OpenError as exc:
+            raise ApiError(
+                {
+                    "business_native_permission": "机器人当前群管权限尚未核实，请刷新群管理状态后重试。",
+                    "business_owner_revoked": "原规则管理员权限已变更，请由现任管理员重新预览并保存本群规则。",
+                    "proactive_not_authorized": "本群尚未授权主动发送，请启用本群主动发送后重新预览视频。",
+                }.get(
+                    str(exc),
+                    "本群规则已变化、已暂停或未启用，请刷新本群规则后重新预览视频。",
+                ),
+                status_code=409,
+            ) from None
+        except ValidationError:
+            raise ApiError(
+                "请填写公开HTTPS CMS接口；分类ID须为非负整数，间隔1—1440分钟，视频1—112MiB；不接受账号密钥或私网地址。",
+                status_code=400,
+            ) from None
+        except sqlite3.OperationalError:
+            raise ApiError(
+                "配置存储暂不可用，请刷新核对；不会自动重试保存。", status_code=503
+            ) from None
+        return ok(result)
+
     async def settings(self):
         """Return public bot settings and runtime state, never credentials.
 
@@ -626,6 +909,8 @@ class DashboardPage:
         }
         bots = []
         for config in service.list_bots(type_="wangshangliao")["bots"]:
+            config = copy.deepcopy(config)
+            strip_private_settings(config)
             adapter = adapters.get(config["id"])
             stats = adapter.get_stats() if adapter else {}
             names = dict(getattr(adapter, "group_names", {}) or {})
@@ -707,15 +992,18 @@ class DashboardPage:
                             "enable",
                             "account_id",
                             "enabled_groups",
-                            "reply_private",
                             "reply_groups",
                             "moderation",
-                            "ai_routes",
-                            "proactive_send",
-                            "developer_test",
                         )
                         if field in config
                     },
+                    "ai_routes": {
+                        "groups": copy.deepcopy(
+                            config.get("ai_routes", {}).get("groups", {})
+                        )
+                    },
+                    "proactive_send": copy.deepcopy(config.get("proactive_send", {})),
+                    "developer_test": copy.deepcopy(config.get("developer_test", {})),
                     "nickname": account_nickname(adapter, config),
                     "revision": revision(config),
                     "state": stats.get("connection_state", "stopped"),
@@ -758,6 +1046,23 @@ class DashboardPage:
         """
         service = await self.authorize()
         body = await request.json()
+        if isinstance(body, dict) and (
+            "reply_private" in body
+            or "admin_provider_id" in body
+            or isinstance(body.get("proactive_send"), dict)
+            and isinstance(body["proactive_send"].get("targets"), list)
+            and any(
+                isinstance(target, str) and target.startswith("private/")
+                for target in body["proactive_send"]["targets"]
+            )
+            or isinstance(body.get("developer_test"), dict)
+            and isinstance(body["developer_test"].get("scopes"), list)
+            and any(
+                scope in ("private_commands", "private_ai")
+                for scope in body["developer_test"]["scopes"]
+            )
+        ):
+            raise ApiError("私信功能已移除。", status_code=410)
         if (
             not isinstance(body, dict)
             or set(body)
@@ -767,8 +1072,6 @@ class DashboardPage:
                 "group_id",
                 "policy",
                 "group",
-                "reply_private",
-                "admin_provider_id",
                 "enabled_groups",
                 "proactive_send",
                 "developer_test",
@@ -834,11 +1137,6 @@ class DashboardPage:
                 }
                 or (group and group not in current.get("enabled_groups", []))
                 or (not group and group_settings)
-                or ("reply_private" in body and type(body["reply_private"]) is not bool)
-                or (
-                    "admin_provider_id" in body
-                    and not isinstance(body["admin_provider_id"], str)
-                )
                 or (
                     "customer_provider_id" in group_settings
                     and not isinstance(group_settings["customer_provider_id"], str)
@@ -851,9 +1149,9 @@ class DashboardPage:
             ):
                 raise ApiError("配置字段或目标群无效", status_code=400)
             config = copy.deepcopy(current)
+            strip_private_settings(config)
             if merged is not None and merged.integrated:
                 from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
-                    BUSINESS_FIELDS,
                     runtime,
                 )
 
@@ -883,19 +1181,17 @@ class DashboardPage:
                     moderation.setdefault(field, {})[group] = group_settings[field]
             if "reply" in group_settings:
                 config.setdefault("reply_groups", {})[group] = group_settings["reply"]
-            if "admin_provider_id" in body or "customer_provider_id" in group_settings:
+            if "customer_provider_id" in group_settings:
                 routes = config.setdefault("ai_routes", {})
-                if "admin_provider_id" in body:
-                    routes["admin_provider_id"] = body["admin_provider_id"]
-                if "customer_provider_id" in group_settings and group:
-                    routes.setdefault("groups", {})[group] = group_settings[
-                        "customer_provider_id"
-                    ]
+                routes.setdefault("groups", {})[group] = group_settings[
+                    "customer_provider_id"
+                ]
                 routes.setdefault("groups", {}).pop("", None)
                 config["ai_routes"] = routes
-            if "reply_private" in body:
-                config["reply_private"] = body["reply_private"]
             try:
+                validate_settings(
+                    {key: config[key] for key in BUSINESS_FIELDS if key in config}
+                )
                 validate_policy(moderation)
                 if (
                     moderation.get("enabled")
@@ -920,11 +1216,6 @@ class DashboardPage:
                     provider.meta().id for provider in self.context.get_all_providers()
                 }
                 routes = config.get("ai_routes", {})
-                if (
-                    routes.get("admin_provider_id")
-                    and routes["admin_provider_id"] not in provider_ids
-                ):
-                    raise ValueError("admin_provider_unavailable")
                 if any(
                     provider_id and provider_id not in provider_ids
                     for provider_id in routes.get("groups", {}).values()
@@ -972,28 +1263,6 @@ class DashboardPage:
         try:
             directory = await group_directory(adapter.business, adapter.account)
             guard()
-            directory["private_targets"] = []
-            if getattr(getattr(adapter, "ledger", None), "db", None) is not None:
-                from astrbot.core.platform.sources.wangshangliao.event import (
-                    is_managed_account,
-                )
-
-                async with adapter.ledger.db.execute(
-                    "SELECT team,json_extract(payload,'$.name'),json_extract(payload,'$.sender') "
-                    "FROM inbox WHERE rowid IN (SELECT MAX(rowid) FROM inbox "
-                    "WHERE account=? AND team LIKE 'private/%' GROUP BY team) "
-                    "AND json_valid(payload) ORDER BY rowid DESC LIMIT 1000",
-                    (adapter.account,),
-                ) as cursor:
-                    rows = await cursor.fetchall()
-                directory["private_targets"] = [
-                    {"value": team, "name": str(name or uid), "uid": str(uid)}
-                    for team, name, uid in rows
-                    if uid
-                    and str(uid) != adapter.account
-                    and not is_managed_account(str(uid))
-                    and team.startswith(f"private/{uid}/")
-                ]
             await self.authorize()
             guard()
             return ok(directory)
@@ -1069,102 +1338,6 @@ class DashboardPage:
             )
             raise ApiError(f"名片操作失败：{exc}", status_code=400) from None
 
-    async def friend_approval(self):
-        """Expose the account-bound approval toggle only to dashboard users.
-
-        Returns:
-            Local settings and outcomes, without upstream profile queries.
-
-        Raises:
-            ApiError: If parameters, saved identity or settings version are invalid.
-        """
-        bots = await self.authorize()
-        write = request._request.method == "POST"
-        body = await request.json() if write else dict(request.query)
-        reconcile = (
-            write and isinstance(body, dict) and body.get("action") == "reconcile"
-        )
-        required = (
-            {"bot_id", "revision", "version", "action"}
-            if reconcile
-            else {"bot_id", "revision", "version", "enabled"}
-            if write
-            else {"bot_id"}
-        )
-        if (
-            not isinstance(body, dict)
-            or set(body) != required
-            or not isinstance(body.get("bot_id"), str)
-            or not body["bot_id"]
-            or (
-                write
-                and (
-                    (not reconcile and type(body.get("enabled")) is not bool)
-                    or type(body.get("version")) is not int
-                    or body["version"] < 1
-                    or not isinstance(body.get("revision"), str)
-                )
-            )
-        ):
-            raise ApiError("自动同意设置参数无效", status_code=400)
-        bot_id = body["bot_id"]
-        try:
-            config = bots.get_bot(bot_id)["bot"]
-        except ValueError:
-            raise ApiError("旺商聊实例不存在", status_code=404) from None
-        adapter = self._adapter(bot_id)
-        if config.get("type") != "wangshangliao" or adapter is None:
-            raise ApiError("旺商聊实例未载入", status_code=409)
-        saved_revision = revision(config)
-        account = str(adapter.account)
-
-        def authorize():
-            latest = bots.get_bot(bot_id)["bot"]
-            if (
-                not self.active
-                or latest.get("type") != "wangshangliao"
-                or self._adapter(bot_id) is not adapter
-                or str(adapter.account) != account
-                or str(latest.get("account_id", "")) != account
-                or revision(latest) != saved_revision
-            ):
-                raise ProtocolError("friend_authority_changed")
-
-        guard = account_guard(adapter, authorize)
-        try:
-            guard()
-            if write:
-                if body["revision"] != saved_revision:
-                    raise ValueError("friend_approval_settings_changed")
-                result = (
-                    await self.friend_auto.reconcile(adapter, body["version"], guard)
-                    if reconcile
-                    else await self.friend_auto.configure(
-                        adapter, body["enabled"], body["version"], guard
-                    )
-                )
-                await asyncio.to_thread(
-                    self.business_settings.log,
-                    bot_id,
-                    "dashboard/" + request.username,
-                    "friend_approval_settings",
-                    "saved",
-                    "",
-                    {"account": str(adapter.account), "enabled": result["enabled"]},
-                )
-            else:
-                result = await self.friend_auto.status(adapter)
-            await self.authorize()
-            guard()
-            return ok(result)
-        except (ValueError, ProtocolError) as exc:
-            raise ApiError(
-                "申请结果仍未确认，没有重新提交同意；请核对官方客户端。"
-                if str(exc) == "friend_approval_still_unknown"
-                else "自动同意设置或账号已变化，请刷新后核对。",
-                status_code=409,
-            ) from exc
-
     async def test_window(self):
         """Inspect or explicitly open a bounded, non-authorizing test window."""
         service = await self.authorize()
@@ -1185,6 +1358,10 @@ class DashboardPage:
             "budget",
         }:
             raise ApiError("测试窗口参数无效", status_code=400)
+        if isinstance(body.get("scopes"), list) and any(
+            scope in ("private_commands", "private_ai") for scope in body["scopes"]
+        ):
+            raise ApiError("私信功能已移除。", status_code=410)
         adapter = self._adapter(body.get("bot_id", ""))
         if adapter is None:
             raise ApiError("机器人未连接", status_code=409)
@@ -1201,13 +1378,6 @@ class DashboardPage:
                 ):
                     raise ApiError("配置已变化，请刷新后重试", status_code=409)
                 if action == "test_close":
-                    previous = adapter.test_window
-                    if (
-                        previous is not None
-                        and getattr(previous.sender, "test_command_window", None)
-                        is previous
-                    ):
-                        previous.sender.test_command_window = None
                     adapter.test_window = None
                 elif action == "test_open":
                     from astrbot.core.platform.sources.wangshangliao.test_window import (
@@ -1237,7 +1407,6 @@ class DashboardPage:
                         body.get("seconds", 300),
                         body.get("budget", 10),
                     )
-                    sender.test_command_window = adapter.test_window
                 else:
                     raise ValueError("test_action_invalid")
                 await asyncio.to_thread(
@@ -1582,6 +1751,18 @@ class DashboardPage:
                             (account, group),
                         )
                     ]
+                    if "content_rule_errors" in tables:
+                        for row in result["rules"]:
+                            failure = await db.fetchone(
+                                "SELECT error,provider_code FROM content_rule_errors "
+                                "WHERE account=? AND group_id=? AND message=?",
+                                (account, group, str(row["message"])),
+                            )
+                            if failure:
+                                row.update(
+                                    processing_error=failure[0],
+                                    processing_provider_code=failure[1],
+                                )
                     if "progressive_actions" in tables and result["rules"]:
                         for row in result["rules"]:
                             receipt = await db.fetchone(
@@ -1859,6 +2040,91 @@ class DashboardPage:
         guard()
         return ok(result)
 
+    async def lottery_members(self):
+        """Search current group members for optional fixed-tier reservations.
+
+        Returns:
+            At most 20 verified current group members with transport identities.
+
+        Raises:
+            ApiError: If the scope, query or live member directory is unavailable.
+        """
+        from .open_store import OpenError
+
+        service = await self.authorize()
+        bot_id = request.query.get("bot_id", "")
+        group = request.query.get("group_id", "")
+        query = request.query.get("query", "").strip()
+        if not 1 <= len(query) <= 64 or any(not char.isprintable() for char in query):
+            raise ApiError("请输入1至64字的当前群成员名称或UID", status_code=400)
+        try:
+            config = service.get_bot(bot_id)["bot"]
+        except ValueError:
+            raise ApiError("旺商聊实例不存在", status_code=404) from None
+        adapter = self._adapter(bot_id)
+        integrated = getattr(getattr(self, "plugin", None), "open_service", None)
+        if (
+            adapter is None
+            or integrated is None
+            or not integrated.active
+            or config.get("type") != "wangshangliao"
+            or group not in config.get("enabled_groups", [])
+        ):
+            raise ApiError("当前群成员目录不可用", status_code=503)
+        guard = self._scope_guard(service, config, group, adapter)
+        guard()
+        try:
+            members = await asyncio.wait_for(
+                integrated.roster(adapter, group), LOTTERY_MEMBER_LOOKUP_SECONDS
+            )
+        except TimeoutError:
+            raise ApiError(
+                "当前群成员查询超时，请稍后重试；未使用旧名单",
+                status_code=503,
+            ) from None
+        except (OpenError, ProtocolError):
+            raise ApiError(
+                "当前群成员名单暂时无法读取，请稍后刷新后再搜索",
+                status_code=503,
+            ) from None
+        guard()
+        needle = unicodedata.normalize("NFKC", query).casefold()
+        matches = []
+        candidates = ((query, members[query]),) if query in members else members.items()
+        for uid, member in candidates:
+            peer = str(member.get("nimId", ""))
+            if (
+                uid == str(adapter.account)
+                or is_managed_account(uid)
+                or member.get("accountState") != "ACCOUNT_STATE_GOOD"
+                or not uid.isascii()
+                or not uid.isdigit()
+                or not 1 <= len(uid) <= 20
+                or int(uid) <= 0
+                or not peer.isascii()
+                or not peer.isdigit()
+                or not 1 <= len(peer) <= 20
+                or int(peer) <= 0
+            ):
+                continue
+            names = [
+                str(member.get(field) or "").strip()
+                for field in ("groupMemberNick", "userNick", "userName", "name")
+            ]
+            if query != uid and not any(
+                needle in unicodedata.normalize("NFKC", name).casefold()
+                for name in names
+                if name
+            ):
+                continue
+            name = clean_activity_text(next((name for name in names if name), uid))
+            matches.append({"member": uid, "peer": peer, "name": name})
+            if len(matches) > 20:
+                raise ApiError("匹配超过20位，请输入更完整的名称", status_code=400)
+        await self.authorize()
+        guard()
+        return ok({"members": matches})
+
     async def save_activities(self):
         """Update next-lottery settings and the uniform invitation reward rate."""
         service = await self.authorize()
@@ -1872,6 +2138,16 @@ class DashboardPage:
             "contact",
         }
         packet_fields = {"total_amount", "packet_mode", "by_invites"}
+        optional_fields = {
+            "remarks",
+            "entry_phrase",
+            "prize_tiers",
+            "start_at",
+            "luckiest_bonus",
+            "integer_packets",
+            "draw_on_full",
+            "reserved_members",
+        }
         if (
             not isinstance(body, dict)
             or set(body)
@@ -1887,13 +2163,9 @@ class DashboardPage:
             or "lottery" in body
             and (
                 not isinstance(body["lottery"], dict)
-                or set(body["lottery"])
-                not in (
-                    legacy_lottery_fields,
-                    legacy_lottery_fields | {"remarks"},
-                    legacy_lottery_fields | packet_fields,
-                    legacy_lottery_fields | packet_fields | {"remarks"},
-                )
+                or not legacy_lottery_fields <= set(body["lottery"])
+                or set(body["lottery"]) - legacy_lottery_fields - optional_fields
+                not in (set(), packet_fields)
             )
         ):
             raise ApiError("活动配置参数无效", status_code=400)
@@ -1921,6 +2193,9 @@ class DashboardPage:
                 "invite_gate": 0,
             },
         )
+        for flag in ("integer_packets", "draw_on_full"):
+            if flag in lottery and type(lottery[flag]) is not bool:
+                raise ApiError("整数元及满员开奖开关须为布尔值", status_code=400)
         prize = self._activity_text(lottery["prize"], "奖品")
         contact = self._activity_text(lottery["contact"], "领奖联系人")
         remarks = (
@@ -1930,6 +2205,13 @@ class DashboardPage:
             if "remarks" in lottery
             else None
         )
+        start_at = lottery.get("start_at")
+        if "start_at" in lottery:
+            try:
+                parse_start_at(start_at, future=True)
+            except ValueError as exc:
+                raise ApiError(str(exc), status_code=400) from None
+            start_at = start_at.replace(" ", "T")
         winners = self._bounded_int(lottery["winners"], 1, 100, "中奖人数")
         duration = self._bounded_int(lottery["duration_minutes"], 1, 10080, "倒计时")
         capacity = self._bounded_int(lottery["capacity"], 0, 10000, "参与上限")
@@ -1938,7 +2220,7 @@ class DashboardPage:
         by_invites = lottery.get("by_invites", bool(invite_gate))
         if (
             not isinstance(packet_mode, str)
-            or packet_mode not in {"prize", "ordinary", "lucky"}
+            or packet_mode not in {"prize", "ordinary", "lucky", "tiered"}
             or type(by_invites) is not bool
         ):
             raise ApiError("红包类型或邀请开关无效", status_code=400)
@@ -1953,6 +2235,111 @@ class DashboardPage:
         ):
             raise ApiError("红包总金额须为0至999999.99，最多两位小数", status_code=400)
         total_amount = int(amount * 100)
+        luckiest_bonus = None
+        if "luckiest_bonus" in lottery:
+            if type(lottery["luckiest_bonus"]) not in (str, int, float):
+                raise ApiError("人气王额外奖励须为有效金额", status_code=400)
+            try:
+                bonus = Decimal(str(lottery["luckiest_bonus"]))
+                if (
+                    not bonus.is_finite()
+                    or not 0 <= bonus <= Decimal("999999.99")
+                    or bonus.as_tuple().exponent < -2
+                ):
+                    raise ValueError("invalid_bonus")
+                luckiest_bonus = int(bonus * 100)
+            except (InvalidOperation, ValueError):
+                raise ApiError(
+                    "人气王额外奖励须为0至999999.99元，最多两位小数", status_code=400
+                ) from None
+        try:
+            entry_phrase = (
+                validate_entry_phrase(lottery["entry_phrase"])
+                if "entry_phrase" in lottery
+                else None
+            )
+            tiers = None
+            if "prize_tiers" in lottery:
+                if (
+                    type(lottery["prize_tiers"]) is not list
+                    or len(lottery["prize_tiers"]) > 10
+                ):
+                    raise ValueError("固定金额档位最多10档")
+                tiers = []
+                for tier in lottery["prize_tiers"]:
+                    if (
+                        type(tier) is not dict
+                        or set(tier) != {"amount", "count"}
+                        or type(tier["amount"]) not in (str, int, float)
+                    ):
+                        raise ValueError("固定金额档位须包含金额和份数")
+                    try:
+                        tier_amount = Decimal(str(tier["amount"]))
+                    except InvalidOperation:
+                        raise ValueError("固定档位金额无效") from None
+                    if (
+                        not tier_amount.is_finite()
+                        or not 0 < tier_amount <= Decimal("999999.99")
+                        or tier_amount.as_tuple().exponent < -2
+                    ):
+                        raise ValueError("固定档位金额须大于0，最多两位小数")
+                    tiers.append(
+                        {"amount": int(tier_amount * 100), "count": tier["count"]}
+                    )
+            reserved_members = None
+            if "reserved_members" in lottery:
+                if (
+                    type(lottery["reserved_members"]) is not list
+                    or len(lottery["reserved_members"]) > 100
+                ):
+                    raise ValueError("指定档位成员最多100人")
+                reserved_members = []
+                for reserved in lottery["reserved_members"]:
+                    if (
+                        type(reserved) is not dict
+                        or set(reserved) != {"member", "peer", "amount"}
+                        or not isinstance(reserved["member"], str)
+                        or not reserved["member"].isascii()
+                        or not reserved["member"].isdigit()
+                        or not 1 <= len(reserved["member"]) <= 20
+                        or int(reserved["member"]) <= 0
+                        or not isinstance(reserved["peer"], str)
+                        or not reserved["peer"].isascii()
+                        or not reserved["peer"].isdigit()
+                        or not 1 <= len(reserved["peer"]) <= 20
+                        or int(reserved["peer"]) <= 0
+                        or type(reserved["amount"]) not in (str, int, float)
+                    ):
+                        raise ValueError("指定成员参数无效，请重新搜索当前群成员")
+                    try:
+                        reserved_amount = Decimal(str(reserved["amount"]))
+                    except InvalidOperation:
+                        raise ValueError("指定成员档位金额无效") from None
+                    if (
+                        not reserved_amount.is_finite()
+                        or not 0 < reserved_amount <= Decimal("999999.99")
+                        or reserved_amount.as_tuple().exponent < -2
+                    ):
+                        raise ValueError("指定成员档位金额须大于0，最多两位小数")
+                    reserved_members.append(
+                        {
+                            "member": reserved["member"],
+                            "peer": reserved["peer"],
+                            "amount": int(reserved_amount * 100),
+                        }
+                    )
+        except ValueError as exc:
+            raise ApiError(str(exc), status_code=400) from None
+        if reserved_members and packet_mode != "tiered":
+            raise ApiError("指定档位成员仅支持分档拼手气", status_code=400)
+        if reserved_members and tiers is not None:
+            try:
+                validate_reserved_members(
+                    [{**reserved, "name": ""} for reserved in reserved_members],
+                    tiers,
+                )
+            except ValueError as exc:
+                raise ApiError(str(exc), status_code=400) from None
         if packet_mode != "prize":
             if not 1 <= capacity <= 100 or total_amount < capacity:
                 raise ApiError(
@@ -1979,6 +2366,59 @@ class DashboardPage:
         rate = int(reward * 100)
         account = str(config.get("account_id", ""))
         guard = self._scope_guard(service, config, group, adapter)
+        resolved_reserved_members = None
+        if reserved_members is not None:
+            resolved_reserved_members = []
+            if reserved_members:
+                from .open_store import OpenError
+
+                integrated = getattr(
+                    getattr(self, "plugin", None), "open_service", None
+                )
+                if integrated is None or not integrated.active:
+                    raise ApiError("当前群成员目录不可用", status_code=503)
+                guard()
+                try:
+                    members = await asyncio.wait_for(
+                        integrated.roster(adapter, group),
+                        LOTTERY_MEMBER_LOOKUP_SECONDS,
+                    )
+                except TimeoutError:
+                    raise ApiError(
+                        "当前群成员查询超时，指定方案未保存，请稍后重试",
+                        status_code=503,
+                    ) from None
+                except (OpenError, ProtocolError):
+                    raise ApiError(
+                        "当前群成员名单暂时无法读取，指定方案未保存",
+                        status_code=503,
+                    ) from None
+                guard()
+                for reserved in reserved_members:
+                    live = members.get(reserved["member"])
+                    if (
+                        not live
+                        or str(live.get("nimId", "")) != reserved["peer"]
+                        or live.get("accountState") != "ACCOUNT_STATE_GOOD"
+                        or reserved["member"] == account
+                        or is_managed_account(reserved["member"])
+                    ):
+                        raise ApiError(
+                            "指定成员已退群、身份变化或为机器人，请重新搜索后选择",
+                            status_code=409,
+                        )
+                    resolved_reserved_members.append(
+                        {
+                            **reserved,
+                            "name": clean_activity_text(
+                                live.get("groupMemberNick")
+                                or live.get("userNick")
+                                or live.get("userName")
+                                or live.get("name")
+                                or reserved["member"]
+                            ),
+                        }
+                    )
 
         async with self.save_lock:
             async with self._activity_lock(adapter, group):
@@ -1997,7 +2437,8 @@ class DashboardPage:
                         )
                     active = await db.fetchone(
                         "SELECT 1 FROM lotteries WHERE account=? AND group_id=? "
-                        "AND status IN ('announcing','open','blocked','drawing')",
+                        "AND status IN ('scheduled','schedule_blocked','announcing','open',"
+                        "'blocked','drawing','notice_unknown','result_unknown')",
                         (account, group),
                     )
                     lottery_values = {
@@ -2013,7 +2454,95 @@ class DashboardPage:
                         "remarks": current["lottery"]["remarks"]
                         if remarks is None
                         else remarks,
+                        "entry_phrase": current["lottery"]["entry_phrase"]
+                        if entry_phrase is None
+                        else entry_phrase,
+                        "start_at": current["lottery"]["start_at"]
+                        if start_at is None
+                        else start_at,
+                        "luckiest_bonus": current["lottery"]["luckiest_bonus"]
+                        if luckiest_bonus is None
+                        else f"{Decimal(luckiest_bonus) / 100:.2f}",
+                        "integer_packets": lottery.get(
+                            "integer_packets", current["lottery"]["integer_packets"]
+                        ),
+                        "draw_on_full": lottery.get(
+                            "draw_on_full", current["lottery"]["draw_on_full"]
+                        ),
+                        "prize_tiers": current["lottery"]["prize_tiers"]
+                        if tiers is None
+                        else [
+                            {
+                                "amount": f"{Decimal(tier['amount']) / 100:.2f}",
+                                "count": tier["count"],
+                            }
+                            for tier in tiers
+                        ],
+                        "reserved_members": current["lottery"]["reserved_members"]
+                        if resolved_reserved_members is None
+                        else [
+                            {
+                                "member": reserved["member"],
+                                "peer": reserved["peer"],
+                                "name": reserved["name"],
+                                "amount": f"{Decimal(reserved['amount']) / 100:.2f}",
+                            }
+                            for reserved in resolved_reserved_members
+                        ],
                     }
+                    resolved_tiers = [
+                        {
+                            "amount": int(Decimal(tier["amount"]) * 100),
+                            "count": tier["count"],
+                        }
+                        for tier in lottery_values["prize_tiers"]
+                    ]
+                    resolved_reservations = [
+                        {
+                            "member": reserved["member"],
+                            "peer": reserved["peer"],
+                            "name": reserved["name"],
+                            "amount": int(Decimal(reserved["amount"]) * 100),
+                        }
+                        for reserved in lottery_values["reserved_members"]
+                    ]
+                    if "lottery" in body:
+                        try:
+                            validate_luckiest_bonus(
+                                int(Decimal(lottery_values["luckiest_bonus"]) * 100),
+                                packet_mode,
+                            )
+                            if packet_mode == "prize" and (
+                                lottery_values["integer_packets"]
+                                or lottery_values["draw_on_full"]
+                            ):
+                                raise ValueError("整数元及满员开奖仅支持红包活动")
+                            if (
+                                lottery_values["integer_packets"]
+                                and int(Decimal(lottery_values["luckiest_bonus"]) * 100)
+                                % 100
+                            ):
+                                raise ValueError("整数元红包的额外奖励也须为整元")
+                            if packet_mode != "prize":
+                                packet_plan(
+                                    total_amount,
+                                    capacity,
+                                    packet_mode,
+                                    resolved_tiers,
+                                    generate=False,
+                                    integer_packets=lottery_values["integer_packets"],
+                                )
+                                validate_reserved_members(
+                                    resolved_reservations, resolved_tiers
+                                )
+                                if resolved_reservations and packet_mode != "tiered":
+                                    raise ValueError("指定档位成员仅支持分档拼手气")
+                            elif resolved_tiers:
+                                raise ValueError("奖品抽奖不能设置红包金额档位")
+                            elif resolved_reservations:
+                                raise ValueError("奖品抽奖不能设置指定档位成员")
+                        except ValueError as exc:
+                            raise ApiError(str(exc), status_code=400) from None
                     if (
                         "lottery" in body
                         and active
@@ -2035,7 +2564,9 @@ class DashboardPage:
                         await db.execute(
                             "UPDATE lottery_settings SET prize=?,winners=?,duration=?,"
                             "capacity=?,invite_gate=?,contact=?,total_amount=?,packet_mode=?,"
-                            "by_invites=?,remarks=? WHERE account=? AND group_id=?",
+                            "by_invites=?,remarks=?,entry_phrase=?,prize_tiers=?,start_at=?,luckiest_bonus=?,"
+                            "integer_packets=?,draw_on_full=?,reserved_members=? "
+                            "WHERE account=? AND group_id=?",
                             (
                                 prize,
                                 winners,
@@ -2047,6 +2578,13 @@ class DashboardPage:
                                 packet_mode,
                                 int(by_invites),
                                 lottery_values["remarks"],
+                                lottery_values["entry_phrase"],
+                                json.dumps(resolved_tiers),
+                                lottery_values["start_at"],
+                                int(Decimal(lottery_values["luckiest_bonus"]) * 100),
+                                int(lottery_values["integer_packets"]),
+                                int(lottery_values["draw_on_full"]),
+                                json.dumps(resolved_reservations, ensure_ascii=True),
                                 account,
                                 group,
                             ),
@@ -2063,6 +2601,279 @@ class DashboardPage:
                 )
                 guard()
                 return ok(result)
+
+    async def lottery_control(self):
+        """Control a saved round using explicit dashboard authority.
+
+        Returns:
+            Creation or cancellation result and current activity snapshot.
+
+        Raises:
+            ApiError: If identity, scope, settings or native authority changed.
+        """
+        from .open_store import OpenError
+
+        service = await self.authorize()
+        body = await request.json()
+        if (
+            type(body) is not dict
+            or set(body) - {"draw_at"}
+            != {
+                "bot_id",
+                "group_id",
+                "revision",
+                "operation_id",
+                "action",
+                "lottery_id",
+            }
+            or any(type(body[key]) is not str for key in body)
+            or body["action"] not in {"start", "cancel", "reschedule"}
+            or ("draw_at" in body) != (body["action"] == "reschedule")
+            or not 16 <= len(body["operation_id"]) <= 64
+            or not all(
+                char.isascii() and (char.isalnum() or char in "-_")
+                for char in body["operation_id"]
+            )
+        ):
+            raise ApiError("抽奖控制参数无效", status_code=400)
+        deadline = 0
+        if body["action"] == "reschedule":
+            try:
+                deadline = parse_start_at(body["draw_at"], future=True)
+                if not deadline:
+                    raise ValueError("开奖时间不能为空")
+            except ValueError as exc:
+                raise ApiError(
+                    str(exc).replace("开始时间", "开奖时间"), status_code=400
+                ) from None
+        try:
+            config = service.get_bot(body["bot_id"])["bot"]
+        except ValueError:
+            raise ApiError("旺商聊实例不存在", status_code=404) from None
+        adapter = self._adapter(body["bot_id"])
+        integrated = getattr(getattr(self, "plugin", None), "open_service", None)
+        activities = getattr(getattr(self, "plugin", None), "activities", None)
+        if (
+            not adapter
+            or not activities
+            or not integrated
+            or not integrated.active
+            or not integrated.integrated
+        ):
+            raise ApiError("当前活动服务不可用", status_code=503)
+        group, actor = body["group_id"], "dashboard/" + request.username
+        scope = self._scope_guard(service, config, group, adapter)
+        scope()
+        try:
+            members = await integrated.roster(adapter, group)
+        except (OpenError, ProtocolError):
+            raise ApiError(
+                "无法核验本群成员与原生管理权限，请核对机器人权限后刷新",
+                status_code=409,
+            ) from None
+        scope()
+        tenant = dict(integrated.tenants.get((str(adapter.account), group), {}))
+        if not tenant or not tenant.get("active") or tenant.get("paused"):
+            raise ApiError("当前群未开通或已暂停", status_code=409)
+        authority = integrated.rpc.control_guard(adapter, tenant, members)
+        managers = [
+            uid
+            for uid in tenant.get("managers", [])
+            if members.get(uid, {}).get("groupRole")
+            in {"GROUP_ROLE_OWNER", "GROUP_ROLE_ADMIN"}
+        ]
+        if not managers:
+            raise ApiError(
+                "本群暂无已核验的负责管理员，请先在开通页面设置", status_code=409
+            )
+        manager = managers[0]
+
+        def guard():
+            scope()
+            try:
+                authority()
+                activities.authorize(adapter, group, manager, actor, posting=True)
+            except (OpenError, ProtocolError):
+                raise ApiError(
+                    "当前群、机器人或负责管理员授权已变化，请刷新核对",
+                    status_code=409,
+                ) from None
+            if (
+                not self.active
+                or getattr(self.plugin, "activities", None) is not activities
+                or not integrated.active
+                or integrated.member_evidence.get((str(adapter.account), group), {})
+                .get(manager, {})
+                .get("groupRole")
+                not in {"GROUP_ROLE_OWNER", "GROUP_ROLE_ADMIN"}
+            ):
+                raise ApiError(
+                    "活动服务或负责管理员权限已变化，请刷新核对", status_code=409
+                )
+
+        async with activities.lock(adapter, group):
+            guard()
+            current = await asyncio.to_thread(
+                self._activity_snapshot, adapter, config, group
+            )
+            guard()
+            if current["revision"] != body["revision"]:
+                raise ApiError("活动参数已变化，请刷新后重新操作", status_code=409)
+            if body["action"] == "start":
+                if body["lottery_id"]:
+                    raise ApiError("开启请求不能指定历史活动", status_code=400)
+                result = await activities._start(
+                    adapter,
+                    group,
+                    manager,
+                    actor,
+                    clean_activity_text(
+                        members[manager].get("userNick")
+                        or members[manager].get("name")
+                        or manager
+                    ),
+                    body["operation_id"],
+                    control_actor=actor,
+                    precondition=guard,
+                )
+            elif body["action"] == "reschedule":
+                identifier = hashlib.sha256(
+                    json.dumps(
+                        [adapter.account, group, actor, body["operation_id"]]
+                    ).encode()
+                ).hexdigest()
+                async with AsyncDatabase(
+                    lambda: activity_database(adapter), write=True, guard=guard
+                ) as db:
+                    previous = await db.fetchone(
+                        "SELECT * FROM lottery_controls WHERE id=?", (identifier,)
+                    )
+                    changed = previous is None
+                    if previous:
+                        if (
+                            previous["lottery"] != body["lottery_id"]
+                            or previous["action"] != "reschedule"
+                            or previous["value"] != str(deadline)
+                        ):
+                            raise ApiError(
+                                "同一请求不能修改活动或开奖时间", status_code=409
+                            )
+                    else:
+                        row = await db.fetchone(
+                            "SELECT * FROM lotteries WHERE id=? AND account=? AND group_id=?",
+                            (body["lottery_id"], adapter.account, group),
+                        )
+                        if (
+                            not row
+                            or row["status"] != "open"
+                            or not row["draw_on_full"]
+                            and row["ends"] <= time.time()
+                            or deadline <= time.time()
+                        ):
+                            raise ApiError(
+                                "活动已截止、结束或回执不明，不能调整开奖时间",
+                                status_code=409,
+                            )
+                        await db.execute(
+                            "INSERT INTO lottery_controls VALUES(?,?,?,?,?,?,?,?)",
+                            (
+                                identifier,
+                                row["id"],
+                                actor,
+                                "reschedule",
+                                str(deadline),
+                                json.dumps(
+                                    {
+                                        "ends": row["ends"],
+                                        "draw_on_full": row["draw_on_full"],
+                                    }
+                                ),
+                                time.time(),
+                                "notice_pending",
+                            ),
+                        )
+                        await db.execute(
+                            "UPDATE lotteries SET ends=?,draw_on_full=0 "
+                            "WHERE id=? AND status='open'",
+                            (deadline, row["id"]),
+                        )
+                notice_status = previous["status"] if previous else "notice_pending"
+                if changed:
+                    try:
+                        notice_status = await adapter.send_reply_text(
+                            group,
+                            f"lottery-deadline/{adapter.account}/{identifier}",
+                            f"本期抽奖改为{beijing_time(deadline)}自动公布，"
+                            "报满不提前开奖；原报名和红包金额保留。"
+                            "未领完的份额记未支出。",
+                            proactive=True,
+                            auto_recall=False,
+                            authorize=guard,
+                        )
+                    except Exception:
+                        notice_status = "notice_unknown"
+                    if notice_status != "accepted":
+                        notice_status = "notice_unknown"
+                    async with AsyncDatabase(
+                        lambda: activity_database(adapter),
+                        write=True,
+                        guard=account_guard(adapter),
+                    ) as db:
+                        await db.execute(
+                            "UPDATE lottery_controls SET status=? WHERE id=?",
+                            (notice_status, identifier),
+                        )
+                result = (
+                    f"本期已设为{beijing_time(deadline)}自动公布，报满不提前开奖；"
+                    "原报名、固定红包份额及额外奖励未改变。"
+                    + (
+                        "群变更通知已受理。"
+                        if notice_status == "accepted"
+                        else "开奖时间已保存，群变更通知未确认，不自动重发。"
+                    )
+                )
+            else:
+                async with AsyncDatabase(
+                    lambda: activity_database(adapter), write=True, guard=guard
+                ) as db:
+                    row = await db.fetchone(
+                        "SELECT * FROM lotteries WHERE id=? AND account=? AND group_id=?",
+                        (body["lottery_id"], adapter.account, group),
+                    )
+                    if not row or row["status"] not in {
+                        "scheduled",
+                        "schedule_blocked",
+                        "open",
+                        "blocked",
+                        "cancelled",
+                    }:
+                        raise ApiError(
+                            "活动已结束、正在开奖或回执不明，不能取消或重抽",
+                            status_code=409,
+                        )
+                    changed = row["status"] != "cancelled"
+                    if changed:
+                        await db.execute(
+                            "UPDATE lotteries SET status='cancelled',unclaimed_amount=CASE "
+                            "WHEN packet_amounts!='[]' THEN total_amount ELSE unclaimed_amount END WHERE id=?",
+                            (row["id"],),
+                        )
+                result = "活动已取消；未分配金额记未支出，不自动付款或退款。"
+                if changed and row["status"] in {"open", "blocked"}:
+                    await adapter.send_reply_text(
+                        group,
+                        f"lottery-cancel/{adapter.account}/{row['id']}",
+                        f"活动已取消：{row['prize']}。",
+                        proactive=True,
+                        auto_recall=False,
+                        authorize=guard,
+                    )
+            await self.authorize()
+            guard()
+            snapshot = await asyncio.to_thread(
+                self._activity_snapshot, adapter, config, group
+            )
+            return ok({"result": result, "state": snapshot})
 
     async def schedule(self):
         """Read a group's current schedule plus bounded recent execution history."""
@@ -2328,6 +3139,13 @@ class DashboardPage:
             "packet_mode": "prize",
             "by_invites": False,
             "remarks": "",
+            "entry_phrase": "参与抽奖",
+            "prize_tiers": [],
+            "reserved_members": [],
+            "start_at": "",
+            "luckiest_bonus": "0.00",
+            "integer_packets": False,
+            "draw_on_full": False,
         }
         invitation = {
             "rate": "0.00",
@@ -2383,6 +3201,41 @@ class DashboardPage:
                                 "remarks": row["remarks"]
                                 if "remarks" in row.keys()
                                 else "",
+                                "start_at": row["start_at"]
+                                if "start_at" in row.keys()
+                                else "",
+                                "luckiest_bonus": f"{Decimal(row['luckiest_bonus']) / 100:.2f}"
+                                if "luckiest_bonus" in row.keys()
+                                else "0.00",
+                                "integer_packets": bool(row["integer_packets"])
+                                if "integer_packets" in row.keys()
+                                else False,
+                                "draw_on_full": bool(row["draw_on_full"])
+                                if "draw_on_full" in row.keys()
+                                else False,
+                                "entry_phrase": row["entry_phrase"]
+                                if "entry_phrase" in row.keys()
+                                else DEFAULT_ENTRY_PHRASE,
+                                "prize_tiers": [
+                                    {
+                                        "amount": f"{Decimal(tier['amount']) / 100:.2f}",
+                                        "count": tier["count"],
+                                    }
+                                    for tier in json.loads(row["prize_tiers"])
+                                ]
+                                if "prize_tiers" in row.keys()
+                                else [],
+                                "reserved_members": [
+                                    {
+                                        "member": reserved["member"],
+                                        "peer": reserved["peer"],
+                                        "name": reserved["name"],
+                                        "amount": f"{Decimal(reserved['amount']) / 100:.2f}",
+                                    }
+                                    for reserved in json.loads(row["reserved_members"])
+                                ]
+                                if "reserved_members" in row.keys()
+                                else [],
                             }
                     if "invite_rules" in tables:
                         rule_columns = {
@@ -2452,49 +3305,79 @@ class DashboardPage:
                             invitation.update(active_count=row[0], left_count=row[1])
                     if "lotteries" in tables:
                         row = db.execute(
-                            "SELECT rowid AS number,id,prize,winners,duration,capacity,"
-                            "invite_gate,contact,status,ends,created,total,error "
+                            "SELECT rowid AS number,* "
                             "FROM lotteries WHERE account=? AND group_id=? "
                             "ORDER BY created DESC LIMIT 1",
                             (account, group),
                         ).fetchone()
                         if row:
-                            current = dict(row)
-                            packet_columns = {
-                                field["name"]
-                                for field in db.execute("PRAGMA table_info(lotteries)")
+                            # Keep internal commands, packet pools and identities private.
+                            current = {
+                                field: row[field]
+                                for field in (
+                                    "number",
+                                    "id",
+                                    "prize",
+                                    "winners",
+                                    "duration",
+                                    "capacity",
+                                    "invite_gate",
+                                    "contact",
+                                    "status",
+                                    "ends",
+                                    "created",
+                                    "total",
+                                    "error",
+                                )
                             }
+                            packet_columns = set(row.keys())
+                            for flag in ("integer_packets", "draw_on_full"):
+                                current[flag] = (
+                                    bool(row[flag]) if flag in packet_columns else False
+                                )
+                            current["starts"] = (
+                                row["starts"] if "starts" in packet_columns else 0
+                            )
+                            current["luckiest_bonus"] = "0.00"
+                            if "luckiest_bonus" in packet_columns:
+                                current["luckiest_bonus"] = (
+                                    f"{Decimal(row['luckiest_bonus']) / 100:.2f}"
+                                )
+                            if {"entry_phrase", "prize_tiers"} <= packet_columns:
+                                current.update(
+                                    entry_phrase=row["entry_phrase"],
+                                    prize_tiers=[
+                                        {
+                                            "amount": f"{Decimal(tier['amount']) / 100:.2f}",
+                                            "count": tier["count"],
+                                        }
+                                        for tier in json.loads(row["prize_tiers"])
+                                    ],
+                                )
                             if {
                                 "total_amount",
                                 "packet_mode",
                                 "by_invites",
                             } <= packet_columns:
-                                packet = db.execute(
-                                    "SELECT total_amount,packet_mode,by_invites FROM lotteries WHERE id=?",
-                                    (row["id"],),
-                                ).fetchone()
                                 current.update(
-                                    total_amount=f"{Decimal(packet['total_amount']) / 100:.2f}",
-                                    packet_mode=packet["packet_mode"],
-                                    by_invites=bool(packet["by_invites"]),
+                                    total_amount=f"{Decimal(row['total_amount']) / 100:.2f}",
+                                    packet_mode=row["packet_mode"],
+                                    by_invites=bool(row["by_invites"]),
                                 )
                             if {
                                 "remarks",
                                 "packet_amounts",
                                 "unclaimed_amount",
                             } <= packet_columns:
-                                detail = db.execute(
-                                    "SELECT remarks,packet_amounts,unclaimed_amount,results "
-                                    "FROM lotteries WHERE id=?",
-                                    (row["id"],),
-                                ).fetchone()
-                                allocations = json.loads(detail["results"])
+                                allocations = json.loads(row["results"])
                                 current.update(
-                                    remarks=detail["remarks"],
-                                    fixed_packets=detail["packet_amounts"] != "[]",
+                                    remarks=row["remarks"],
+                                    fixed_packets=row["packet_amounts"] != "[]",
                                     allocated_amount=f"{Decimal(sum(item.get('amount', 0) for item in allocations)) / 100:.2f}",
                                     allocated_count=len(allocations),
-                                    unclaimed_amount=f"{Decimal(detail['unclaimed_amount']) / 100:.2f}",
+                                    unclaimed_amount=f"{Decimal(row['unclaimed_amount']) / 100:.2f}",
+                                    bonus_allocated_amount=f"{Decimal(sum(item.get('bonus_amount', 0) for item in allocations)) / 100:.2f}",
+                                    total_payable_amount=f"{Decimal(sum(item.get('amount', 0) + item.get('bonus_amount', 0) for item in allocations)) / 100:.2f}",
                                 )
                             current["entries"] = (
                                 db.execute(

@@ -53,21 +53,31 @@ class _MalformedStreamingErrorRunner(_StreamingErrorRunner):
 
 
 @pytest.mark.asyncio
-async def test_event_can_buffer_one_logical_tool_reply():
+@pytest.mark.parametrize("streaming", [True, False])
+async def test_event_can_buffer_one_logical_tool_reply(streaming):
     class Runner(_StreamingErrorRunner):
-        streaming = False
-
         async def step(self):
+            if self.streaming:
+                yield AgentResponse(
+                    type="streaming_delta",
+                    data={"chain": MessageChain().message("Working. ")},
+                )
             yield AgentResponse(type="llm_result", data={"chain": MessageChain().message("Working. ")})
+            if self.streaming:
+                yield AgentResponse(
+                    type="streaming_delta",
+                    data={"chain": MessageChain().message("Done.")},
+                )
             yield AgentResponse(type="llm_result", data={"chain": MessageChain().message("Done.")})
             self.finished = True
 
     runner = Runner("")
+    runner.streaming = streaming
     ev = runner.run_context.context.event
     ev.get_extra = lambda key: True if key == "buffer_intermediate_messages" else None
     ev.set_result = lambda result: None
     ev.clear_result = lambda: None
-    replies = [reply async for reply in run_agent(runner)]
+    replies = [reply async for reply in run_agent(runner, stream_to_general=streaming)]
     assert len(replies) == 1
     assert replies[0].get_plain_text().split() == ["Working.", "Done."]
 

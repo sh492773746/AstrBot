@@ -538,9 +538,6 @@ async def control_quotes(service, actor, payload):
             receiver = run.adapters[run.ACCOUNTS[1]]
             if getattr(receiver, "test_window", None) is run.window:
                 receiver.test_window = None
-            sender = run.adapters[run.ACCOUNTS[2]]
-            if getattr(sender, "test_command_window", None) is run.window:
-                sender.test_command_window = None
             service.quote_rehearsal = None
         return {"status": "closed", "phone_rendering_verified": False}
     if run is None:
@@ -688,23 +685,12 @@ def observe_reply(service, adapter, group, outer, inner):
     mid = str(outer.get(12, ""))
     image = None
     if inner.format == 1:
-        from .feature_image import REVIEWED_ASSETS, ImageMessage
-        from .native_guide_upload import ONBOARDING_GUIDES
+        from .feature_image import ImageMessage
 
         raw = inner.SerializeToString()
         if len(raw) > 4096:
             return False
         decoded = ImageMessage.FromString(raw)
-        assets = {
-            REVIEWED_ASSETS[digest]: digest
-            for _, digest in ONBOARDING_GUIDES.values()
-            if digest in REVIEWED_ASSETS
-        }
-        fixed = (
-            decoded.image.asset.uri in assets
-            and decoded.image.width == 1024
-            and decoded.image.height == 1024
-        )
         if (
             not decoded.HasField("image")
             or decoded.HasField("content")
@@ -713,24 +699,13 @@ def observe_reply(service, adapter, group, outer, inner):
             or decoded.image.is_sticker
         ):
             return False
-        if fixed:
-            image = {
-                "asset": decoded.image.asset.uri,
-                "digest": assets[decoded.image.asset.uri],
-                "width": decoded.image.width,
-                "height": decoded.image.height,
-                "size": decoded.image.size,
-            }
-        else:
-            rules = getattr(service, "rule_replies", None)
-            image = (
-                rules.media.test_asset(receiver, window, decoded, outer)
-                if rules
-                else None
-            )
-            if image is None:
-                return False
-            scheduled = decoded
+        rules = getattr(service, "rule_replies", None)
+        image = (
+            rules.media.test_asset(receiver, window, decoded, outer) if rules else None
+        )
+        if image is None:
+            return False
+        scheduled = decoded
         text = ""
     else:
         text = (
@@ -783,121 +758,6 @@ def observe_reply(service, adapter, group, outer, inner):
     service.candidate_tasks.add(task)
     task.add_done_callback(service.candidate_tasks.discard)
     return True
-
-
-async def send_guides(service, actor, payload):
-    """Replay only the two reviewed guides inside the original controlled window.
-
-    Args:
-        service: Existing integrated service and its authenticated adapters.
-        actor: Dashboard identity, never a chat-supplied actor.
-        payload: One fixed-shape test operation ID.
-
-    Returns:
-        Native receipts without claiming first-friend or phone-display evidence.
-
-    Raises:
-        OpenError: If the original window, identities or exact roster changed.
-    """
-    from astrbot.core.platform.sources.wangshangliao.database import account_guard
-    from astrbot.core.platform.sources.wangshangliao.test_window import TestWindow
-
-    from .feature_image import FeatureGuides
-
-    if (
-        not actor.startswith("dashboard/")
-        or set(payload) != {"operation_id"}
-        or type(payload["operation_id"]) is not str
-        or not re.fullmatch(
-            r"WSL_TEST_GUIDES_[A-Za-z0-9]{8,64}", payload["operation_id"]
-        )
-    ):
-        raise OpenError("test_guides_arguments")
-    adapters = {str(a.account): a for a in service.adapters()}
-    observer, receiver = adapters.get("23691273"), adapters.get("43506527")
-    window = getattr(receiver, "test_window", None)
-    if not isinstance(window, TestWindow) or observer is None:
-        raise OpenError("test_guides_window")
-    group, team = "1459282", receiver.groups.get("1459282")
-    ledger, business, nim = receiver.ledger, receiver.business, receiver.nim
-    frozen = account_guard(receiver)
-    operation = "test-guides/" + payload["operation_id"]
-    tenant = service.tenants.get((receiver.account, group), {})
-    epoch, version = tenant.get("epoch"), tenant.get("version")
-
-    def guard():
-        frozen()
-        current = service.tenants.get((receiver.account, group), {})
-        if (
-            not service.integrated
-            or not service.active
-            or service.settings["paused"]
-            or getattr(service, "capacity_paused", False)
-            or receiver.test_window is not window
-            or window.receiver is not receiver
-            or window.sender is not observer
-            or window.groups != [group]
-            or window.scopes != ["group_commands"]
-            or not window.active()
-            or not getattr(window, "_witness_id", "")
-            or not team
-            or receiver.groups.get(group) != team
-            or receiver.group_catalog.get(group, {}).get("team") != team
-            or receiver.ledger is not ledger
-            or receiver.business is not business
-            or receiver.nim is not nim
-            or receiver.connection_state != "online"
-            or observer.connection_state != "online"
-            or not current.get("active")
-            or not current.get("present")
-            or current.get("paused")
-            or current.get("epoch") != epoch
-            or current.get("version") != version
-            or service.store.tenant(receiver.account, group) != current
-            or (receiver.account, group) in service.suspended_groups
-            or getattr(service, "membership_receiving", {}).get(
-                (receiver.account, group)
-            )
-        ):
-            raise OpenError("test_guides_window")
-
-    guard()
-    directory = await member_directory(business, group)
-    guard()
-    members = {str(m["userId"]): m for m in directory["groupMemberInfo"]}
-    if (
-        not directory["complete"]
-        or set(members) != {"31846829", "43506527", "23691273"}
-        or members["31846829"]["groupRole"] != "GROUP_ROLE_OWNER"
-        or members["23691273"]["groupRole"] != "GROUP_ROLE_MEMBER"
-        or str(members["23691273"]["nimId"]) != str(observer.nim_account)
-        or str(members["43506527"]["nimId"]) != str(receiver.nim_account)
-        or any(m.get("accountState") != "ACCOUNT_STATE_GOOD" for m in members.values())
-    ):
-        raise OpenError("test_guides_roster")
-    if operation not in window.outbound_keys:
-        if window.outbound_remaining < 2:
-            raise OpenError("test_guides_budget")
-        for kind in ("instructions", "examples"):
-            prior = await ledger.receipt(operation + "/guide-" + kind)
-            guard()
-            if prior is not None:
-                raise OpenError("test_guides_historical")
-        if operation not in window.outbound_keys:
-            if window.outbound_remaining < 2:
-                raise OpenError("test_guides_budget")
-            window.outbound_keys.add(operation)
-            window.outbound_remaining -= 2
-    status = await FeatureGuides().send_group(receiver, group, team, operation, guard)
-    return {
-        "status": status,
-        "receipts": {
-            kind: await ledger.receipt(operation + "/guide-" + kind)
-            for kind in ("instructions", "examples")
-        },
-        "first_welcome": False,
-        "phone_display_verified": False,
-    }
 
 
 async def send_probe(service, actor, payload):
@@ -978,7 +838,7 @@ async def send_probe(service, actor, payload):
 
         if not (
             "group_commands" in window.scopes
-            and runtime.recognize(text)
+            and (runtime.recognize(text) or window.lottery_command(group, text))
             or "group_rules" in window.scopes
             and any(word in text for word in window.keywords)
         ):

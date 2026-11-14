@@ -1,5 +1,6 @@
 """Individual chat unmute uses existing native identity and authorization gates."""
 
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -105,44 +106,33 @@ async def test_unmute_does_not_guess_a_target_from_text(setup, kind):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("private", [False, True])
-async def test_number_menu_unmute_previews_then_submits_only_one_scoped_member(
-    setup, private
-):
-    value, _, event = setup
+async def test_removed_unmute_number_menu_never_opens_a_selection(setup, private):
+    value, engine, event = setup
     if private:
         event.is_private_chat = lambda: True
         event.get_group_id = lambda: ""
         event.eligible = True
-        value.verify_actor = AsyncMock()
-        await step(value, event, "群列表", native=True)
-        await step(value, event, "选择群 1", native=True)
-    for text in ("菜单", "4"):
-        await step(value, event, text, native=True)
-    reply = await step(value, event, "7", native=True)
-    assert ("群序号" if private else "成员序号") in reply
-    if private:
-        assert "当前禁言名单" in await step(value, event, "1", native=True)
-    assert "即将执行：解禁 1" in await step(value, event, "1", native=True)
+    for text in ("群列表", "选择群 1", "菜单", "4", "7", "1", "1"):
+        assert not recognize_integrated(text)
+        assert not value.navigation.accepts(event, text)
+        assert await step(value, event, text, native=True) == ""
+    assert not value.navigation.sessions
+    assert not engine.selections
+    event.platform.nim.get_team_muted_members.assert_not_awaited()
+    event.platform.get_moderation_members.assert_not_awaited()
     event.platform.execute_action.assert_not_awaited()
-    assert "解禁已受理" in await step(value, event, "1", native=True)
-    request = event.platform.execute_action.call_args.args[0]
-    assert request.action == "unmute"
-    assert str(request.group) == "5" and str(request.member) == "3"
-    event.platform.execute_action.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["revoke", "cancel", "group", "sender", "version"])
-async def test_prepared_unmute_cannot_survive_authority_or_conversation_changes(
+@pytest.mark.parametrize("change", ["revoke", "group", "sender", "expired"])
+async def test_group_mute_selection_cannot_bypass_scope_or_current_authority(
     setup, change
 ):
-    value, _, event = setup
-    for text in ("菜单", "4", "7", "1"):
-        await step(value, event, text, native=True)
+    value, engine, event = setup
+    assert "1. Target" in await step(value, event, "禁言名单", native=True)
+    event.platform.execute_action.assert_not_awaited()
     if change == "revoke":
         value.management.assignments[value.management.key(event.platform, "5")] = ()
-    elif change == "cancel":
-        await step(value, event, "取消", native=True)
     elif change == "group":
         event.message_obj.group_id = "6"
     elif change == "sender":
@@ -151,8 +141,9 @@ async def test_prepared_unmute_cannot_survive_authority_or_conversation_changes(
         )
         event.message_obj.sender.user_id = "3"
     else:
-        value.tenants[("1", "5")]["version"] += 1
-    await step(value, event, "1", native=True)
+        for selection in engine.selections.values():
+            selection["expires"] = 0
+    assert await step(value, event, "解禁 1", native=True)
     event.platform.execute_action.assert_not_awaited()
 
 
@@ -165,9 +156,8 @@ async def test_unmute_rejects_ordinary_users_and_cross_group_managers(setup, pri
         event.is_private_chat = lambda: True
         event.get_group_id = lambda: ""
         event.eligible = True
-        value.verify_actor = AsyncMock()
-        assert "Group 5" not in await step(value, event, "群列表", native=True)
-    await step(value, event, "解禁 3", native=True)
+    reply = await step(value, event, "解禁 3", native=True)
+    assert reply == ("" if private else "无权限")
     event.platform.execute_action.assert_not_awaited()
 
 
@@ -181,19 +171,25 @@ async def test_unmute_rechecks_native_bot_privileges(setup):
 
 
 @pytest.mark.asyncio
-async def test_private_unmute_needs_a_current_member_selection(setup):
-    value, _, event = setup
+async def test_private_unmute_is_blocked_even_with_a_forged_member_selection(setup):
+    value, engine, event = setup
     event.is_private_chat = lambda: True
     event.get_group_id = lambda: ""
     event.eligible = True
-    value.verify_actor = AsyncMock()
-    await step(value, event, "群列表", native=True)
-    await step(value, event, "选择群 1", native=True)
-    assert "禁言名单编号无效" in await step(value, event, "解禁 3", native=True)
-    await step(value, event, "成员列表", native=True)
-    await step(value, event, "群列表", native=True)
-    assert "Group 6" in await step(value, event, "选择群 2", native=True)
-    assert "禁言名单编号无效" in await step(value, event, "解禁 3", native=True)
+    engine.selections[
+        (id(event.platform), "1", event.get_sender_id(), event.unified_msg_origin)
+    ] = {
+        "group": "5",
+        "expires": time.monotonic() + 600,
+        "kind": "muted",
+        "members": [{"userId": "3", "nimId": "903"}],
+    }
+    assert value.navigation.key(event) is None
+    assert await engine.run(event, "解禁 1") is None
+    assert await step(value, event, "解禁 1", native=True) == ""
+    assert event.is_stopped()
+    event.platform.nim.get_team_muted_members.assert_not_awaited()
+    event.platform.get_moderation_members.assert_not_awaited()
     event.platform.execute_action.assert_not_awaited()
 
 
@@ -214,18 +210,19 @@ async def test_unmute_revocation_during_member_lookup_prevents_submission(setup)
 @pytest.mark.asyncio
 async def test_unmute_transports_the_guard_and_ai_still_cannot_execute(setup):
     value, engine, event = setup
-    for text in ("菜单", "4", "7", "1"):
-        await step(value, event, text, native=True)
+    assert "1. Target" in await step(value, event, "禁言名单", native=True)
 
     async def revoke_before_submit(request, *, authorize):
         assert request.action == "unmute"
+        assert str(request.group) == "5" and str(request.member) == "3"
+        assert request.expected_nim == "903"
         value.management.assignments[value.management.key(event.platform, "5")] = ()
         with pytest.raises(ProtocolError):
             await authorize()
         return {"status": "rejected", "submitted": False}
 
     event.platform.execute_action.side_effect = revoke_before_submit
-    assert "解禁已受理" not in await step(value, event, "1", native=True)
+    assert "解禁已受理" not in await step(value, event, "解禁 1", native=True)
     assert await engine.execute(event, "解禁", "3", ai=True) == {
         "status": "rejected",
         "reason": "ai_management_retired",
@@ -236,37 +233,18 @@ async def test_unmute_transports_the_guard_and_ai_still_cannot_execute(setup):
 @pytest.mark.asyncio
 async def test_unmute_unknown_receipt_is_not_reported_as_success_or_retried(setup):
     value, _, event = setup
-    for text in ("菜单", "4", "7", "1"):
-        await step(value, event, text, native=True)
+    assert "1. Target" in await step(value, event, "禁言名单", native=True)
     event.platform.execute_action.return_value = {"status": "unknown"}
-    reply = await step(value, event, "1", native=True)
+    reply = await step(value, event, "解禁 1", native=True)
     assert "未知，不自动重试" in reply and "操作ID" in reply
     assert "解禁已受理" not in reply
-    await step(value, event, "1", native=True, pace=False)
+    await step(value, event, "解禁 1", native=True, pace=False)
     event.platform.execute_action.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_private_wizard_starts_with_only_the_callers_groups(setup):
-    value, _, event = setup
-    event.is_private_chat = lambda: True
-    event.get_group_id = lambda: ""
-    event.eligible = True
-    value.verify_actor = AsyncMock()
-    value.management.assignments[value.management.key(event.platform, "6")] = ()
-    for text in ("菜单", "4"):
-        await step(value, event, text)
-    reply = await step(value, event, "7")
-    assert "Group 5" in reply and "Group 6" not in reply
-    assert not event.platform.nim.get_team_muted_members.await_count
-    reply = await step(value, event, "1")
-    assert "1. Target" in reply and ". Manager" not in reply and ". Bot" not in reply
-    event.platform.execute_action.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("response", ["empty", "incomplete", "error"])
-async def test_empty_or_failed_mute_queries_do_not_open_a_member_prompt(
+async def test_empty_or_failed_mute_queries_do_not_create_an_actionable_selection(
     setup, response
 ):
     value, _, event = setup
@@ -277,12 +255,10 @@ async def test_empty_or_failed_mute_queries_do_not_open_a_member_prompt(
         query.return_value = {"904"}
     else:
         query.side_effect = ProtocolError("http_timeout")
-    for text in ("菜单", "4"):
-        await step(value, event, text)
-    reply = await step(value, event, "7")
-    assert "成员序号" not in reply
+    reply = await step(value, event, "禁言名单", native=True)
     assert ("没有可解禁" if response == "empty" else "无法获取") in reply
-    assert value.navigation.sessions[value.navigation.key(event)].pending is None
+    assert not value.navigation.sessions
+    assert "禁言名单编号无效" in await step(value, event, "解禁 1", native=True)
     event.platform.execute_action.assert_not_awaited()
 
 
@@ -307,20 +283,18 @@ async def test_failed_refresh_invalidates_the_previous_mute_selection(setup):
 
 
 @pytest.mark.asyncio
-async def test_expired_mute_during_confirmation_is_a_noop(setup):
+async def test_member_no_longer_muted_after_selection_is_a_noop(setup):
     value, _, event = setup
-    for text in ("菜单", "4", "7", "1"):
-        await step(value, event, text)
+    assert "1. Target" in await step(value, event, "禁言名单", native=True)
     event.platform.nim.get_team_muted_members.return_value = set()
-    assert "无需解禁" in await step(value, event, "1")
+    assert "无需解禁" in await step(value, event, "解禁 1", native=True)
     event.platform.execute_action.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_unmute_guard_rechecks_platform_status_at_submission(setup):
     value, _, event = setup
-    for text in ("菜单", "4", "7", "1"):
-        await step(value, event, text)
+    assert "1. Target" in await step(value, event, "禁言名单", native=True)
 
     async def stop_before_submit(request, *, authorize):
         event.platform.nim.get_team_muted_members.return_value = set()
@@ -329,5 +303,5 @@ async def test_unmute_guard_rechecks_platform_status_at_submission(setup):
         return {"status": "rejected", "submitted": False}
 
     event.platform.execute_action.side_effect = stop_before_submit
-    assert "解禁已受理" not in await step(value, event, "1")
+    assert "解禁已受理" not in await step(value, event, "解禁 1", native=True)
     event.platform.execute_action.assert_awaited_once()

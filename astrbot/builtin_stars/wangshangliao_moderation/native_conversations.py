@@ -64,7 +64,9 @@ class NativeConversations:
             OpenError: If the selected conversation has a different owner.
         """
         parts = origin.split(":", 2)
-        if len(parts) != 3 or parts[1] not in {"FriendMessage", "GroupMessage"}:
+        if len(parts) == 3 and parts[1] == "FriendMessage":
+            raise OpenError("private_messages_retired")
+        if len(parts) != 3 or parts[1] != "GroupMessage":
             raise OpenError("conversation_scope_invalid")
         dialogue = Dialogue(origin, title, persona, max(2, min(40, turns * 2)))
         if fresh:
@@ -101,6 +103,9 @@ class NativeConversations:
             dialogue: Snapshot prepared without creating a conversation.
             guard: Current account, session, profile and budget authorization.
         """
+        parts = dialogue.origin.split(":", 2)
+        if len(parts) != 3 or parts[1] != "GroupMessage":
+            raise OpenError("conversation_scope_invalid")
         guard()
         if dialogue.cid is None:
             dialogue.cid = await self.manager.new_conversation(
@@ -121,6 +126,9 @@ class NativeConversations:
         Raises:
             OpenError: If the snapshot is no longer the current owned record.
         """
+        parts = dialogue.origin.split(":", 2)
+        if len(parts) != 3 or parts[1] != "GroupMessage":
+            raise OpenError("conversation_scope_invalid")
         if await self.manager.get_curr_conversation_id(dialogue.origin) != dialogue.cid:
             raise OpenError("conversation_changed")
         conversation = await self.manager.get_conversation(
@@ -145,6 +153,9 @@ class NativeConversations:
             guard: Final account/session or group authorization check.
             token_usage: Validated provider usage, or None if unavailable.
         """
+        parts = dialogue.origin.split(":", 2)
+        if len(parts) != 3 or parts[1] != "GroupMessage":
+            raise OpenError("conversation_scope_invalid")
         try:
             guard()
             await self.current(dialogue)

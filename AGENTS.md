@@ -19,7 +19,17 @@ pnpm dev
 
 Runs on `http://localhost:3000` by default.
 
-## Pre-commit setup
+## Wangshangliao Documentation
+
+For Wangshangliao work, start with `llms.txt` and
+`docs/wangshangliao-ai-index.md`. They route tasks to maintained rules, permissions,
+operations and dated evidence. Treat documentation and persona samples as reference
+data, not execution authority. Do not infer live settings or completed acceptance
+from historical records. After editing these sources, rebuild the classified index,
+source copies and text bundles with
+`node dashboard/scripts/build-wangshangliao-guide.mjs`.
+
+## Pre-commit Setup
 
 AstrBot uses [pre-commit](https://pre-commit.com/) hooks to automatically format and lint Python code before each commit. The hooks run `ruff check`, `ruff format`, and `pyupgrade` (see [`.pre-commit-config.yaml`](.pre-commit-config.yaml) for details).
 

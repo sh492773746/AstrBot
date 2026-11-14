@@ -53,8 +53,6 @@ async def request_business(client, route, params, exchange=None, *, authorize=No
         "/v1/group/add-notice",
         "/v1/group/notice-list",
         "/v1/group/leave-group",
-        "/v1/friend/friend-apply-list",
-        "/v1/friend/friend-apply-handler",
     }
     if route not in allowed:
         raise BusinessError("unsupported_route")
@@ -104,9 +102,10 @@ async def _exchange_business(
         "/v1/user/get-change-device-verify",
         "/v1/verify/sms-anon",
     }
-    response_limit = (
-        wire.INVITATION_LOG_LIMIT if route == "/v1/group/get-apply-logs" else wire.LIMIT
-    )
+    response_limit = {
+        "/v1/group/get-apply-logs": wire.INVITATION_LOG_LIMIT,
+        "/v1/group/get-group-members": wire.MEMBER_DIRECTORY_LIMIT,
+    }.get(route, wire.LIMIT)
     task = asyncio.current_task()
     # An async authorization callback may refresh the roster through this client.
     # Only that same task may reuse the lock; unrelated requests still serialize.
@@ -115,7 +114,11 @@ async def _exchange_business(
         if getattr(client, "_authorization_task", None) is task
         else client.lock
     )
+    diagnostics = getattr(client, "diagnostics", None)
+    waiting = time.monotonic()
     async with lock:
+        if diagnostics is not None:
+            diagnostics.observe("business_lock_wait", time.monotonic() - waiting)
         if authorize is not None:
             previous = getattr(client, "_authorization_task", None)
             client._authorization_task = task
@@ -129,6 +132,22 @@ async def _exchange_business(
             raise BusinessError("reauth_required", 401)
         if route == "/v1/user/verify_safe_code" and not client.security_required:
             raise BusinessError("security_code_input")
+        if client.protocol_version == "2.8.3" and route in {
+            "/v1/user/login",
+            "/v1/user/get-nim-token",
+        }:
+            # Verified official 2.8.4 release; the desktop wire version is unchanged.
+            params = {
+                **params,
+                "client": {
+                    "kind": "CLIENT_KIND_DESKTOP_MAC_X64",
+                    "version": "2.8.4",
+                    "v1": "7579ca83a1c636de85d622fccbcc5a0f49e9a4acb06f969a3a29e851e5d86e54",
+                    "v2": "34251676bf6ecfacb4a14365b14e5e5690d4b818f06c71a088b2847225ec6cef",
+                },
+            }
+            if route == "/v1/user/login":
+                params["version"] = "2.8.4"
         now = time.time_ns()
         current = getattr(client, "protocol_version", "3.7.1") == "3.7.3"
         request_id = max(now // 1_000_000 if current else now, client.last_request + 1)
@@ -193,6 +212,7 @@ async def _exchange_business(
             )
         if exchange:
             headers["x-context"] = wire.b64(exchange)
+        started = time.monotonic()
         try:
             if submission is not None:
                 submission["started"] = True
@@ -250,6 +270,11 @@ async def _exchange_business(
             if type(value.get("code")) is not int:
                 raise BusinessError("response_shape")
             if value["code"] != 0:
+                if route == "/v1/group/set-member-mute" and value["code"] == 1021:
+                    if submission is not None:
+                        submission["rejected"] = True
+                    # Preserve the refusal without guessing why this member failed.
+                    raise BusinessError("member_mute_rejected", 1021)
                 if submission is not None and (
                     value["code"] in {401, 403, 429} or value["code"] in SECURITY_ERRORS
                 ):
@@ -260,6 +285,10 @@ async def _exchange_business(
                     raise BusinessError("reauth_required", 401)
                 if value["code"] == 429:
                     raise BusinessError("rate_limited", 429, 30)
+                if value["code"] == 1200:
+                    if submission is not None:
+                        submission["rejected"] = True
+                    raise BusinessError("client_check_failed", 1200)
                 if value["code"] in SECURITY_ERRORS:
                     raise BusinessError(SECURITY_ERRORS[value["code"]], value["code"])
                 if route == "/v1/user/login" and value["code"] == 1001:
@@ -312,7 +341,15 @@ async def _exchange_business(
             raise
         except wire.ProtocolError as exc:
             raise BusinessError(str(exc)) from None
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
+            raise BusinessError("transport_timeout") from None
+        except aiohttp.ClientError:
             raise BusinessError("transport") from None
         except Exception:
             raise BusinessError("response_invalid") from None
+        finally:
+            if diagnostics is not None:
+                elapsed = time.monotonic() - started
+                diagnostics.observe("business_http", elapsed)
+                if route == "/v1/group/set-member-mute":
+                    diagnostics.observe("mute_http", elapsed)

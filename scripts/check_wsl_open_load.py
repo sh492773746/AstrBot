@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import json
+import logging
 import os
 import re
 import resource
@@ -16,6 +17,12 @@ import traceback
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
+EVIDENCE_ROOT = "/opt/backups"
+FINANCE_RETIRED = (
+    "--finance is retired: private finance navigation is unsupported; "
+    "use the separate read-only ledger query benchmark without --finance"
+)
 
 
 def percentile(values):
@@ -117,11 +124,14 @@ async def worker(seconds, *, load_cpus=None, finance=False):
     Args:
         seconds: Duration at one hundred group messages per second.
         load_cpus: Explicit worker affinity, replacing an inherited reader mask.
-        finance: Add four verified fixture principals navigating read-only finance.
+        finance: Retired private-finance option, rejected before setup or I/O.
 
     Raises:
+        ValueError: If the retired private-finance option is requested.
         AssertionError: If processing, bounded queues or model isolation fails.
     """
+    if finance:
+        raise ValueError(FINANCE_RETIRED)
     apply_affinity(load_cpus)
     worker_placement = {"start": placement()}
     from aiohttp import web
@@ -133,8 +143,12 @@ async def worker(seconds, *, load_cpus=None, finance=False):
     from astrbot.builtin_stars.wangshangliao_moderation.conversation_profiles import (
         DEFAULT as PROFILE_DEFAULT,
     )
+    from astrbot.builtin_stars.wangshangliao_moderation.group_ai import (
+        DEFAULT as GROUP_AI_DEFAULT,
+    )
     from astrbot.builtin_stars.wangshangliao_moderation.open_service import OpenService
     from astrbot.builtin_stars.wangshangliao_moderation.settings import BusinessSettings
+    from astrbot.core import logger
     from astrbot.core.platform.sources.wangshangliao import wire
     from astrbot.core.platform.sources.wangshangliao.adapter import WangshangliaoAdapter
     from astrbot.core.platform.sources.wangshangliao.group_scope import group_config
@@ -153,7 +167,7 @@ async def worker(seconds, *, load_cpus=None, finance=False):
             """Create an owned synthetic conversation without framework storage.
 
             Args:
-                origin: Original account, sender and profile-scoped origin.
+                origin: Original account, group, sender and profile-scoped origin.
                 title: Native conversation display title.
                 persona_id: Explicit resolved fixture persona.
 
@@ -174,7 +188,7 @@ async def worker(seconds, *, load_cpus=None, finance=False):
             """Update only the original in-memory fixture conversation.
 
             Args:
-                origin: Original account, sender and profile-scoped origin.
+                origin: Original account, group, sender and profile-scoped origin.
                 cid: Exact current fixture conversation identifier.
                 history: Bounded native dialogue history.
                 token_usage: Optional receipt; no framework metrics are written.
@@ -219,14 +233,25 @@ async def worker(seconds, *, load_cpus=None, finance=False):
         )
         gate = asyncio.Event()
         entered = 0
+        model_payloads = []
 
         async def model(request):
             nonlocal entered
+            payload = await request.json()
+            assert payload["model"] == "slow-fixture"
+            assert not {"tools", "tool_choice", "skills"} & payload.keys()
+            assert payload["messages"][-1]["content"] == "__slow_ai__"
+            model_payloads.append(payload)
             entered += 1
             await gate.wait()
             return web.json_response(
                 {
-                    "choices": [{"message": {"content": "菜单"}}],
+                    "choices": [
+                        {
+                            "message": {"content": "大家今天怎么样？"},
+                            "finish_reason": "stop",
+                        }
+                    ],
                     "usage": {
                         "prompt_tokens": 100,
                         "completion_tokens": 30,
@@ -250,8 +275,8 @@ async def worker(seconds, *, load_cpus=None, finance=False):
         public.model = {"provider_id": "local-fixture"}
         public.resolve_model = lambda *_: dict(model_config)
         public.profiles.save(
-            "consultation",
-            "99",
+            "group",
+            "",
             "",
             0,
             {
@@ -261,6 +286,7 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                 "persona_id": "__builtin__",
             },
             "dashboard/fixture",
+            rebind=True,
         )
         public.store.confirm_budget(
             1,
@@ -271,7 +297,7 @@ async def worker(seconds, *, load_cpus=None, finance=False):
             binding=public.store.model_binding(model_config),
         )
         public.budget = public.store.budget()
-        public.plans.configure(1, "离线客服", "fixture", "1000", "fixture")
+        public.plans.configure(1, "离线群聊", "fixture", "1000", "fixture")
         public.plans.configure_price(
             public.store.model_binding(model_config),
             "local-fixture",
@@ -290,29 +316,67 @@ async def worker(seconds, *, load_cpus=None, finance=False):
         )
         groups = [str(1000 + i) for i in range(20)]
         rules = {"advertising": True, "flood": True, "keywords": ["测试引流关键词"]}
+        public.store.discover(
+            "99",
+            {
+                group: {
+                    "name": "Synthetic group " + group,
+                    "team": str(30000 + int(group)),
+                }
+                for group in groups
+            },
+        )
+        for index, group in enumerate(groups):
+            public.store.import_group(
+                "99", group, rules, [str(10000 + index)], "fixture"
+            )
+            tenant = public.store.tenant("99", group)
+            public.store.native_role("99", group, tenant["epoch"], "GROUP_ROLE_ADMIN")
+            if index < 2:
+                tenant = public.store.tenant("99", group)
+                uid, principal = str(10000 + index), f"nim/{20000 + index}"
+                public.store.link_principal(uid, principal)
+                pool = public.plans.snapshot(principal, uid)
+                public.plans.bind(
+                    "99",
+                    group,
+                    uid,
+                    principal,
+                    0,
+                    tenant["version"],
+                    pool["version"],
+                    uid,
+                    guard=lambda: None,
+                )
+                public.group_ai.configure(
+                    "99",
+                    group,
+                    0,
+                    tenant["version"],
+                    {
+                        **GROUP_AI_DEFAULT,
+                        "enabled": True,
+                        "start_hour": 0,
+                        "end_hour": 0,
+                    },
+                    "dashboard/fixture",
+                    guard=lambda: None,
+                    control=True,
+                )
+        # New fixture groups have no previous call to cool down from.
+        with public.store.connect(write=True) as db:
+            db.execute("UPDATE group_ai SET last_attempt=0")
         public.tenants = {
-            ("99", group): {
-                "account": "99",
-                "group_id": group,
-                "present": 1,
-                "active": 1,
-                "paused": 0,
-                "version": 2,
-                "rules": dict(rules),
-                "managers": [],
-            }
-            for group in groups
+            (row["account"], row["group_id"]): row for row in public.store.tenants()
         }
         config = {
             "id": "load",
+            "type": "wangshangliao",
             "account_id": "99",
             "enable": True,
             "enabled_groups": groups,
-            "reply_private": True,
             "moderation": {"enabled": True, "automation_enabled": True},
         }
-        if finance:
-            config["type"] = "wangshangliao"
         runtime.service = SimpleNamespace(active=True)
         runtime.open_service = public
         runtime.observer = settings.observe
@@ -323,102 +387,75 @@ async def worker(seconds, *, load_cpus=None, finance=False):
         bot = WangshangliaoAdapter(config, {}, queue)
         bot.account, bot.nim_account = "99", "1099"
         bot.connection_state = "online"
-        bot.business = SimpleNamespace(
-            deployment=SimpleNamespace(key=lambda _: bytes(32))
-        )
+        private_ingress = False
+        key_reads = {"group": 0, "private": 0}
+
+        def message_key(_):
+            key_reads["private" if private_ingress else "group"] += 1
+            assert not private_ingress, "Private flood accessed a decryption key"
+            return bytes(32)
+
+        bot.business = SimpleNamespace(deployment=SimpleNamespace(key=message_key))
         bot.nim = SimpleNamespace(acknowledge=AsyncMock())
-        bot.groups = {group: "team/" + group for group in groups}
+        bot.groups = {group: str(30000 + int(group)) for group in groups}
         bot.members = {
-            group: {str(10000 + i): str(20000 + i) for i in range(100)}
+            group: {
+                "99": "1099",
+                **{str(10000 + i): str(20000 + i) for i in range(100)},
+            }
             for group in groups
         }
         bot.ledger = Ledger(root / "messages.sqlite3")
         await bot.ledger.open()
         context.platform_manager.platform_insts = [bot]
-        finance_service = None
-        finance_principals, finance_samples, finance_prepared = {}, {}, {}
-        finance_latencies, finance_completed = [], {}
-        finance_pending, finance_ready_at, finance_replied_at = set(), {}, {}
-        if finance:
-            from astrbot.builtin_stars.wangshangliao_moderation.cashback import (
-                CashbackService,
-            )
 
-            finance_service = CashbackService(context, root / "finance", "load")
-            public.plugin.cashback = SimpleNamespace(service=finance_service)
-            store = finance_service.store
-            owner = "fixture@example.invalid"
-            store.bootstrap([{"email": owner, "name": "Fixture owner"}])
-            members = {
-                "10000": {
-                    "name": "Fixture inviter",
-                    "peer": "20000",
-                    "eligible": True,
-                }
-            }
-            now = time.time()
-            store.configure(
-                owner,
-                {
-                    "id": groups[0],
-                    "name": "Synthetic finance group",
-                    "bot_id": "load",
-                    "account": "99",
-                    "contact": "Fixture only",
-                    "enabled": True,
-                    "rate": 300,
-                    "qualification_seconds": 10800,
-                    "version": 0,
-                },
-                members,
-                set(),
-                now=now - 100,
-            )
-            members["10001"] = {
-                "name": "Fixture member",
-                "peer": "20001",
-                "eligible": True,
-            }
-            store.snapshot(
-                groups[0],
-                "load",
-                "99",
-                members,
-                [
+        async def fixture_directory(group):
+            """Return complete fixture membership at the native directory boundary.
+
+            Args:
+                group: Exact synthetic group, never a production directory.
+
+            Returns:
+                Complete roster including the authenticated bot and current payer.
+            """
+            return {
+                "complete": True,
+                "groupMemberInfo": [
                     {
-                        "member": "10001",
-                        "inviter": "10000",
-                        "source": "business_apply_log",
-                        "event_id": "fixture-join",
-                        "event_at": now,
+                        "userId": uid,
+                        "nimId": peer,
+                        "groupRole": "GROUP_ROLE_ADMIN"
+                        if uid == "99"
+                        or uid in public.tenants[("99", group)]["managers"]
+                        else "GROUP_ROLE_MEMBER",
                     }
+                    for uid, peer in bot.members[group].items()
                 ],
-                now=now,
-            )
-            finance_principals = {str(70001 + i): str(170001 + i) for i in range(4)}
-            # Seed trusted directory evidence, never a preverified event or handler.
-            bot.members[groups[0]].update(finance_principals)
-            public.store.remember_roster(
-                "99",
-                {uid: {"nimId": peer} for uid, peer in finance_principals.items()},
-            )
-            for uid, peer in finance_principals.items():
-                store.finance_grant(
-                    "dashboard/fixture",
-                    {
-                        "account": "99",
-                        "group_id": groups[0],
-                        "uid": uid,
-                        "peer": peer,
-                        "name": "Fixture operator " + uid,
-                        "role": "finance_admin",
-                        "active": True,
-                        "version": 0,
-                        "request_id": "finance-fixture-" + uid,
-                    },
-                )
-            with store.connect() as db:
-                finance_before = tuple(db.iterdump())
+            }
+
+        replies = []
+
+        async def send_group_reply(group, key, text, *, proactive, authorize):
+            """Check real delivery authority without contacting a native service.
+
+            Args:
+                group: Original synthetic group.
+                key: Stable model-reply operation identifier.
+                text: Validated model answer.
+                proactive: Required group send permission.
+                authorize: Original live group and billing delivery guard.
+
+            Returns:
+                Explicit synthetic native acceptance receipt.
+            """
+            assert group in groups[:2] and proactive
+            await authorize()
+            replies.append({"group": group, "key": key, "text": text})
+            return "accepted"
+
+        bot.refresh_member_mapping = fixture_directory
+        bot.send_text = send_group_reply
+        await public.refresh()
         latencies, ingress, tasks, start_times = [], [], [], {}
         ledger_statements = {}
 
@@ -427,57 +464,36 @@ async def worker(seconds, *, load_cpus=None, finance=False):
             ledger_statements[operation] = ledger_statements.get(operation, 0) + 1
 
         await bot.ledger.db.set_trace_callback(count_statement)
-        replies, peaks = [], {"pending": 0, "private": 0, "workers": 0}
+        peaks = {"pending": 0, "private": 0, "workers": 0}
+        dispatched_groups, model_messages = {}, set()
+        private_sent, private_decoded = 0, 0
         completed = 0
         consumer_failure = asyncio.get_running_loop().create_future()
 
         async def consume(event):
             nonlocal completed
-            event.send = AsyncMock(side_effect=lambda text: replies.append(str(text)))
-            sample = finance_samples.get(event.message_obj.message_id)
             try:
-                if event.is_private_chat():
-                    if sample is not None:
-                        sample["processing_started"] = time.monotonic()
-                        await public.on_event(event)
-                        sample["command_admitted"] = event.get_extra(
-                            "_wsl_command_admission"
-                        )
-                        assert (
-                            sample["command_admitted"] is not None
-                            and sample["command_admitted"][1]
-                        ), ("Financial command was not admitted", sample)
-                        assert event.is_stopped()
-                        assert (
-                            event.actor_identity.require_verified() == sample["uid"]
-                            and event.actor_identity.peer == sample["peer"]
-                        )
-                        assert event.send.call_count == 1
-                        assert sample["heading"] in str(event.send.call_args.args[0])
-                        state = public.finance_chat.sessions[
-                            public.navigation.key(event)
-                        ]
-                        assert state["screen"] == sample["screen"]
-                        if sample["screen"] == "sections":
-                            assert state["data"]["total"] == 1
-                        elif sample["screen"] == "members":
-                            assert len(state["rows"]) == 1
-                            assert state["rows"][0]["member"] == "10001"
-                        await event.get_extra("_wsl_invitation_delivery_guard")()
-                        finance_latencies.append(
-                            time.perf_counter() - sample["started"]
-                        )
-                        finance_completed[sample["uid"]] = sample["step"]
-                        finance_replied_at[sample["uid"]] = time.monotonic()
-                        finance_ready_at[sample["uid"]] = (
-                            finance_replied_at[sample["uid"]] + 3.05
-                        )
-                        finance_pending.remove(sample["uid"])
-                    elif event.message_str == "__slow_ai__":
-                        await public.chat(event)
-                    else:
-                        await asyncio.sleep(0.02)
+                assert not event.is_private_chat(), "Private flood reached dispatch"
+                assert event.actor_identity.require_verified() == event.get_sender_id()
+                payload = event.get_extra("wangshangliao_payload")
+                assert payload["sender"] == event.get_sender_id()
+                group = event.get_group_id()
+                mid = event.message_obj.message_id
+                dispatched_groups[group] = dispatched_groups.get(group, 0) + 1
+                if event.message_str == "__slow_ai__":
+                    assert mid not in model_messages
+                    model_messages.add(mid)
+                    assert payload["mentions"] == ["1099"]
+                    await public.group_ai.observe(event)
                 else:
+                    index = int(mid.removeprefix("g/"))
+                    assert group == groups[index % 20]
+                    assert event.get_sender_id() == str(10000 + index % 100)
+                    assert event.message_str == (
+                        "联系我 https://example.com"
+                        if index % 10 == 0
+                        else f"正常发言 {mid}"
+                    )
                     policy = group_config(bot.config, event.get_group_id())[
                         "moderation"
                     ]
@@ -497,11 +513,7 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                     + json.dumps(
                         {
                             "message_id": event.message_obj.message_id,
-                            "sample": sample,
-                            "reply_count": event.send.call_count,
-                            "last_reply": str(event.send.call_args.args[0])[:500]
-                            if event.send.call_count
-                            else None,
+                            "reply_count": len(replies),
                             "exception": repr(exc),
                         }
                     ),
@@ -519,32 +531,22 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                 event = await queue.get()
                 tasks.append(asyncio.create_task(consume(event)))
 
-        def envelope(index, *, private=False, slow=False, financial=None):
+        def envelope(index, *, private=False, slow=False):
             """Build client-side ciphertext before measuring server work.
 
             Args:
                 index: Unique message index within its group/private namespace.
-                private: Whether the envelope targets the private session.
-                slow: Whether the payload invokes the local slow-model fixture.
-                financial: Optional trusted fixture UID, peer and read-only input.
+                private: Whether to build an opaque retired private delivery.
+                slow: Whether the group message mentions the local slow model.
 
             Returns:
-                A sealed native message, without writing or dispatching it.
+                Group ciphertext or an opaque private body, without dispatching it.
             """
-            if financial is not None:
-                private = True
             group, sender = groups[index % 20], str(10000 + index % 100)
             if private:
-                sender = str(90000 + index) if not slow else str(80000 + index)
-            peer = (
-                ("30000" if private and not slow else "transport/" + sender)
-                if private
-                else str(20000 + index % 100)
-            )
-            mid = ("p/" if private else "g/") + str(index)
-            if financial is not None:
-                sender, peer, _ = financial
-                mid = "f/" + str(index)
+                sender = str(90000 + index)
+            peer = "30000" if private else str(20000 + index % 100)
+            mid = ("p/" if private else "ai-" if slow else "g/") + str(index)
             stamp = int(time.time() * 1000)
             inner = wire.ApplicationMessage(
                 sender={"id": int(sender), "name": "fixture"},
@@ -552,25 +554,29 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                 session=1 if private else 2,
                 device=1,
                 format=0,
-                content={
-                    "data": financial[2]
-                    if financial is not None
-                    else "__slow_ai__"
-                    if slow
-                    else "菜单"
+            )
+            if slow:
+                inner.mentions.content.data = "@fixture __slow_ai__"
+                inner.mentions.people.add(
+                    uid=1099, nick="fixture", start=0, end=len("@fixture ")
+                )
+            else:
+                inner.content.data = (
+                    "菜单"
                     if private
                     else "联系我 https://example.com"
                     if index % 10 == 0
                     else f"正常发言 {mid}"
-                },
-            )
+                )
             return {
                 0: "0" if private else "1",
                 1: bot.nim_account if private else bot.groups[group],
                 2: peer,
                 7: str(stamp),
                 8: "100",
-                10: wire.seal_message(bytes(32), inner, index + 1, index + 2, stamp),
+                10: "retired-private-body"
+                if private
+                else wire.seal_message(bytes(32), inner, index + 1, index + 2, stamp),
                 11: mid,
                 12: mid,
             }
@@ -578,17 +584,27 @@ async def worker(seconds, *, load_cpus=None, finance=False):
         prepared = {}
 
         async def inject(index, *, private=False, slow=False):
-            outer = (
-                envelope(index, private=private, slow=True)
-                if slow
-                else prepared.pop((index, private))
-            )
+            nonlocal private_ingress, private_sent, private_decoded
+            outer = prepared.pop((index, private))
             began = time.perf_counter()
-            if not private:
+            if not private and not slow:
                 start_times[outer[11]] = began
-            await bot.ingest(outer)
+            decoded = bot.receive_health["decoded_messages"]
+            private_ingress = private
+            try:
+                await bot.ingest(outer)
+            finally:
+                private_ingress = False
+            if private:
+                private_sent += 1
+                private_decoded += bot.receive_health["decoded_messages"] - decoded
+                assert private_decoded == 0
             ingress.append(time.perf_counter() - began)
 
+        # The parent samples without draining stdout between READY and completion.
+        # Routine private ACK diagnostics must not fill that pipe and stall ingress.
+        previous_log_level = logger.level
+        logger.setLevel(logging.WARNING)
         dispatch = asyncio.create_task(bot.dispatch_pending())
         consumer = asyncio.create_task(bus())
         try:
@@ -600,38 +616,11 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                         for n in range(20):
                             index = 100000 + second * 200 + i * 2 + n
                             prepared[(index, True)] = envelope(index, private=True)
-            assert len(prepared) == seconds * 300
-            if finance:
-                finance_prepared = {uid: [] for uid in finance_principals}
-                for step in range(len(range(0, seconds * 100, 320))):
-                    if step < 4:
-                        text, screen, heading = (
-                            ("结账", "groups", "【选择结账群】"),
-                            ("1", "root", "【结账】"),
-                            ("2", "sections", "【核验中】"),
-                            ("1", "members", "【成员明细】"),
-                        )[step]
-                    else:
-                        text, screen, heading = (
-                            ("0", "sections", "【核验中】")
-                            if step % 2 == 0
-                            else ("1", "members", "【成员明细】")
-                        )
-                    for principal, (uid, peer) in enumerate(finance_principals.items()):
-                        outer = envelope(
-                            1000000 + step * 4 + principal,
-                            financial=(uid, peer, text),
-                        )
-                        finance_prepared[uid].append(outer)
-                        finance_samples[outer[11]] = {
-                            "uid": uid,
-                            "peer": peer,
-                            "step": step,
-                            "screen": screen,
-                            "heading": heading,
-                        }
-            await inject(0, private=True, slow=True)
-            await inject(1, private=True, slow=True)
+            for index in (200000, 200001):
+                prepared[(index, False)] = envelope(index, slow=True)
+            assert len(prepared) == seconds * 300 + 2
+            await inject(200000, slow=True)
+            await inject(200001, slow=True)
             for _ in range(200):
                 if consumer_failure.done():
                     raise RuntimeError("Native consumer failed") from (
@@ -641,6 +630,23 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                     break
                 await asyncio.sleep(0.01)
             assert entered == 2, {"entered": entered, "replies": replies[-4:]}
+            model_tasks = tuple(public.group_ai.tasks.values())
+            assert len(model_tasks) == 2 and public.chat_count == 2
+            with public.store.connect() as db:
+                reservations = [
+                    dict(row)
+                    for row in db.execute(
+                        "SELECT request,group_id,pool,state,reserved_micro,charged_micro "
+                        "FROM ai_charges"
+                    )
+                ]
+            assert len(reservations) == 2
+            assert {row["group_id"] for row in reservations} == set(groups[:2])
+            assert len({row["pool"] for row in reservations}) == 2
+            assert all(
+                row["state"] == "dispatched" and row["reserved_micro"] > 0
+                for row in reservations
+            )
             start = time.monotonic()
             print("LOAD_READY", flush=True)
             for second in range(seconds):
@@ -653,29 +659,6 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                             consumer_failure.result()
                         )
                     await inject(second * 100 + i)
-                    # Pace from successful replies, not a fixed ingress schedule.
-                    # Never send another command while its principal is in flight.
-                    for uid, outers in finance_prepared.items():
-                        now = time.monotonic()
-                        if (
-                            not outers
-                            or uid in finance_pending
-                            or now < finance_ready_at.get(uid, 0)
-                            or now >= start + seconds
-                        ):
-                            continue
-                        outer = outers.pop(0)
-                        sample = finance_samples[outer[11]]
-                        assert finance_completed.get(uid, -1) == sample["step"] - 1
-                        if uid in finance_replied_at:
-                            sample["previous_reply_gap_seconds"] = (
-                                now - finance_replied_at[uid]
-                            )
-                            assert sample["previous_reply_gap_seconds"] >= 3.05
-                        finance_pending.add(uid)
-                        sample["started"] = time.perf_counter()
-                        await bot.ingest(outer)
-                        ingress.append(time.perf_counter() - sample["started"])
                     if i % 10 == 0:
                         for n in range(20):
                             await inject(
@@ -689,14 +672,14 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                 peaks["pending"] = max(peaks["pending"], pending)
                 peaks["private"] = max(peaks["private"], private or 0)
                 peaks["workers"] = max(peaks["workers"], len(bot.workers))
-                assert pending <= 4354 and (private or 0) <= 258
+                assert pending <= 4354 and (private or 0) == 0
                 assert public.chat_count == 2 and entered == 2
             for _ in range(500):
                 if consumer_failure.done():
                     raise RuntimeError("Native consumer failed") from (
                         consumer_failure.result()
                     )
-                if completed == seconds * 100 and not finance_pending:
+                if completed == seconds * 100 and not bot.events and queue.empty():
                     break
                 await asyncio.sleep(0.01)
             assert (
@@ -704,49 +687,69 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                 and percentile(latencies) < 1000
                 and not prepared
             )
-            assert bot.ledger.rejected_count > 0
+            assert not start_times
+            async with bot.ledger.db.execute(
+                "SELECT team,message,payload,state FROM inbox"
+            ) as cursor:
+                inbox = await cursor.fetchall()
+            processed = 0
+            for group, mid, encoded, state in inbox:
+                payload = json.loads(encoded)
+                assert group in groups and state == "processed"
+                assert payload["sender"] in bot.members[group]
+                assert (
+                    payload["recall_route"]["peer"]
+                    == bot.members[group][payload["sender"]]
+                )
+                if mid in model_messages:
+                    assert payload["mentions"] == ["1099"]
+                    assert payload["text"] == "@fixture __slow_ai__"
+                else:
+                    index = int(mid.removeprefix("g/"))
+                    assert group == groups[index % 20]
+                    assert payload["text"] == (
+                        "联系我 https://example.com"
+                        if index % 10 == 0
+                        else f"正常发言 {mid}"
+                    )
+                processed += 1
+            decoded = bot.receive_health["decoded_messages"]
+            dispatched = sum(dispatched_groups.values())
+            assert set(dispatched_groups) == set(groups)
+            assert decoded == dispatched == processed == len(inbox) == completed + 2
+            assert key_reads == {"group": decoded, "private": 0}
+            private_acks = sum(
+                call.args[0] == 0 for call in bot.nim.acknowledge.await_args_list
+            )
+            group_acks = sum(
+                call.args[0] == 1 for call in bot.nim.acknowledge.await_args_list
+            )
+            assert private_sent == private_acks == seconds * 200
+            assert group_acks == len(inbox)
+            assert bot.ledger.rejected_count == 0
+            async with bot.ledger.db.execute("PRAGMA synchronous") as cursor:
+                synchronous = (await cursor.fetchone())[0]
+            assert synchronous == 2
             gate.set()
-            await asyncio.gather(*tasks)
-            finance_result = {}
-            if finance:
-                assert not finance_pending, (
-                    "Financial reply timed out",
-                    sorted(finance_pending),
-                )
-                assert len(finance_latencies) == sum(
-                    "started" in sample for sample in finance_samples.values()
-                )
-                assert all(
-                    finance_completed.get(uid, -1) >= 3 for uid in finance_principals
-                ), ("Financial read chain incomplete", finance_completed)
-                assert len(public.finance_chat.sessions) == 4
-                with finance_service.store.connect() as db:
-                    assert tuple(db.iterdump()) == finance_before
-                finance_result = {
-                    "finance_interactions": len(finance_latencies),
-                    "finance_p95_ms": round(percentile(finance_latencies), 3),
-                    "finance_unsent_interactions": sum(
-                        len(outers) for outers in finance_prepared.values()
-                    ),
-                    "finance_min_reply_gap_seconds": round(
-                        min(
-                            sample["previous_reply_gap_seconds"]
-                            for sample in finance_samples.values()
-                            if "previous_reply_gap_seconds" in sample
-                        ),
-                        6,
-                    ),
-                    "finance_pacing": "One in flight per principal; 3.05 seconds after successful reply and delivery guard; no retries.",
-                    "finance_fixture_principals": 4,
-                    "finance_native_on_event_consumed": True,
-                    "finance_fixture_ledger_unchanged": True,
-                    "finance_scope": "Temporary fixtures; read-only navigation, no payments.",
-                }
+            await asyncio.gather(*tasks, *model_tasks)
             assert public.chat_count == 0 and entered == 2
+            assert len(model_payloads) == len(replies) == 2
+            assert {reply["group"] for reply in replies} == set(groups[:2])
+            assert len(conversations) == 2
+            for origin, conversation in conversations.items():
+                assert ":GroupMessage:99/" in origin and "/group/" in origin
+                assert json.loads(conversation.history) == [
+                    {"role": "user", "content": "__slow_ai__"},
+                    {"role": "assistant", "content": "大家今天怎么样？"},
+                ]
             with public.store.connect() as db:
-                charges = db.execute(
-                    "SELECT state,reserved_micro,charged_micro FROM ai_charges"
-                ).fetchall()
+                charges = [
+                    dict(row)
+                    for row in db.execute(
+                        "SELECT request,group_id,pool,state,reserved_micro,charged_micro "
+                        "FROM ai_charges"
+                    )
+                ]
             assert len(charges) == 2 and all(
                 row["state"] == "settled"
                 and 0 < row["charged_micro"] <= row["reserved_micro"]
@@ -756,8 +759,7 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                 "LOAD_RESULT "
                 + json.dumps(
                     {
-                        **finance_result,
-                        "groups": 20,
+                        "groups": len(dispatched_groups),
                         "messages_per_second": 100,
                         "messages": completed,
                         "seconds": seconds,
@@ -765,14 +767,34 @@ async def worker(seconds, *, load_cpus=None, finance=False):
                         "load_elapsed_seconds": round(time.monotonic() - start, 3),
                         "durable_ingress_p95_ms": round(percentile(ingress), 3),
                         "model_requests": entered,
-                        "atomic_plan_cost_reservations": True,
-                        "slow_ai_did_not_block_rules": True,
-                        "native_decode_dispatch_storage": True,
+                        "model_replies": len(replies),
+                        "model_profile_kind": "group",
+                        "billing_reservations": reservations,
+                        "billing_charges": charges,
+                        "atomic_plan_cost_reservations": len(reservations)
+                        == len(charges)
+                        == 2,
+                        "slow_ai_did_not_block_rules": completed == seconds * 100,
+                        "native_decode_dispatch_storage": decoded
+                        == dispatched
+                        == processed
+                        == len(inbox),
+                        "group_ingress_decoded": decoded,
+                        "group_ingress_stored": len(inbox),
+                        "group_ingress_dispatched": dispatched,
+                        "group_ingress_processed": processed,
+                        "group_dispatch_counts": dispatched_groups,
                         "message_ledger_statements": ledger_statements,
                         "message_ledger_synchronous": "FULL",
                         "client_ciphertext_prebuilt": True,
                         "queue_peaks": peaks,
-                        "private_flood_rejected": bot.ledger.rejected_count,
+                        "private_flood_ignored": private_sent,
+                        "private_flood_acks": private_acks,
+                        "private_flood_decryptions": private_decoded,
+                        "private_flood_key_reads": key_reads["private"],
+                        "private_flood_ledger_rows": sum(
+                            group not in groups for group, *_ in inbox
+                        ),
                         "max_rss_bytes": resource.getrusage(
                             resource.RUSAGE_SELF
                         ).ru_maxrss
@@ -794,11 +816,15 @@ async def worker(seconds, *, load_cpus=None, finance=False):
             await asyncio.gather(dispatch, consumer, return_exceptions=True)
             for task in bot.workers.values():
                 task.cancel()
-            await asyncio.gather(*bot.workers.values(), *tasks, return_exceptions=True)
+            ai_tasks = tuple(public.group_ai.tasks.values())
+            for task in ai_tasks:
+                task.cancel()
+            await asyncio.gather(
+                *bot.workers.values(), *tasks, *ai_tasks, return_exceptions=True
+            )
             await bot.ledger.close()
             await runner.cleanup()
-            if finance_service is not None:
-                finance_service.store.close()
+            logger.setLevel(previous_log_level)
 
 
 def main():
@@ -809,7 +835,7 @@ def main():
     parser.add_argument(
         "--finance",
         action="store_true",
-        help="Add actual read-only private finance navigation on temporary fixtures.",
+        help="Retired; rejected before setup because private finance is unsupported.",
     )
     parser.add_argument(
         "--absolute-query-report",
@@ -833,6 +859,8 @@ def main():
         help="Pin only the synthetic worker at entry, e.g. 1-3; default unchanged.",
     )
     args = parser.parse_args()
+    if args.finance:
+        parser.error(FINANCE_RETIRED)
     assert 10 <= args.seconds <= 35
     if args.worker:
         if args.absolute_query_report:
@@ -847,6 +875,7 @@ def main():
             worker(args.seconds, load_cpus=args.load_cpus, finance=args.finance)
         )
         return
+    evidence_root = Path(os.environ.get("ASTRBOT_WSL_EVIDENCE_ROOT", EVIDENCE_ROOT))
     available = os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else None
     if args.reader_cpus is not None or args.load_cpus is not None:
         if not hasattr(os, "sched_getaffinity") or not hasattr(os, "sched_setaffinity"):
@@ -937,8 +966,6 @@ def main():
         ]
         if args.load_cpus is not None:
             command.extend(["--load-cpus", ",".join(map(str, sorted(args.load_cpus)))])
-        if args.finance:
-            command.append("--finance")
         process = subprocess.Popen(
             command,
             cwd=root,
@@ -977,8 +1004,9 @@ def main():
             process.communicate(timeout=10)
             raise
         if process.returncode:
+            evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
             failed = Path(
-                tempfile.mkdtemp(prefix="wsl-native-load-failed-", dir="/opt/backups")
+                tempfile.mkdtemp(prefix="wsl-native-load-failed-", dir=evidence_root)
             )
             evidence = failed / "failure.json"
             evidence.write_text(
@@ -1087,7 +1115,8 @@ def main():
         },
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    output = Path("/opt/backups") / time.strftime(
+    evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    output = evidence_root / time.strftime(
         "wsl-native-load-%Y%m%dT%H%M%S.json", time.gmtime()
     )
     output.write_text(

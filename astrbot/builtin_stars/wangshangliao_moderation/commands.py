@@ -1,5 +1,6 @@
 """Administrator commands using native platform capabilities."""
 
+import asyncio
 import hashlib
 import re
 import secrets
@@ -9,6 +10,7 @@ import time
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
 from astrbot.core.platform.sources.wangshangliao.actions import ActionRequest
+from astrbot.core.platform.sources.wangshangliao.blacklist import BlacklistStore
 from astrbot.core.platform.sources.wangshangliao.database import (
     AsyncDatabase,
     account_guard,
@@ -20,134 +22,12 @@ from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
 from .activities import ADMIN_COMMANDS, PUBLIC_COMMANDS, GroupActivities
 from .group_management import MANAGER_COMMANDS
+from .member_mutes import release_member
 from .policy import GROUP_ADMIN_REQUIRED, require_group_admin
-from .private_invitation import (
-    PRIVATE_MENU,
-    private_invitation_command,
-    private_query_guard,
-)
 from .rankings import DailyRankings
+from .syntax import ALIASES, is_removed_group_command
 
-HELP = """【旺商聊命令帮助】
-
-直接发送以下命令，不需要斜杠、群管前缀或 @ 机器人。
-
-【群内查询 · 普通群员】
-排名  查看今日有效发言榜，前30名自动发言白名单
-排名 2  查看第二页（每页20条）
-参加抽奖  报名当前抽奖
-抽奖状态  查询当前活动
-我的邀请  查询自己的有效邀请和奖励
-邀请奖励  查询统一奖励值与自己的累计奖励
-我拉了谁  查询自己已确认邀请的成员名称
-为什么没统计  查看邀请计入条件
-
-【身份与权限】
-sid  仅管理员可获取自己的 UID
-我的权限  查看管理员身份
-管理员由 AstrBot 配置，不支持聊天自授权。
-群管理员由后台“群授权”单独指定，只管理被授权的群，不获得总控或返现结账权限。
-群管理员私聊使用“管理 群列表”“管理 选择群 1”“管理 成员列表”等固定命令。
-首次主管由 WebUI 对应配置的管理员列表设置；维护人员可从已有会话记录核实 UID。
-普通用户私聊发送“菜单”查看菜单，“我的邀请”仅查询本人返现汇总。
-其他管理员私聊命令仍返回“无权限”，普通聊天保持原配置。
-
-【私聊管理 · 管理员】
-1. 群列表
-2. 选择群 1
-3. 成员列表
-   成员搜索 小明
-   下一页
-4. 禁言 2
-   禁言 2 3
-   踢出 2
-编号绑定当前列表，十分钟有效。
-解除禁言须先查询“禁言名单”，再发送“解禁 2”；普通成员列表编号不能用于解禁。
-私聊菜单4→7先选本人授权群，再选被禁言成员并确认；4→8单独查看名单。
-业务内容规则启用时，手动踢出只生成预览；必须在当前私聊发新消息：
-确认踢出 <确认码>
-确认码十分钟有效、仅原管理员可用一次；群内不能确认。
-
-【群内管理 · 管理员】
-禁言 @成员  默认30分钟
-禁言 @成员 3  禁言3分钟（1至1440分钟）
-解禁 @成员
-公告 公告内容
-全员禁言
-解除全员禁言
-请使用客户端成员选择器进行真实 @。
-私聊选群后也可执行公告、全员禁言及解除。
-
-【私聊查询 · 管理员】
-能力
-规则
-违规计数
-结果 <操作ID>
-开发门禁
-
-【抽奖 · 管理员私聊先选群】
-抽奖奖励 18元猪脚饭
-中奖人数 3
-抽奖倒计时 10
-参与上限 15
-抽奖邀请门槛 0
-领奖联系人 秦铭
-抽奖设置
-开启抽奖
-抽奖状态
-立即开奖
-取消抽奖
-中奖名单
-中奖名单 1
-抽奖记录
-倒计时为分钟；上限0为不限；邀请门槛0为无需邀请。
-群员发送“参加抽奖”报名，开奖统一公布并真实 @ 中奖者。
-群通知需要保存该群的主动发送授权。活动开启后设置冻结。
-奖品由联系人发放，机器人不自动付款。
-
-【邀请奖励 · 管理员私聊先选群】
-设置邀请奖励 5
-开启邀请统计
-暂停邀请统计
-开启邀请奖励
-邀请奖励状态
-邀请记录
-邀请统计
-暂停邀请奖励
-本群统一每人奖励，最多两位小数，作为积分记账。
-“开启邀请统计”先建立成员基线，后续已入群且归属明确的新成员会计入人数。
-奖励可保持关闭；开启奖励后只对后续新入群成员积分记账。
-重复进群不重复计奖；待审核、历史邀请和机器人不计奖。
-邀请统计显示已记账邀请的累计、当前在群和已退群人数；退群不回收积分。
-
-【每日全员禁言 · 私聊管理员先选群】
-定时禁言 23:00 08:00
-确认定时 <确认码>
-定时状态
-暂停定时
-恢复定时
-删除定时
-默认北京时间，支持跨午夜；确认码十分钟有效，须在同一私聊发新消息。
-保存和恢复只从下一未来边界开始，不立即改变当前状态。
-人工全员禁言/解除会暂停计划；恢复须重新确认。
-首次无启用时段；需逐群授权 mute_all、unmute_all。
-外部管理员临时接管前请先暂停计划；故障或错过边界需核查后恢复。
-
-【名片规范 · 私聊管理员】
-名片修改、批量预览与确认仅在 AstrBot 管理页面操作。
-AI不执行管理操作；动作授权与自动开关仍需到 Dashboard 逐群保存。
-
-【说明】
-群内开放排名、抽奖报名、活动及自身邀请查询和上述管理动作。
-其他管理查询仅限管理员私聊。
-踢出仅限管理员私聊预览与确认。
-动作仍需机器人群授权及平台权限。
-群内命令、本人菜单选择及对应回复统一安排12秒撤回；原命令需平台撤回权限，私聊和普通聊天不受影响。
-开发门禁仅在 Dashboard 开启。
-固定解禁命令复核当前禁言，菜单解禁还须预览确认；平台受理后返回结果。
-未知结果不要重复提交。"""
-
-PRIVATE_ONLY = "此功能仅限私聊，请私信机器人发送“帮助”；群内发送“排名”查询今日发言榜。"
+PRIVATE_ONLY = "请由已有后台权限的负责人在旺商聊插件管理页面操作。"
 
 
 class Commands:
@@ -188,18 +68,18 @@ class Commands:
         """
         if ai:
             return {"status": "rejected", "reason": "ai_management_retired"}
-        if event.is_private_chat() and private_invitation_command(
-            action + (" " + argument if argument else "")
-        ):
-            private_query_guard(event)
-            if action == "私聊菜单":
-                return PRIVATE_MENU
-            if argument:
-                event.set_extra("_wsl_invitation_selection", int(argument))
-            runtime = getattr(self.activities, "cashback", None)
-            if runtime is None:
-                return "邀请返现查询暂不可用，请稍后再试。"
-            return await runtime.private_invitation_reply(event)
+        if event.is_private_chat():
+            return None
+        if not action or is_removed_group_command(action):
+            return None
+        if ALIASES.get(action, action) == "排名":
+            return await self.rankings.read(
+                event.platform,
+                event.get_group_id(),
+                event.get_sender_id(),
+                page=1,
+                native_mentions=True,
+            )
         management = getattr(self, "management", None)
         bind_reply = getattr(event, "bind_management_reply_guard", None)
         public_mode = "_open_groups" in getattr(
@@ -235,26 +115,10 @@ class Commands:
                 return await self.activities.command(
                     event, event.get_group_id(), action, argument
                 )
-            if action == "排名":
-                return await self.rankings.read(
-                    event.platform,
-                    event.get_group_id(),
-                    event.get_sender_id(),
-                    page=int(argument or "1"),
-                    native_mentions=True,
-                )
             if action not in actions and not public_group:
                 return None
             if public_group and not allowed(event.get_group_id()):
                 return "无权限"
-        if action in {"", "帮助"}:
-            return HELP
-        if action == "我的权限":
-            if public_group:
-                return "你是本群的机器人管理员，可以使用本群管理命令；不能管理其他群或修改返现账本。"
-            if management is not None and callable(bind_reply):
-                bind_reply(management, tuple(management.groups(event)))
-            return f"【我的权限】\nUID: {event.get_sender_id()}\nAstrBot 管理员: {'是' if event.is_admin() else '否'}\n本账号可管理群：{len(management.groups(event)) if management else len(event.platform.groups) if event.is_admin() else 0}"
         if not allowed():
             return "无权限"
         if (
@@ -573,12 +437,12 @@ class Commands:
             timing = (
                 f"\n本群自动规范名片：{'开启' if p.get('card_auto', {}).get(group) else '关闭'}。"
                 f"\n本群名片后缀：{p.get('card_suffix', {}).get(group) or '无'}。"
-                "可在管理员私聊预览开关或指定成员改名；开启需已授权修改名片，关闭不恢复历史名片。"
-                "\n每日定时独立配置，默认不启用；私聊发送“定时状态”查询。人工全员禁言/解除先暂停定时，恢复需重新私聊确认。"
+                "由已有后台权限的负责人在插件页面管理；开启需已授权修改名片，关闭不恢复历史名片。"
+                "\n每日定时独立配置，默认不启用；请在插件页面查看，或在已开通群发送“定时状态”。人工全员禁言/解除先暂停定时。"
             )
             escalation = (
                 "\n自动踢出已停用；旧配置不恢复自动踢出。违规按三次警告、1/3/10分钟禁言循环；"
-                "踢出需管理员私聊预览并确认。按账号/群/成员累计受理的自动禁言，"
+                "人工踢出请使用旺商聊App。按账号/群/成员累计受理的自动禁言，"
                 "重复、失败、未知不计数。"
             )
             semantic = (
@@ -780,7 +644,7 @@ class Commands:
                             or "暂无记录"
                         )
                         + escalation_counts
-                        + "\n人工踢出须私聊确认；自动处理不踢人。旧消息仅审计。"
+                        + "\n人工踢出请使用旺商聊App；自动处理不踢人。旧消息仅审计。"
                     )
                 if not await db.fetchone(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='violations'"
@@ -797,7 +661,7 @@ class Commands:
                     or "暂无记录"
                 )
         if action not in actions:
-            return HELP
+            return None
         member = 0
         minutes = 30
         duration = ""
@@ -880,20 +744,6 @@ class Commands:
                     or str(member) == str(adapter.account)
                 ):
                     return "成员身份已变化，请重新查询「禁言名单」。"
-                try:
-                    muted = await muted_member_ids(
-                        adapter,
-                        group,
-                        authorize=guard,
-                        expected_member=(str(member), str(matches[0]["nimId"])),
-                    )
-                    if guard is not None:
-                        guard()
-                except ProtocolError as exc:
-                    logger.warning("WSL unmute verification failed: %s", str(exc))
-                    return "暂时无法核对当前禁言状态，本次未解禁，请稍后重新查询「禁言名单」。"
-                if str(member) not in muted:
-                    return "该成员当前已不在禁言名单中，本次无需解禁。"
             if action == "禁言" and duration:
                 if (
                     not re.fullmatch(r"[0-9]{1,5}", duration)
@@ -952,19 +802,46 @@ class Commands:
             return "拒绝：管理员授权已撤销。"
         submission_guard = guard or authorize
         if action == "解禁":
-            base_guard = submission_guard
-
-            async def submission_guard():
-                base_guard()
-                current = await muted_member_ids(
+            blacklist = BlacklistStore(adapter.config["id"])
+            version, _ = await asyncio.to_thread(
+                blacklist.read, str(adapter.account), group
+            )
+            try:
+                result = await release_member(
                     adapter,
                     group,
-                    authorize=base_guard,
-                    expected_member=(str(member), str(matches[0]["nimId"])),
+                    str(member),
+                    str(matches[0]["nimId"]),
+                    operation=operation,
+                    actor=event.actor_identity,
+                    guard=submission_guard,
+                    store=blacklist,
+                    version=version,
                 )
-                base_guard()
-                if str(member) not in current:
-                    raise ProtocolError("member_no_longer_muted")
+            except ProtocolError as exc:
+                logger.warning("WSL unmute verification failed: %s", str(exc))
+                return (
+                    "禁言状态、名单或权限已变化，本次未完成解禁，请刷新核对后再操作。"
+                )
+            if result["verified"]:
+                text = (
+                    "该成员当前已不在禁言名单中，本次无需解禁。"
+                    if result["status"] == "already_unmuted"
+                    else "解禁已核验。"
+                )
+            else:
+                text = {
+                    "accepted": "解禁已受理，平台状态待核验。",
+                    "verified": "解禁已受理，平台状态待核验。",
+                    "unknown": "解禁结果未知，不自动重试。",
+                }.get(result.get("status"), "解禁未受理。")
+            text += {
+                "removed": "\n已同时移出本群黑名单。",
+                "retained": "\n黑名单未移除；请先核对解禁结果。",
+                "changed": "\n黑名单或权限已变化，未移除新的记录；请刷新核对。",
+                "failed": "\n黑名单移除失败，仍需处理；请在后台核对。",
+            }.get(result["blacklist_status"], "")
+            return text + f"\n操作ID：{operation}"
 
         result = await adapter.execute_action(
             ActionRequest.bind(
@@ -981,8 +858,6 @@ class Commands:
         if result.get("status") in {"accepted", "verified"}:
             if action == "禁言":
                 return f"禁言已受理：{minutes} 分钟。"
-            if action == "解禁":
-                return "解禁已受理。"
         status = {
             "accepted": "服务端已接受，尚未确认",
             "verified": "已确认",

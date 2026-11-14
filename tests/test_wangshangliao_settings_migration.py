@@ -77,12 +77,16 @@ async def test_import_is_exact_idempotent_and_removes_core_business_fields(fixtu
     service, adapter, config, original, manager = fixture
     await service.start(recognize_command)
     assert not (set(config["platform"][0]) & BUSINESS_FIELDS)
+    assert "reply_private" not in config["platform"][0]
+    assert "reply_private" not in adapter.config
     assert config["admins_id"] == ["99"]
     for key in BUSINESS_FIELDS:
         if key in original:
             expected = copy.deepcopy(original[key])
             if key == "moderation":
                 expected.update(service.keyword_defaults)
+            elif key == "ai_routes":
+                expected = {"groups": original[key]["groups"]}
             assert adapter.config[key] == expected
     first = adapter.config["_business_revision"]
     await service.close()
@@ -91,6 +95,79 @@ async def test_import_is_exact_idempotent_and_removes_core_business_fields(fixtu
     assert len(service.history("bot")["changes"]) == 1
     manager.terminate_platform.assert_not_called()
     manager.load_platform.assert_not_called()
+
+
+def test_loading_legacy_private_settings_preserves_database_and_group_policy(fixture):
+    service, _, _, original, _ = fixture
+    values = {
+        key: copy.deepcopy(original[key]) for key in BUSINESS_FIELDS if key in original
+    }
+    values["reply_private"] = True
+    values["ai_routes"]["admin_provider_id"] = "old-private-model"
+    values["developer_test"]["scopes"] = [
+        "private_commands",
+        "group_commands",
+        "private_ai",
+        "group_ai",
+    ]
+    values["proactive_send"]["targets"].append("private/2")
+    payload = json.dumps(values)
+    with service.connect() as db:
+        db.execute(
+            "INSERT INTO policies VALUES('bot','12',7,?,123)",
+            (payload,),
+        )
+    before = service.path.read_bytes()
+    snapshot = service.load(original)
+    loaded = snapshot.values()
+    assert snapshot.revision == "12:7" and snapshot.payload == payload
+    assert "reply_private" not in loaded
+    assert loaded["ai_routes"] == {"groups": {"34": ""}}
+    assert loaded["developer_test"]["scopes"] == ["group_commands", "group_ai"]
+    assert loaded["proactive_send"] == {"enabled": True, "targets": ["34"]}
+    assert loaded["moderation"] == original["moderation"]
+    assert service.path.read_bytes() == before
+    assert service.history("bot")["changes"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"reply_private": False},
+        {"reply_private": True},
+        {"ai_routes": {"admin_provider_id": ""}},
+        {"ai_routes": {"customer_provider_id": "old-private-model"}},
+        {"developer_test": {"scopes": ["private_commands"]}},
+        {"developer_test": {"scopes": ["group_ai", "private_ai"]}},
+        {"proactive_send": {"enabled": True, "targets": ["34", "private/2"]}},
+    ],
+)
+async def test_new_private_settings_cannot_be_saved_or_published(fixture, patch):
+    service, adapter, _, _, _ = fixture
+    await service.start(recognize_command)
+    before = adapter.config
+    proposal = {**copy.deepcopy(before), **patch}
+    with pytest.raises(ValueError):
+        await service.save(proposal, business_revision(before), "dashboard:test")
+    assert adapter.config == before
+    assert len(service.history("bot")["changes"]) == 1
+
+
+def test_private_legacy_values_do_not_affect_group_revision_or_mutate_input(fixture):
+    _, _, _, original, _ = fixture
+    candidate = copy.deepcopy(original)
+    before = copy.deepcopy(candidate)
+    revision = business_revision(candidate)
+    assert candidate == before
+    candidate["reply_private"] = False
+    candidate["ai_routes"]["admin_provider_id"] = "different-old-private-model"
+    candidate["proactive_send"]["targets"].append("private/another")
+    candidate["developer_test"]["scopes"] = ["private_commands", "private_ai"]
+    # Omitted group scopes and an empty group scope list have the same meaning.
+    before["developer_test"]["scopes"] = []
+    assert business_revision(candidate) == business_revision(before)
+    assert business_revision(original) == revision
 
 
 @pytest.mark.asyncio
@@ -204,7 +281,7 @@ async def test_audit_failure_rolls_back_policy_and_snapshot(fixture):
     await service.start(recognize_command)
     before = adapter.config
     proposal = copy.deepcopy(before)
-    proposal["reply_private"] = False
+    proposal["reply_groups"]["34"] = False
     with service.connect() as db:
         db.execute("""
             CREATE TRIGGER reject_committed_audit BEFORE INSERT ON settings_log
@@ -229,7 +306,7 @@ async def test_disabled_plugin_blocks_replies_moderation_and_new_policy_writes(f
     await service.close()
     assert adapter.connection_state == "online"
     assert adapter.enabled_groups == {"34"}
-    assert not adapter.config["reply_private"]
+    assert "reply_private" not in adapter.config
     assert not adapter.config["proactive_send"]["enabled"]
     assert not runtime.recognize("排名")
     with pytest.raises(ProtocolError, match="moderation_permission"):
@@ -257,13 +334,14 @@ async def test_restart_loads_latest_settings_without_rebuilding_history(fixture)
     service, adapter, config, _, _ = fixture
     await service.start(recognize_command)
     proposal = adapter.config
-    proposal["reply_private"] = False
+    proposal["reply_groups"]["34"] = False
     latest = await service.save(proposal, business_revision(proposal), "admin")
     await service.close()
     reopened = BusinessSettings(service.context, service.root)
     await reopened.start(recognize_command)
     assert adapter.config["_business_revision"] == latest
-    assert adapter.config["reply_private"] is False
+    assert adapter.config["reply_groups"] == {"34": False}
+    assert "reply_private" not in adapter.config
     assert len(reopened.history("bot")["changes"]) == 2
 
 
@@ -273,7 +351,7 @@ async def test_only_group_selection_changes_refresh_the_native_directory(fixture
     await service.start(recognize_command)
     adapter.load_groups.reset_mock()
     proposal = adapter.config
-    proposal["reply_private"] = False
+    proposal["reply_groups"]["34"] = False
     await service.save(proposal, business_revision(proposal), "admin")
     adapter.load_groups.assert_not_awaited()
     proposal = adapter.config
@@ -296,6 +374,13 @@ async def test_transport_changes_do_not_invalidate_business_drafts(fixture):
     [
         {"enabled_groups": [{}]},
         {"reply_private": "true"},
+        {"reply_private": True},
+        {"reply_private": False},
+        {"ai_routes": {"admin_provider_id": ""}},
+        {"ai_routes": {"customer_provider_id": "old-private-model"}},
+        {"developer_test": {"scopes": ["private_commands"]}},
+        {"developer_test": {"scopes": ["group_ai", "private_ai"]}},
+        {"proactive_send": {"enabled": True, "targets": ["34", "private/2"]}},
         {"moderation": {"permissions": {"34": ["invalid"]}}},
         {"moderation": {"manual_kick_only": True, "auto_kick": {"34": True}}},
         {"developer_test": {"seconds": 301}},
@@ -323,7 +408,7 @@ async def test_cold_observation_is_read_only_and_cannot_grant_execution(fixture)
     view = cold.view(bot)
     assert view["enabled_groups"] == ["34"]
     assert view["_business_active"] is False
-    assert not view["reply_private"]
+    assert "reply_private" not in view
     assert view["moderation"] == {"enabled": False}
     assert cold.snapshot(bot) is None
     assert service.path.read_bytes() == before
@@ -406,7 +491,7 @@ async def test_backup_and_rollback_export_preserve_latest_values_without_restori
     service.path = service.root / "settings.sqlite3"
     await service.start(recognize_command)
     proposal = adapter.config
-    proposal["reply_private"] = False
+    proposal["reply_groups"]["34"] = False
     await service.save(proposal, business_revision(proposal), "admin")
     (data / "cmd_config.json").write_text(json.dumps(config))
     ledger = data / "platform_data" / "wangshangliao" / "fixture" / "activities.sqlite3"
@@ -423,7 +508,9 @@ async def test_backup_and_rollback_export_preserve_latest_values_without_restori
         assert db.execute("SELECT * FROM paid").fetchall() == [("immutable", 500)]
     output = tmp_path / "rollback.json"
     assert export_config(data, output) == 1
-    assert json.loads(output.read_text())["platform"][0]["reply_private"] is False
+    exported = json.loads(output.read_text())["platform"][0]
+    assert exported["reply_groups"] == {"34": False}
+    assert "reply_private" not in exported
     assert ledger.read_bytes() == before
     assert (data / "cmd_config.json").read_text() == json.dumps(config)
     with pytest.raises(FileExistsError):

@@ -4,19 +4,19 @@ import { Settings2 } from "@lucide/vue";
 const props = defineProps<{ bridge: { apiPost: Function }; locale: string }>();
 const emit = defineEmits<{ navigate: [tab: string] }>();
 const all = ref(false);
-const common = new Set(["开通", "规则", "我的权限", "群列表", "选择群", "禁言名单", "解禁", "踢出", "参加抽奖", "抽奖状态", "我的邀请", "我的邀请明细", "我的套餐", "确认本群扣费", "结账", "/chat", "/exit"]);
+const common = new Set(["开通", "规则", "排名", "白名单", "黑名单", "禁言名单", "解禁", "踢出", "参加抽奖", "抽奖状态", "我的邀请", "我的邀请明细", "确认本群扣费"]);
 const place = ref("group");
 const rows = ref<any[]>([]);
 const error = ref("");
 const english = computed(() => props.locale.startsWith("en"));
 const places = computed(() => english.value
-  ? { group: "Group commands", private: "Private commands", server: "Server-only settings" }
-  : { group: "群内规则命令", private: "私信规则命令", server: "服务端专属设置" });
+  ? { group: "Group commands", server: "Server-only settings" }
+  : { group: "群内规则命令", server: "服务端专属设置" });
 const roles = computed<Record<string, string>>(() => english.value ? {
   public: "Everyone", group_manager: "Authorized group manager",
-  support_editor: "Dedicated owner / legacy account editor", finance: "Independent finance role", server: "Server",
+  finance: "Independent finance role", server: "Server",
 } : {
-  public: "所有人", group_manager: "本群授权管理", support_editor: "专属客服所有者／旧账号指定负责人",
+  public: "所有人", group_manager: "本群授权管理",
   finance: "独立财务角色", server: "服务端",
 });
 const commands = computed(() => rows.value.filter(row => (all.value || common.has(row.command)) && (place.value === "server"
@@ -31,7 +31,7 @@ const settings = computed(() => english.value ? [
 onMounted(async () => {
   try {
     const data = await props.bridge.apiPost("open-service", { action: "command_capabilities", payload: {} });
-    rows.value = data.commands;
+    rows.value = data.commands.filter((row: any) => row.locations.includes("group"));
   } catch (e: any) { error.value = e?.message || "命令目录暂不可用"; }
 });
 </script>
@@ -50,14 +50,14 @@ onMounted(async () => {
       <table>
         <thead><tr><th>{{ english ? 'Command' : '命令' }}</th><th>{{ english ? 'Required role' : '所需角色' }}</th><th>{{ english ? 'Confirmation' : '预览确认' }}</th></tr></thead>
         <tbody><tr v-for="row in commands" :key="row.command">
-          <td><code>{{ row.command }}</code><span v-if="row.retired"> · {{ english ? 'Retired' : '已停用' }}</span></td><td>{{ roles[row.role] }}</td>
+          <td><code>{{ row.command === "参加抽奖" ? "参与抽奖" : row.command }}</code><span v-if="row.retired"> · {{ english ? 'Retired' : '已停用' }}</span></td><td>{{ roles[row.role] }}</td>
           <td>{{ row.preview ? (english ? 'Required' : '需要') : (english ? 'No' : '否') }}</td>
         </tr></tbody>
       </table>
     </div>
     <p v-if="place === 'server'">{{ english
-      ? "Administrator guidance; group AI models, personas, tools, topic, hours and knowledge; support infrastructure; editor grants and budgets."
-      : "管理员指引配置、人格及权限手册；群AI模型、人格、工具、主题、时段、模式及群知识；客服基础配置、负责人授权及预算。" }}</p>
+      ? "Group AI models, personas, topic, hours and knowledge; plans, financial grants and budgets."
+      : "群AI模型、人格、主题、时段、模式及群知识；套餐、财务授权及预算。" }}</p>
   </section>
 </template>
 <style scoped>

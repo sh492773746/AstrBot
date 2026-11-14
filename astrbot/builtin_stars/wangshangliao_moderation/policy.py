@@ -62,6 +62,8 @@ async def handle(
     *,
     assessment=None,
     execution_check=None,
+    media_runtime=None,
+    recall_queue=None,
 ) -> bool:
     """Apply an authorized keyword rule without granting chat control.
 
@@ -72,6 +74,8 @@ async def handle(
         payload: Authenticated incoming message payload.
         assessment: Optional validated model assessment of this exact message.
         execution_check: Optional authority check for independent business workers.
+        media_runtime: Plugin-owned bounded local image recognizer.
+        recall_queue: Optional bounded cleanup lane for authenticated flood recalls.
 
     Returns:
         Whether the rule consumed this event.
@@ -111,10 +115,13 @@ async def handle(
         return False
     if not policy.get("enabled") or not policy.get("automation_enabled"):
         return False
+    if payload.get("kind") == "image" and media_runtime is not None and not assessment:
+        if media_runtime.enqueue(adapter, group, mid, payload, execution_check):
+            return True
     if (
         policy.get("content_rules_since")
         or policy.get("progressive_mute")
-        or payload.get("kind") in ("image", "video", "forward")
+        or payload.get("kind") in ("image", "video", "forward", "game")
         or (assessment and assessment.get("category") == "message_flood")
     ):
         from .content_rules import enforce
@@ -127,6 +134,7 @@ async def handle(
                 payload,
                 assessment=assessment,
                 execution_check=execution_check,
+                recall_queue=recall_queue,
             )
         return await enforce(adapter, group, mid, payload, assessment=assessment)
     mute = any(
@@ -251,6 +259,36 @@ async def handle(
                 )
         guard()
         peer = str(matches[0]["nimId"])
+        mute_failure = None
+        try:
+            if not needs_warning and warned and not cooling:
+                if policy.get("auto_kick", {}).get(group) is True:
+                    from astrbot.core.platform.sources.wangshangliao.automatic import (
+                        mute_and_escalate,
+                    )
+
+                    await mute_and_escalate(
+                        adapter,
+                        f"message/{group}/{mid}",
+                        group,
+                        sender,
+                        mid,
+                        execution_check=guard,
+                    )
+                else:
+                    await adapter.execute_action(
+                        ActionRequest.bind(
+                            adapter,
+                            f"message/{group}/{mid}",
+                            action,
+                            int(group),
+                            member=int(sender),
+                        ),
+                        authorize=guard,
+                    )
+        except Exception as exc:
+            mute_failure = exc
+        guard()
         if policy.get("recall_enabled"):
             try:
                 await adapter.execute_action(
@@ -269,6 +307,8 @@ async def handle(
                 adapter.diagnostics.emit(
                     "recall", "failed_or_unknown", mid, failed=True
                 )
+        if mute_failure is not None:
+            raise mute_failure
         guard()
         if needs_warning:
             if not peer.isdigit() or not 0 < int(peer) < 1 << 32:
@@ -318,26 +358,6 @@ async def handle(
                             started,
                         ),
                     )
-        elif warned and not cooling:
-            if action == "mute" and policy.get("auto_kick", {}).get(group) is True:
-                from astrbot.core.platform.sources.wangshangliao.automatic import (
-                    mute_and_escalate,
-                )
-
-                await mute_and_escalate(
-                    adapter, f"message/{group}/{mid}", group, sender, mid
-                )
-            else:
-                await adapter.execute_action(
-                    ActionRequest.bind(
-                        adapter,
-                        f"message/{group}/{mid}",
-                        action,
-                        int(group),
-                        member=int(sender),
-                    ),
-                    authorize=guard,
-                )
     except (ProtocolError, ValueError):
         adapter.diagnostics.emit("moderation", "rejected", mid)
     return True

@@ -4,6 +4,8 @@ import asyncio
 import json
 import re
 
+from telegram.error import BadRequest, Forbidden
+
 from .store import Rejected, encode
 
 
@@ -27,12 +29,38 @@ async def action(ui, update, payload, token=""):
         targets = json.loads(policy["targets"])
         return await ui.ui.render(
             update,
-            f"入群后验证 · {'开启' if policy['enabled'] else '关闭'}\n"
-            + ("\n".join(target["title"] for target in targets) or "尚未设置验证目标")
-            + "\n新成员加入全部目标后才能发言。未验证不自动踢出；旧成员不追溯限制。"
+            f"入群后验证 · {'🟢 已开启' if policy['enabled'] else '🔴 已关闭'}\n"
+            + (
+                "模式：加入指定群／频道后点击验证\n"
+                + "\n".join(target["title"] for target in targets)
+                if targets
+                else "模式：仅点击验证按钮，无须加入其他群／频道"
+            )
+            + "\n仅限制新成员；未验证不自动踢出，旧成员不追溯限制。"
             "\n停用只停止限制新成员，已有记录仍可验证或人工解除。",
             [
-                ("设置目标频道／群", {"action": "mod_jv_targets", "chat": chat}),
+                ("设置指定群／频道", {"action": "mod_jv_targets", "chat": chat}),
+                (
+                    "改为仅点击按钮验证",
+                    {
+                        "action": "mod_jv_preview",
+                        "chat": chat,
+                        "version": policy["version"],
+                        "targets": [],
+                        "enabled": bool(policy["enabled"]),
+                    },
+                )
+                if targets
+                else (
+                    "启用仅点击按钮验证",
+                    {
+                        "action": "mod_jv_preview",
+                        "chat": chat,
+                        "version": policy["version"],
+                        "targets": [],
+                        "enabled": True,
+                    },
+                ),
                 (
                     "关闭验证" if policy["enabled"] else "开启验证",
                     {
@@ -44,7 +72,7 @@ async def action(ui, update, payload, token=""):
                     },
                 ),
                 ("待验证／故障记录", {"action": "mod_jv_pending", "chat": chat}),
-                ("返回群管理", {"action": "mod_group", "chat": chat}),
+                ("返回群管", {"action": "semantic_group_menu", "chat": chat}),
             ],
         )
     if op == "mod_jv_targets":
@@ -59,7 +87,9 @@ async def action(ui, update, payload, token=""):
         )
         return await ui.ui.render(
             update,
-            "发送1至3个公开频道／群的 @用户名 或 t.me/用户名，英文逗号分隔。\n机器人须在每个目标中担任管理员；先支持公开目标，不接收私密邀请链接。",
+            "发送1至3个公开频道／群的 @用户名 或 t.me/用户名，英文逗号分隔。\n"
+            "机器人须在每个目标中担任管理员；先支持公开目标，不接收私密邀请链接。"
+            "\n不需要强制加入其他群时，请返回选择“仅点击按钮验证”。",
             home,
         )
     if op in {"mod_jv_preview", "mod_jv_save"}:
@@ -73,8 +103,6 @@ async def action(ui, update, payload, token=""):
             or len(targets) > 3
         ):
             raise Rejected("无效配置")
-        if enabled and not targets:
-            raise Rejected("先设置目标频道或群")
         if any(target["id"] == chat for target in targets):
             raise Rejected("验证目标不能是本群")
         if enabled:
@@ -89,8 +117,12 @@ async def action(ui, update, payload, token=""):
                     )
                     or "无目标"
                 )
-                + "\n开启后仅新成员会被验证禁言，加入全部目标后点击按钮放行。"
-                "\n未验证不自动踢出，管理员可核查后人工解除；已存在的限制不覆盖。"
+                + (
+                    "\n开启后仅新成员会被验证禁言，加入全部目标后点击按钮放行。"
+                    if targets
+                    else "\n开启后仅新成员会被验证禁言，点击验证按钮即可放行；不要求加入其他群／频道。"
+                )
+                + "\n未验证不自动踢出，管理员可核查后人工解除；已存在的限制不覆盖。"
                 "\n已有待验证成员继续使用加入时的目标，不受本次改动影响。",
                 [("确认保存", {**payload, "action": "mod_jv_save"})] + home,
             )
@@ -188,7 +220,12 @@ async def input_text(ui, update, chat, text):
         )
         if not match:
             raise Rejected("请发送公开 @用户名 或 t.me/用户名")
-        info = await ui.runtime.bot.get_chat("@" + match[1])
+        try:
+            info = await ui.runtime.bot.get_chat("@" + match[1])
+        except (BadRequest, Forbidden) as exc:
+            raise Rejected(
+                f"无法找到或访问 @{match[1]}；请检查公开用户名，确认机器人能访问该群／频道。"
+            ) from exc
         if str(info.id) == chat or info.type not in {"supergroup", "channel"}:
             raise Rejected("目标须为其他公开超级群或频道")
         targets.append(

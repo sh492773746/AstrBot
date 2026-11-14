@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -77,31 +78,119 @@ def test_missing_model_route_leaves_session_default_untouched():
     assert selected == {}
 
 
-def test_private_customer_uses_customer_model_not_administrator_model():
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [True, False])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "帮我创建抽奖",
+        "踢出成员并开启自动踢出",
+        "排名",
+        "确认设置 1234567890abcdef",
+    ],
+)
+async def test_private_messages_stop_before_models_or_management(
+    monkeypatch, admin, text
+):
+    from astrbot.builtin_stars.wangshangliao_moderation import main as plugin_module
+    from tests.test_wangshangliao_plain_commands import native_event
+
     adapter = _adapter()
     adapter.config["ai_routes"]["customer_provider_id"] = "private-customer"
-    main = object.__new__(Main)
-    main.context = SimpleNamespace(get_provider_by_id=lambda _: object())
-    selected = {}
-    event = SimpleNamespace(
-        platform=adapter,
-        get_group_id=lambda: "",
-        set_extra=selected.__setitem__,
-    )
-    main._select_route_provider(event, "customer_provider_id")
-    assert selected["selected_provider"] == "private-customer"
+    plugin = object.__new__(Main)
+    plugin.context = SimpleNamespace(get_provider_by_id=Mock())
+    plugin.commands = SimpleNamespace(run=AsyncMock())
+    plugin.open_service = SimpleNamespace(on_event=AsyncMock())
+    plugin.ai_runtime = SimpleNamespace(customer=AsyncMock())
+    assess = AsyncMock()
+    handle = AsyncMock()
+    monkeypatch.setattr(plugin_module, "assess", assess)
+    monkeypatch.setattr(plugin_module, "handle", handle)
+    event = native_event(text, private=True)
+    event.platform.config.update(adapter.config)
+    event.role = "admin" if admin else "member"
+    event.eligible = True
+    event.send = AsyncMock()
+
+    await plugin.moderate(event)
+
+    assert event.is_stopped()
+    assert event.get_extra("selected_provider") is None
+    assert event.get_extra("enable_streaming") is None
+    plugin.context.get_provider_by_id.assert_not_called()
+    plugin.commands.run.assert_not_awaited()
+    plugin.open_service.on_event.assert_not_awaited()
+    plugin.ai_runtime.customer.assert_not_awaited()
+    assess.assert_not_awaited()
+    handle.assert_not_awaited()
+    event.send.assert_not_awaited()
+    assert not hasattr(plugin, "private_management")
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("private", [True, False])
 @pytest.mark.parametrize("admin", [True, False])
-async def test_native_ai_reads_structured_stream_without_publishing_reasoning(
+async def test_private_llm_request_stops_without_resuming_history_or_tools(admin):
+    tools = SimpleNamespace(
+        tools=[
+            SimpleNamespace(name="wsl_private_management"),
+            SimpleNamespace(name="other"),
+        ]
+    )
+    original = list(tools.tools)
+    history = [
+        {
+            "role": "assistant",
+            "tool_calls": [{"function": {"name": "wsl_private_management"}}],
+        }
+    ]
+    conversation = SimpleNamespace(cid="private-history", history="retained")
+    request = SimpleNamespace(
+        func_tool=tools,
+        tool_calls_result=object(),
+        system_prompt="Existing private persona",
+        contexts=history,
+        conversation=conversation,
+    )
+    manager = SimpleNamespace(
+        new_conversation=AsyncMock(),
+        get_conversation=AsyncMock(),
+    )
+    plugin = object.__new__(Main)
+    plugin.context = SimpleNamespace(
+        conversation_manager=manager,
+        get_provider_by_id=Mock(),
+        llm_generate=AsyncMock(),
+    )
+    event = SimpleNamespace(
+        get_platform_name=lambda: "wangshangliao",
+        is_private_chat=lambda: True,
+        is_admin=lambda: admin,
+        stop_event=Mock(),
+    )
+
+    await plugin.plain_text_request(event, request)
+
+    event.stop_event.assert_called_once_with()
+    assert request.func_tool.tools == []
+    assert request.tool_calls_result is None
+    assert tools.tools == original
+    assert request.system_prompt == "Existing private persona"
+    assert request.contexts is history
+    assert request.conversation is conversation
+    assert conversation.history == "retained"
+    manager.new_conversation.assert_not_awaited()
+    manager.get_conversation.assert_not_awaited()
+    plugin.context.get_provider_by_id.assert_not_called()
+    plugin.context.llm_generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin", [True, False])
+async def test_group_ai_reads_structured_stream_without_publishing_reasoning(
     monkeypatch,
-    private,
     admin,
 ):
     from time import time
-    from unittest.mock import AsyncMock
 
     from astrbot.builtin_stars.wangshangliao_moderation import content_rules
     from astrbot.builtin_stars.wangshangliao_moderation import main as plugin_module
@@ -123,9 +212,9 @@ async def test_native_ai_reads_structured_stream_without_publishing_reasoning(
         platform=_adapter(),
         message_obj=SimpleNamespace(message_id="route-only-test"),
         get_platform_name=lambda: "wangshangliao",
-        get_group_id=lambda: "" if private else "5",
+        get_group_id=lambda: "5",
         get_sender_id=lambda: "2",
-        is_private_chat=lambda: private,
+        is_private_chat=lambda: False,
         is_admin=lambda: admin,
         get_extra=extras.get,
         set_extra=extras.__setitem__,
@@ -136,9 +225,7 @@ async def test_native_ai_reads_structured_stream_without_publishing_reasoning(
     assert extras.get("enable_streaming") is True
     assert extras.get("buffer_intermediate_messages") is True
     assert extras.get("enable_reasoning") is False
-    assert extras.get("selected_provider") == (
-        "admin-model" if private and admin else None if private else "customer-model"
-    )
+    assert extras.get("selected_provider") == "customer-model"
 
 
 @pytest.mark.asyncio
@@ -270,10 +357,7 @@ async def test_manual_only_rejects_ai_kick_and_reenabling_automatic_kick(
         unified_msg_origin="bot:private:2",
         message_str="踢出成员并开启自动踢出",
     )
-    main = object.__new__(Main)
-    main.context = SimpleNamespace(get_config=lambda _: {"admins_id": ["2"]})
-    result = json.loads(await main.private_management(event, "kick", "1"))
-    assert result == {"status": "rejected", "reason": "ai_management_retired"}
+    assert not hasattr(Main, "private_management")
     service = AdminConfigDrafts(
         SimpleNamespace(get_all_providers=lambda: []), None, None
     )
@@ -291,48 +375,10 @@ async def test_manual_only_rejects_ai_kick_and_reenabling_automatic_kick(
 
 
 @pytest.mark.asyncio
-async def test_management_tool_is_never_available_to_non_admin_private_chat():
-    main = object.__new__(Main)
-    event = SimpleNamespace(
-        get_platform_name=lambda: "wangshangliao",
-        is_private_chat=lambda: True,
-        is_admin=lambda: False,
-    )
-    result = json.loads(await main.private_management(event, "config_preview", "{}"))
-    assert result == {"status": "rejected", "reason": "ai_management_retired"}
-
-
-@pytest.mark.asyncio
-async def test_management_tool_is_removed_from_non_admin_ai_request():
-    main = object.__new__(Main)
-
-    class Tools:
-        def __init__(self):
-            self.tools = ["wsl_private_management", "other"]
-
-        def get_tool(self, name):
-            return name if name in self.tools else None
-
-        def remove_tool(self, name):
-            self.tools.remove(name)
-
-    tools = Tools()
-    request = SimpleNamespace(func_tool=tools, system_prompt="")
-    event = SimpleNamespace(
-        get_platform_name=lambda: "wangshangliao",
-        is_private_chat=lambda: True,
-        is_admin=lambda: False,
-        platform=SimpleNamespace(config={"id": "bot"}),
-        get_extra=lambda _: False,
-    )
-    await main.plain_text_request(event, request)
-    assert "wsl_private_management" not in request.func_tool.tools
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("available", [True, False])
-async def test_admin_request_only_exposes_management_tool_without_mutating_shared_tools(
-    available,
+@pytest.mark.parametrize("admin", [True, False])
+async def test_group_request_removes_all_tools_without_mutating_shared_tools(
+    available, admin
 ):
     from astrbot.builtin_stars.wangshangliao_moderation.conversation_guidance import (
         READ_ONLY_GUIDANCE,
@@ -350,29 +396,38 @@ async def test_admin_request_only_exposes_management_tool_without_mutating_share
 
     tools = Tools()
     original = list(tools.tools)
-    request = SimpleNamespace(func_tool=tools, system_prompt="Existing persona")
+    request = SimpleNamespace(
+        func_tool=tools, system_prompt="Existing persona", tool_calls_result=object()
+    )
+    extras = {}
     event = SimpleNamespace(
         get_platform_name=lambda: "wangshangliao",
-        is_private_chat=lambda: True,
-        is_admin=lambda: True,
+        is_private_chat=lambda: False,
+        is_admin=lambda: admin,
         platform=SimpleNamespace(
             config={"id": "bot", "moderation": {"manual_kick_only": True}},
         ),
-        get_extra=lambda _: None,
+        get_extra=extras.get,
+        set_extra=extras.__setitem__,
+        stop_event=Mock(),
     )
     await Main.plain_text_request(None, event, request)
     assert request.func_tool.tools == []
+    assert request.tool_calls_result is None
     assert tools.tools == original
     assert READ_ONLY_GUIDANCE in request.system_prompt
     assert request.system_prompt.startswith("Existing persona")
-    assert len(request.system_prompt) < 3000
+    assert extras["wsl_ai_role"] == "customer"
+    assert extras["_api_key_allow_admin_role"] is False
+    assert extras["enable_reasoning"] is False
+    event.stop_event.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "admin,management_history", [(False, True), (False, False), (True, True)]
 )
-async def test_customer_context_does_not_reuse_old_admin_tools(
+async def test_group_customer_context_does_not_reuse_old_admin_tools(
     admin, management_history
 ):
     history = [{"role": "user", "content": "previous"}]
@@ -395,20 +450,21 @@ async def test_customer_context_does_not_reuse_old_admin_tools(
     request = SimpleNamespace(func_tool=None, system_prompt="", contexts=history)
     event = SimpleNamespace(
         get_platform_name=lambda: "wangshangliao",
-        is_private_chat=lambda: True,
+        is_private_chat=lambda: False,
         is_admin=lambda: admin,
         platform=SimpleNamespace(config={"id": "bot"}),
         get_extra=lambda _: None,
+        stop_event=Mock(),
     )
     await Main.plain_text_request(None, event, request)
     assert request.contexts == [history[0]]
     assert len(history) == (2 if management_history else 1)
+    assert request.func_tool.tools == []
+    event.stop_event.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_revocation_archives_admin_conversation_instead_of_overwriting_it():
-    from unittest.mock import AsyncMock
-
+async def test_group_revocation_archives_admin_conversation_instead_of_overwriting_it():
     old = SimpleNamespace(
         cid="admin-history", persona_id="business", history="retained"
     )
@@ -433,34 +489,104 @@ async def test_revocation_archives_admin_conversation_instead_of_overwriting_it(
     )
     event = SimpleNamespace(
         get_platform_name=lambda: "wangshangliao",
-        is_private_chat=lambda: True,
+        is_private_chat=lambda: False,
         is_admin=lambda: False,
         platform=SimpleNamespace(config={"id": "bot"}),
         get_extra=lambda _: None,
-        unified_msg_origin="private-session",
+        unified_msg_origin="bot:group:5/wsl-ai/100/customer",
+        stop_event=Mock(),
     )
     await plugin.plain_text_request(event, request)
     manager.new_conversation.assert_awaited_once_with(
-        "private-session", title="旺商聊AI咨询（只读）", persona_id="business"
+        event.unified_msg_origin,
+        title="旺商聊AI咨询（只读）",
+        persona_id="business",
     )
     assert request.conversation is new and request.contexts == []
     assert old.history == "retained"
     assert request.extra_user_content_parts == ["current knowledge retrieval"]
+    assert request.func_tool.tools == []
+    event.stop_event.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "private,admin", [(True, False), (False, False), (False, True)]
+    "old_origin",
+    ["bot:group:6/wsl-ai/100/customer", "bot:group:5/wsl-ai/200/customer"],
+)
+async def test_group_conversation_from_another_scope_stops_before_reuse(old_origin):
+    manager = SimpleNamespace(
+        new_conversation=AsyncMock(),
+        get_conversation=AsyncMock(),
+    )
+    plugin = object.__new__(Main)
+    plugin.context = SimpleNamespace(conversation_manager=manager)
+    old = SimpleNamespace(user_id=old_origin, history="retained")
+    history = [{"role": "user", "content": "another scope"}]
+    request = SimpleNamespace(
+        func_tool=None, system_prompt="", conversation=old, contexts=history
+    )
+    event = SimpleNamespace(
+        get_platform_name=lambda: "wangshangliao",
+        is_private_chat=lambda: False,
+        get_extra=lambda _: None,
+        unified_msg_origin="bot:group:5/wsl-ai/100/customer",
+        stop_event=Mock(),
+        plain_result=lambda text: text,
+        send=AsyncMock(),
+    )
+
+    await plugin.plain_text_request(event, request)
+
+    event.stop_event.assert_called_once_with()
+    event.send.assert_awaited_once_with("会话范围已变化，请在当前群重新提问。")
+    manager.new_conversation.assert_not_awaited()
+    manager.get_conversation.assert_not_awaited()
+    assert request.conversation is old
+    assert request.contexts is history
+    assert old.history == "retained"
+    assert request.func_tool.tools == []
+
+
+@pytest.mark.asyncio
+async def test_group_revocation_blocks_stale_privileged_final_output():
+    extras = {"wsl_answer_nonce": "0123456789abcdef", "wsl_ai_role": "admin"}
+    event = SimpleNamespace(
+        get_platform_name=lambda: "wangshangliao",
+        is_private_chat=lambda: False,
+        is_ai_admin=lambda _: False,
+        get_extra=extras.get,
+        set_extra=extras.__setitem__,
+    )
+    plugin = object.__new__(Main)
+    plugin.context = SimpleNamespace()
+    response = SimpleNamespace(
+        completion_text='WSL_FINAL_0123456789abcdef\n{"text":"已执行旧管理操作"}',
+        reasoning_content="internal reasoning",
+    )
+    message = SimpleNamespace(role="assistant", content=["old privileged output"])
+
+    await plugin.final_reply(event, SimpleNamespace(messages=[message]), response)
+
+    assert extras["wsl_final_reply"] == "权限已变化，请重新发送请求。"
+    assert response.result_chain.chain[0].text == extras["wsl_final_reply"]
+    assert message.content[0].text == extras["wsl_final_reply"]
+    assert response.reasoning_content is None
+    assert extras["enable_reasoning"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "private,admin", [(True, False), (True, True), (False, False), (False, True)]
 )
 async def test_unprivileged_confirmation_is_handled_without_ai(private, admin):
-    from unittest.mock import AsyncMock
-
     main = object.__new__(Main)
+    main.ai_runtime = SimpleNamespace(customer=AsyncMock())
+    main.commands = SimpleNamespace(run=AsyncMock())
     from time import time
 
     extras = {
         "wangshangliao_payload": {"sender": "2", "created_at": time() * 1000},
-        "wsl_test_scope": "private_ai",
     }
     stopped = []
     event = SimpleNamespace(
@@ -477,8 +603,7 @@ async def test_unprivileged_confirmation_is_handled_without_ai(private, admin):
     await main.moderate(event)
     assert not hasattr(main, "ai_config")
     assert stopped == [True]
-    if private:
-        event.send.assert_awaited_once_with("无权限")
-        assert extras["wsl_permission_denial"] is True
-    else:
-        event.send.assert_not_awaited()
+    event.send.assert_not_awaited()
+    assert extras.get("wsl_permission_denial") is None
+    main.ai_runtime.customer.assert_not_awaited()
+    main.commands.run.assert_not_awaited()

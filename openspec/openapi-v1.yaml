@@ -6288,9 +6288,13 @@ components:
         verification_code:
           type: string
           writeOnly: true
+        security_code:
+          type: string
+          pattern: "^[0-9]{6}$"
+          writeOnly: true
         action:
           type: string
-          enum: [start, poll, login, request_sms, verify_sms, resend_sms, cancel, logout, groups, moderation_preview, moderation_execute, test_status, test_open, test_close, card_preview, cleanup_preview, card_execute, card_status, card_stop]
+          enum: [start, poll, login, request_sms, verify_sms, resend_sms, verify_security_code, retry_connection, cancel, logout, groups, moderation_preview, moderation_execute, test_status, test_open, test_close, card_preview, cleanup_preview, card_execute, card_status, card_stop]
         sender_instance:
           type: string
         groups:

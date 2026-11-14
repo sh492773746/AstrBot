@@ -3,12 +3,36 @@
 import asyncio
 import json
 import secrets
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 from .store import Rejected, encode
 
 PLATFORM = "platform"
 LOCAL_SCOPES = {"ads", "points", "game", "moderation"}
 POLICY = {"public": False, "pilot_owners": [], "max_groups": 3, "invoices": False}
+ADMIN_CONTEXT = ContextVar("superbot_group_admin", default=None)
+
+
+@asynccontextmanager
+async def group_admin(runtime, uid, chat, *, allow_inactive=False):
+    """Authorize one current request for local controls, never financial ownership.
+
+    Args:
+        runtime: Plugin with Telegram client and store.
+        uid: Authenticated actor.
+        chat: Explicit registered group.
+
+    Yields:
+        Nothing; scoped authorization is reset even when the request fails.
+
+    Raises:
+        Rejected: Telegram rights or local ownership changed.
+    """
+    from .group_authority import GroupAuthority
+
+    async with GroupAuthority(runtime).session(uid, chat, allow_paused=allow_inactive):
+        yield
 
 
 def migrate(store):
@@ -24,7 +48,8 @@ def migrate(store):
         CREATE TABLE IF NOT EXISTS tenant_groups(
             chat TEXT PRIMARY KEY,tenant TEXT NOT NULL REFERENCES tenants(id),
             status TEXT NOT NULL DEFAULT 'active',version INTEGER NOT NULL DEFAULT 1,
-            verified REAL NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '');
+            verified REAL NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',
+            mode TEXT NOT NULL DEFAULT 'verified');
         CREATE INDEX IF NOT EXISTS tenant_groups_owner ON tenant_groups(tenant,status);
         CREATE TABLE IF NOT EXISTS tenant_settings(
             chat TEXT NOT NULL REFERENCES tenant_groups(chat),key TEXT NOT NULL,
@@ -40,12 +65,21 @@ def migrate(store):
         CREATE TABLE IF NOT EXISTS tenant_service_contexts(
             uid TEXT NOT NULL,resource TEXT NOT NULL,chat TEXT NOT NULL,expires REAL NOT NULL,
             PRIMARY KEY(uid,resource));
+        CREATE TABLE IF NOT EXISTS group_admin_grants(
+            chat TEXT NOT NULL,uid TEXT NOT NULL,owner TEXT NOT NULL,
+            created REAL NOT NULL,PRIMARY KEY(chat,uid));
         CREATE VIEW IF NOT EXISTS platform_mod_groups AS
             SELECT m.* FROM mod_groups m WHERE NOT EXISTS(
                 SELECT 1 FROM tenant_groups g WHERE g.chat=m.chat AND g.tenant<>'platform');
         CREATE VIEW IF NOT EXISTS platform_ads AS SELECT * FROM ads WHERE tenant='platform';
     """)
     with store.tx() as db:
+        if "mode" not in {
+            r["name"] for r in db.execute("PRAGMA table_info(tenant_groups)")
+        }:
+            db.execute(
+                "ALTER TABLE tenant_groups ADD COLUMN mode TEXT NOT NULL DEFAULT 'verified'"
+            )
         db.execute(
             "INSERT OR IGNORE INTO tenants(id,owner,status,created) VALUES(?,?,'active',?)",
             (PLATFORM, store.owner, store.clock()),
@@ -147,6 +181,92 @@ class Tenants:
         self.runtime, self.store = runtime, runtime.store
         self.locks = {}
 
+    async def verify_designation(self, uid, chat, status):
+        """Require the current owner or an owner-designated live administrator.
+
+        Args:
+            uid: Actor.
+            chat: Exact group.
+            status: Fresh Telegram membership status.
+
+        Raises:
+            Rejected: Missing designation or ownership change.
+        """
+        if status == "creator":
+            return
+        grant = self.store.db.execute(
+            "SELECT owner FROM group_admin_grants WHERE chat=? AND uid=?",
+            (str(chat), str(uid)),
+        ).fetchone()
+        if status != "administrator" or not grant:
+            raise Rejected("仅群主或群主指定的群管可管理本群，请联系群主授权。")
+        try:
+            owner = await self.runtime.bot.get_chat_member(chat, int(grant["owner"]))
+        except Exception as exc:
+            from .group_authority import VerificationUnavailable
+
+            raise VerificationUnavailable("暂时无法核实授权群主，请稍后重试。") from exc
+        if owner.status != "creator":
+            raise Rejected("群主已变更，原群管授权失效，请新群主重新授权。")
+
+    async def designate(self, uid, chat, target, enabled, expected):
+        """Apply one owner-confirmed designation without granting global roles.
+
+        Args:
+            uid: Current owner.
+            chat: Target group.
+            target: Current Telegram administrator.
+            enabled: Grant or revoke.
+            expected: Group version from preview.
+
+        Raises:
+            Rejected: Stale, unauthorized or invalid request.
+        """
+        from .group_authority import GroupAuthority, require
+
+        async with GroupAuthority(self.runtime).session(
+            uid, chat, allow_paused=True
+        ) as proof:
+            if proof.status != "creator":
+                raise Rejected("只有当前群主可指定或撤销群管，指定群管不能转授权。")
+            if (
+                type(enabled) is not bool
+                or not str(target).isascii()
+                or not str(target).isdigit()
+                or str(target) == str(uid)
+            ):
+                raise Rejected("请选择其他Telegram真人管理员。")
+            if enabled:
+                member = await self.runtime.bot.get_chat_member(chat, int(target))
+                if member.status != "administrator" or getattr(
+                    getattr(member, "user", None), "is_bot", False
+                ):
+                    raise Rejected("只能授权当前Telegram真人管理员。")
+            with self.store.tx() as db:
+                require(self.store, uid, chat, db=db)
+                if proof.versions[0] != expected:
+                    raise Rejected("群配置或授权已变化，请重新预览。")
+                if enabled:
+                    db.execute(
+                        "INSERT INTO group_admin_grants VALUES(?,?,?,?) "
+                        "ON CONFLICT(chat,uid) DO UPDATE SET owner=excluded.owner,created=excluded.created",
+                        (str(chat), str(target), str(uid), self.store.clock()),
+                    )
+                else:
+                    db.execute(
+                        "DELETE FROM group_admin_grants WHERE chat=? AND uid=?",
+                        (str(chat), str(target)),
+                    )
+                db.execute(
+                    "UPDATE mod_groups SET version=version+1 WHERE chat=?", (str(chat),)
+                )
+                self.store.audit(
+                    db,
+                    uid,
+                    "group_admin_designation",
+                    {"chat": str(chat), "target": str(target), "enabled": enabled},
+                )
+
     def policy(self):
         return {**POLICY, **self.store.get("tenant_policy", {})}
 
@@ -170,9 +290,8 @@ class Tenants:
             self.store.audit(db, actor, "tenant_policy", policy)
 
     def invite(self, uid):
-        policy = self.policy()
-        if not policy["public"] and str(uid) not in policy["pilot_owners"]:
-            raise Rejected("自助接入尚在验收，仅向平台指定的测试群主开放。")
+        # New groups are auto-registered from the Telegram admin event.  Keep
+        # issuing a challenge only for legacy callers that still use bindgroup.
         with self.store.tx() as db:
             db.execute(
                 "DELETE FROM tenant_bindings WHERE expires<=?", (self.store.clock(),)
@@ -187,25 +306,40 @@ class Tenants:
 
     def read(self, uid, chat):
         """Authorize historical visibility without granting paused businesses writes."""
+        from .group_authority import require
+
+        require(self.store, uid, chat)
         row = binding(self.store, chat)
-        if (
-            not row
-            or row["tenant"] == PLATFORM
-            or str(uid) not in {self.store.owner, row["owner"]}
-        ):
-            raise Rejected("没有此群经营主体的权限")
+        if not row:
+            raise Rejected("本群经营记录尚未登记。")
         return row
 
     async def status(self, uid, chat, active, expected):
         """Suspend or restore the original verified owner, never transfer liability."""
         self.store.require(uid, owner=True)
+        current = self.read(uid, chat)
+        if current["owner"] != str(uid):
+            raise Rejected("仅本群经营群主且具备总控权限可调整群状态")
         if type(active) is not bool:
             raise Rejected("无效状态")
         if active:
-            await self.verify(uid, chat)
+            info = await self.runtime.bot.get_chat(chat)
+            actor = await self.runtime.bot.get_chat_member(chat, int(uid))
+            bot = await self.runtime.bot.get_chat_member(chat, self.runtime.bot.id)
+            if (
+                info.type != "supergroup"
+                or actor.status != "creator"
+                or bot.status not in {"creator", "administrator"}
+            ):
+                raise Rejected("恢复前须核实本群群主及机器人管理员身份")
         with self.store.tx() as db:
             row = binding(self.store, chat, db)
-            if not row or row["tenant"] == PLATFORM or row["version"] != expected:
+            if (
+                not row
+                or row["tenant"] == PLATFORM
+                or row["owner"] != str(uid)
+                or row["version"] != expected
+            ):
                 raise Rejected("群状态已变化，请重新核查")
             db.execute(
                 "UPDATE tenant_groups SET status=?,error=?,version=version+1 WHERE chat=?",
@@ -221,6 +355,161 @@ class Tenants:
             )
             self.store.audit(
                 db, uid, "tenant_status", {"chat": str(chat), "active": active}
+            )
+
+    async def restore(self, uid, chat, expected):
+        """Restore basic service after live admin and registered owner checks."""
+        before = binding(self.store, chat)
+        if (
+            not before
+            or before["tenant"] == PLATFORM
+            or before["status"] != "suspended"
+            or before["error"] != "bot_left"
+            or before["version"] != expected
+            or before["tenant_status"] != "active"
+        ):
+            raise Rejected("群归属或停用状态已变化，请联系本BOT核查")
+        try:
+            info = await self.runtime.bot.get_chat(chat)
+            owner = await self.runtime.bot.get_chat_member(chat, int(before["owner"]))
+            bot = await self.runtime.bot.get_chat_member(chat, self.runtime.bot.id)
+            actor = await self.runtime.bot.get_chat_member(chat, int(uid))
+        except Exception as exc:
+            raise Rejected("当前群主身份无法核验，请稍后重试") from exc
+        if (
+            info.type != "supergroup"
+            or owner.status != "creator"
+            or actor.status not in {"creator", "administrator"}
+            or bot.status not in {"administrator", "creator"}
+        ):
+            raise Rejected("仅本群现任群主或管理员可恢复；群主变更须先核实经营归属。")
+        await self.verify_designation(uid, chat, actor.status)
+        with self.store.tx() as db:
+            current = binding(self.store, chat, db)
+            if (
+                not current
+                or dict(current) != dict(before)
+                or current["version"] != expected
+                or current["status"] != "suspended"
+                or current["error"] != "bot_left"
+            ):
+                raise Rejected("群归属或停用状态已变化，请重新打开")
+            db.execute(
+                "UPDATE tenant_groups SET status='active',error='',version=version+1,"
+                "verified=? WHERE chat=? AND version=?",
+                (self.store.clock(), str(chat), expected),
+            )
+            db.execute(
+                "UPDATE mod_groups SET enabled=1,version=version+1 WHERE chat=?",
+                (str(chat),),
+            )
+            db.execute("DELETE FROM meta WHERE key=?", ("group_exit:" + str(chat),))
+            self.store.audit(db, uid, "group_restored", {"chat": str(chat)})
+
+    async def claim_owner(self, uid, chat, expected):
+        """Let current admins correct an automatic binding to the actual creator.
+
+        Args:
+            uid: Confirming Telegram user.
+            chat: Target group.
+            expected: Binding version shown in the confirmation.
+
+        Raises:
+            Rejected: Ownership, version, or financial safeguards fail.
+        """
+        before = binding(self.store, chat)
+        if (
+            not before
+            or before["tenant"] == PLATFORM
+            or before["mode"] != "auto"
+            or before["version"] != expected
+            or before["error"] not in {"", "bot_left", "ownership_or_bot_rights"}
+            or before["tenant_status"] != "active"
+        ):
+            raise Rejected("本群归属需人工核查，不能自助变更。")
+        info = await self.runtime.bot.get_chat(chat)
+        actor = await self.runtime.bot.get_chat_member(chat, int(uid))
+        bot = await self.runtime.bot.get_chat_member(chat, self.runtime.bot.id)
+        if (
+            info.type != "supergroup"
+            or actor.status not in {"creator", "administrator"}
+            or bot.status not in {"creator", "administrator"}
+        ):
+            raise Rejected(
+                "仅 Telegram 本群现任群主或管理员可确认归属，机器人须为管理员。"
+            )
+        creator = str(uid)
+        if actor.status != "creator":
+            administrators = await self.runtime.bot.get_chat_administrators(chat)
+            creators = [str(m.user.id) for m in administrators if m.status == "creator"]
+            if len(creators) != 1:
+                raise Rejected("无法核验真实群主，未修改经营归属。")
+            creator = creators[0]
+        owner = await self.runtime.bot.get_chat_member(chat, int(creator))
+        bot = await self.runtime.bot.get_chat_member(chat, self.runtime.bot.id)
+        actor = await self.runtime.bot.get_chat_member(chat, int(uid))
+        if (
+            owner.status != "creator"
+            or actor.status not in {"creator", "administrator"}
+            or bot.status not in {"creator", "administrator"}
+        ):
+            raise Rejected("群主或管理员权限已变化，请重新打开。")
+        await self.verify_designation(uid, chat, actor.status)
+        with self.store.tx() as db:
+            current = binding(self.store, chat, db)
+            if not current or dict(current) != dict(before):
+                raise Rejected("群归属或状态已变化，请重新打开。")
+            if before["owner"] != creator:
+                tables = {
+                    r[0]
+                    for r in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                financial = db.execute(
+                    "SELECT 1 FROM ads WHERE json_extract(package,'$.target')=? LIMIT 1",
+                    (str(chat),),
+                ).fetchone()
+                for table in (
+                    "merchant_addresses",
+                    "merchant_packages",
+                    "merchant_invoices",
+                ):
+                    if (
+                        table in tables
+                        and db.execute(
+                            f"SELECT 1 FROM {table} WHERE chat=? LIMIT 1", (str(chat),)
+                        ).fetchone()
+                    ):
+                        financial = True
+                if financial:
+                    raise Rejected(
+                        "本群已有广告订单或收款、广告位配置，须人工核查归属；不会自动转移。"
+                    )
+            tenant = "owner:" + creator
+            existing = db.execute(
+                "SELECT status FROM tenants WHERE id=?", (tenant,)
+            ).fetchone()
+            if existing and existing[0] != "active":
+                raise Rejected("当前群主经营权限已暂停，请联系本BOT核查。")
+            db.execute(
+                "INSERT OR IGNORE INTO tenants(id,owner,status,created) VALUES(?,?,'active',?)",
+                (tenant, creator, self.store.clock()),
+            )
+            db.execute(
+                "UPDATE tenant_groups SET tenant=?,mode='verified',version=version+1,"
+                "verified=? WHERE chat=?",
+                (tenant, self.store.clock(), str(chat)),
+            )
+            self.store.audit(
+                db,
+                uid,
+                "tenant_owner_confirmed",
+                {
+                    "chat": str(chat),
+                    "previous_owner": before["owner"],
+                    "owner": creator,
+                },
             )
 
     async def bind(self, uid, chat, token):
@@ -259,7 +548,9 @@ class Tenants:
                         (str(chat),),
                     ).fetchone()
                 ):
-                    raise Rejected("本群已绑定或已有业务，请由平台核查，不能覆盖认领。")
+                    raise Rejected(
+                        "本群已绑定或已有业务，请由本BOT核查，不能覆盖认领。"
+                    )
                 tenant = "owner:" + str(uid)
                 db.execute(
                     "INSERT OR IGNORE INTO tenants(id,owner,status,created) VALUES(?,?,'active',?)",
@@ -276,13 +567,14 @@ class Tenants:
                     ).fetchone()[0]
                     >= policy["max_groups"]
                 ):
-                    raise Rejected("已达到可接入群数量上限，请联系平台。")
+                    raise Rejected("已达到可接入群数量上限，请联系本BOT。")
                 db.execute(
                     "INSERT INTO mod_groups(chat,title,enabled) VALUES(?,?,0) ON CONFLICT(chat) DO NOTHING",
                     (str(chat), info.title or str(chat)),
                 )
                 db.execute(
-                    "INSERT INTO tenant_groups(chat,tenant,verified) VALUES(?,?,?)",
+                    "INSERT INTO tenant_groups(chat,tenant,verified,mode) "
+                    "VALUES(?,?,?,'verified')",
                     (str(chat), tenant, self.store.clock()),
                 )
                 from .points import DEFAULT
@@ -297,7 +589,9 @@ class Tenants:
                 )
                 return tenant
 
-    async def verify(self, uid, chat, scope="moderation", permission=None):
+    async def verify(
+        self, uid, chat, scope="moderation", permission=None, *, allow_paused=False
+    ):
         """Recheck real ownership and local revocation across network awaits.
 
         Args:
@@ -309,57 +603,18 @@ class Tenants:
         Returns:
             Verified ownership snapshot for optimistic mutation checks.
         """
-        self.store.require(uid, scope, chat=chat)
-        before = binding(self.store, chat)
-        if not before or before["tenant"] == PLATFORM:
-            raise Rejected("请使用原有平台群管理入口")
-        before = dict(before)
-        info = await self.runtime.bot.get_chat(chat)
-        owner = await self.runtime.bot.get_chat_member(chat, int(before["owner"]))
-        bot = await self.runtime.bot.get_chat_member(chat, self.runtime.bot.id)
-        if (
-            info.type != "supergroup"
-            or owner.status != "creator"
-            or bot.status not in {"creator", "administrator"}
-        ):
-            with self.store.tx() as db:
-                db.execute(
-                    "UPDATE tenant_groups SET status='suspended',error='ownership_or_bot_rights',version=version+1 WHERE chat=? AND version=?",
-                    (str(chat), before["version"]),
-                )
-                db.execute(
-                    "UPDATE mod_groups SET enabled=0,version=version+1 WHERE chat=?",
-                    (str(chat),),
-                )
-                self.store.audit(
-                    db, uid, "tenant_verification_failed", {"chat": str(chat)}
-                )
-            raise Rejected("群主身份或机器人权限已变化，本群暂停新操作，请平台核查。")
-        if (
-            permission
-            and bot.status != "creator"
-            and not getattr(bot, permission, False)
-        ):
-            raise Rejected("机器人缺少所需权限：" + permission)
-        self.store.require(uid, scope, chat=chat)
-        after = dict(binding(self.store, chat))
-        if any(
-            before[k] != after[k]
-            for k in (
-                "tenant",
-                "owner",
-                "version",
-                "tenant_version",
-                "status",
-                "tenant_status",
-            )
-        ):
-            raise Rejected("群归属或授权已变化，请重新操作。")
-        self.store.db.execute(
-            "UPDATE tenant_groups SET verified=?,error='' WHERE chat=?",
-            (self.store.clock(), str(chat)),
-        )
-        return after
+        from .group_authority import CURRENT, GroupAuthority, clear_proof
+
+        clear_proof()
+        if scope not in LOCAL_SCOPES:
+            raise Rejected("无效的群管理范围。")
+        async with GroupAuthority(self.runtime).session(
+            uid, chat, permission, allow_paused=allow_paused
+        ) as proof:
+            result = binding(self.store, chat)
+            result = dict(result) if result else {"chat": str(chat), "tenant": PLATFORM}
+        CURRENT.set(proof)
+        return result
 
     def settings(self, actor, chat, key, value, expected):
         self.store.require(actor, "points" if key == "points" else "game", chat=chat)
@@ -399,7 +654,19 @@ class Tenants:
             enabled: Explicit boolean value.
             expected: Ownership version captured by the preview.
         """
-        names = {"group", "canada", "ads", "wheel", "slots", "mines", "k3", "duel"}
+        names = {
+            "group",
+            "canada",
+            "ads",
+            "points",
+            "chat",
+            "avatar",
+            "wheel",
+            "slots",
+            "mines",
+            "k3",
+            "duel",
+        }
         if feature not in names or type(enabled) is not bool:
             raise Rejected("无效开关")
         with self.store.tx() as db:
@@ -408,25 +675,27 @@ class Tenants:
             if not owner or owner["tenant"] == PLATFORM or owner["version"] != expected:
                 raise Rejected("群归属或配置已变化，请重新预览")
             if owner["status"] != "active" or owner["tenant_status"] != "active":
-                raise Rejected("本群已暂停，须平台复核恢复后才能调整功能")
+                raise Rejected("本群已暂停，须本BOT复核恢复后才能调整功能")
             modules = self.store.get("modules", {}, db)
             if (
                 enabled
-                and feature not in {"group", "ads"}
+                and feature not in {"group", "ads", "points", "chat", "avatar"}
                 and (
                     not modules.get("game")
                     or not modules.get(feature, feature in {"canada", "duel"})
                 )
             ):
-                raise Rejected("平台未开放此玩法，本群不能绕过总开关。")
+                raise Rejected("本BOT未开放此玩法，本群不能绕过总开关。")
             if enabled and feature == "ads" and not modules.get("ads"):
-                raise Rejected("平台广告总开关已关闭")
+                raise Rejected("本BOT广告总开关已关闭")
+            if enabled and feature == "points" and not modules.get("points"):
+                raise Rejected("本BOT积分总开关已关闭")
             if feature == "group":
                 db.execute(
                     "UPDATE mod_groups SET enabled=?,version=version+1 WHERE chat=?",
                     (int(enabled), str(chat)),
                 )
-            elif feature in {"canada", "ads"}:
+            elif feature in {"canada", "ads", "points", "chat", "avatar"}:
                 db.execute(
                     "INSERT INTO tenant_settings(chat,key,value) VALUES(?,?,?) ON CONFLICT(chat,key) DO UPDATE SET value=excluded.value,version=tenant_settings.version+1",
                     (str(chat), feature + "_enabled", encode(enabled)),
@@ -475,7 +744,8 @@ class Tenants:
     def resource_grant(self, actor, chat, resource, budget, expected):
         """Authorize a bounded total call/task budget without changing global providers."""
         self.store.require(actor, owner=True)
-        self.read(actor, chat)
+        if self.read(actor, chat)["owner"] != str(actor):
+            raise Rejected("仅本群经营群主且具备总控权限可调整服务限额")
         if (
             resource not in {"avatar", "chat"}
             or type(budget) is not int
@@ -516,7 +786,7 @@ class Tenants:
         ):
             raise Rejected("仅本群当前成员可选择此服务预算")
         if not self.resource_allowed(uid, chat, resource):
-            raise Rejected("本群未获得此服务预算，或预算已用完")
+            raise Rejected("本群服务已关闭、暂停或达到总控显式限额；请联系管理员。")
         self.store.db.execute(
             "INSERT INTO tenant_service_contexts(uid,resource,chat,expires) VALUES(?,?,?,?) ON CONFLICT(uid,resource) DO UPDATE SET chat=excluded.chat,expires=excluded.expires",
             (str(uid), resource, str(chat), self.store.clock() + 1800),
@@ -534,19 +804,26 @@ class Tenants:
                 raise Rejected("预算操作身份冲突")
             raise Rejected("此付费请求已经提交，不能重复调用")
         if not self.resource_allowed(uid, chat, resource):
-            raise Rejected("本群预算未开放或已用完")
-        if not db.execute(
-            "UPDATE tenant_resource_grants SET used=used+1 WHERE chat=? AND resource=? AND enabled=1 AND used<budget",
+            raise Rejected("本群服务已关闭、暂停或达到总控显式限额")
+        grant = db.execute(
+            "SELECT 1 FROM tenant_resource_grants WHERE chat=? AND resource=?",
             (str(chat), resource),
-        ).rowcount:
-            raise Rejected("本群预算已用完")
+        ).fetchone()
+        if (
+            grant
+            and not db.execute(
+                "UPDATE tenant_resource_grants SET used=used+1 WHERE chat=? AND resource=? AND enabled=1 AND used<budget",
+                (str(chat), resource),
+            ).rowcount
+        ):
+            raise Rejected("本群已达到总控显式限额")
         db.execute(
             "INSERT INTO tenant_resource_uses(op,chat,resource,at) VALUES(?,?,?,?)",
             (op, str(chat), resource, self.store.clock()),
         )
 
     def resource_allowed(self, uid, chat=None, resource="avatar", op=None):
-        """Keep paid model services closed to independent businesses by default.
+        """Use shared services by default while respecting explicit suspensions.
 
         Args:
             uid: Authenticated user ID.
@@ -555,6 +832,8 @@ class Tenants:
         Returns:
             Whether the legacy platform service may be used.
         """
+        if resource not in {"chat", "avatar"}:
+            return False
         if chat is None:
             chat = self.resource_context(uid, resource)
             if chat is None:
@@ -566,15 +845,18 @@ class Tenants:
                     "JOIN tenant_groups g ON g.chat=m.chat "
                     "JOIN tenants t ON t.id=g.tenant AND t.status='active' "
                     "JOIN mod_groups mg ON mg.chat=g.chat AND mg.enabled=1 "
-                    "JOIN tenant_resource_grants r ON r.chat=g.chat "
-                    "WHERE m.uid=? AND g.status='active' AND r.resource=? "
-                    "AND r.enabled=1 AND r.used<r.budget "
+                    "LEFT JOIN tenant_resource_grants r ON r.chat=g.chat AND r.resource=? "
+                    "WHERE m.uid=? AND g.status='active' "
+                    "AND (r.resource IS NULL OR (r.enabled=1 AND r.used<r.budget)) "
+                    "AND NOT EXISTS(SELECT 1 FROM tenant_settings s WHERE s.chat=g.chat AND s.key=? AND s.value='false') "
                     "ORDER BY m.seen DESC LIMIT 1",
-                    (str(uid), resource),
+                    (resource, str(uid), resource + "_enabled"),
                 ).fetchone()
                 if candidate:
                     chat = candidate["chat"]
         if chat is not None:
+            if not local_config(self.store, chat, resource + "_enabled", True):
+                return False
             if platform_group(self.store, chat):
                 return True
             owner = binding(self.store, chat)
@@ -597,9 +879,13 @@ class Tenants:
                 and owner["status"] == owner["tenant_status"] == "active"
                 and group
                 and group[0]
-                and grant
-                and grant["enabled"]
-                and (reserved or grant["used"] < grant["budget"])
+                and (
+                    not grant
+                    or (
+                        grant["enabled"]
+                        and (reserved or grant["used"] < grant["budget"])
+                    )
+                )
             )
         if str(uid) == self.store.owner or self.store.allowed(uid):
             return True
@@ -649,7 +935,7 @@ class Tenants:
             }
             if any(value[k] > ceilings[k] for k in ceilings):
                 raise Rejected(
-                    "不能超过平台上限：普通1000、特殊100、号码20、单期2000。"
+                    "不能超过本BOT上限：普通1000、特殊100、号码20、单期2000。"
                 )
         elif key.startswith("canada_limits:"):
             room = self.runtime.game.rooms().get(key.split(":", 1)[1])
@@ -667,9 +953,9 @@ class Tenants:
                 <= room["maximum"]
                 or not value["maximum"] <= value["total"] <= room["total"]
             ):
-                raise Rejected("本群限额须在平台范围内，且最小≤单笔≤单期。")
+                raise Rejected("本群限额须在本BOT范围内，且最小≤单笔≤单期。")
         else:
-            raise Rejected("该参数由平台管理，群主不能修改。")
+            raise Rejected("该参数由本BOT管理，群主不能修改。")
         with self.store.tx() as db:
             self.store.require(actor, "game", db, chat=chat)
             row = db.execute(
@@ -692,6 +978,10 @@ class Tenants:
     async def loop(self):
         """Periodically suspend ownership drift without altering in-flight ledgers."""
         while True:
+            application = getattr(self.runtime, "application", None)
+            if not application or not application.running:
+                await asyncio.sleep(5)
+                continue
             rows = self.store.db.execute(
                 "SELECT g.chat,t.owner FROM tenant_groups g JOIN tenants t ON t.id=g.tenant "
                 "WHERE g.tenant<>'platform' AND g.status='active' AND t.status='active' AND g.verified<? "

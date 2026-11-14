@@ -1,4 +1,4 @@
-"""Native, fixed-command editing of private and exact-group knowledge."""
+"""Native, fixed-command access to exact-group knowledge."""
 
 import asyncio
 import hashlib
@@ -11,20 +11,16 @@ from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from .knowledge_store import MAX_BYTES, MAX_ENTRIES, KnowledgeScope, KnowledgeStore
 from .open_store import OpenError
 from .policy import require_group_admin
-from .syntax import GROUP_KNOWLEDGE_COMMANDS, PERSONAL_KNOWLEDGE_COMMANDS
+from .syntax import GROUP_KNOWLEDGE_COMMANDS
 
 READ_COMMANDS = {
-    "我的知识",
-    "查看我的知识",
-    "我的知识容量",
     "本群知识",
     "查看群知识",
     "本群知识容量",
     "本群知识范围",
 }
 REPLIES = {
-    "knowledge_private": "个人知识只在私聊中查看和编辑，请私信我发送「菜单」，选择8，再选择5。",
-    "knowledge_denied": "无权限：只能管理自己获授权的群知识，请先私聊选择对应群。",
+    "knowledge_denied": "无权限：只能在当前获授权群中查询本群知识。",
     "knowledge_changed": "知识内容、当前群或你的权限已变化，没有修改。请重新查看后再选择。",
     "knowledge_number": "没有这个资料序号，请先查看知识列表。",
     "knowledge_invalid": "格式不正确，没有保存。请填写：标题 | 正文；标题最多80字，每条合计不超过8KiB。",
@@ -72,7 +68,7 @@ class Knowledge:
 
         Args:
             event: Transport-authenticated command event.
-            action: Fixed personal or group knowledge command.
+            action: Fixed group knowledge command.
 
         Returns:
             Scope and a revocation-aware transaction guard.
@@ -91,18 +87,14 @@ class Knowledge:
         principal = identity.principal
         account = identity.account
         frozen = service.write_guard(event.platform, event)
-        if action in PERSONAL_KNOWLEDGE_COMMANDS:
-            if not event.is_private_chat():
-                raise OpenError("knowledge_private")
-            scope = KnowledgeScope("personal", owner=principal)
-        elif action in GROUP_KNOWLEDGE_COMMANDS:
+        if action in GROUP_KNOWLEDGE_COMMANDS:
             if action not in READ_COMMANDS:
                 raise OpenError("group_knowledge_server_owned")
             if event.is_private_chat():
-                await service.verify_actor(event)
+                raise OpenError("knowledge_denied")
             identity = event.actor_identity
             identity.require_verified()
-            group = event.get_group_id() or service.navigation.stamp(event)[3]
+            group = event.get_group_id()
             if not group or not service.management.allowed(event, group):
                 raise OpenError("knowledge_denied")
             require_group_admin(event.platform.config, group)
@@ -202,7 +194,7 @@ class Knowledge:
                     raise OpenError("knowledge_changed")
                 if action in READ_COMMANDS:
                     entries = data["entries"]
-                    label = "我的知识库" if scope.kind == "personal" else "本群知识库"
+                    label = "本群知识库"
                     if action.endswith("容量"):
                         return (
                             f"【{label} · 容量】\n"
@@ -215,7 +207,7 @@ class Knowledge:
                             f"【{label} · 使用范围】\n"
                             f"@回复引用：{'开启' if data['mentions'] else '关闭'}\n"
                             f"主动热群引用：{'开启' if data['idle'] else '关闭'}\n"
-                            "仅使用本群资料，不读取管理者的个人知识。"
+                            "仅使用本群资料。"
                         )
                     if action.startswith("查看"):
                         if not re.fullmatch(
@@ -243,23 +235,11 @@ class Knowledge:
                         f"【{label} · {page}/{pages}页】\n"
                         + (listing or "暂无资料。")
                         + "\n"
-                        + (
-                            "仅用于本人私聊；不会自动公开给群。"
-                            if scope.kind == "personal"
-                            else "资料仅属于本群，引用范围需另行开启。"
-                        )
-                        + "\n查看全文："
-                        + ("查看我的知识" if scope.kind == "personal" else "查看群知识")
-                        + " 序号；翻页："
-                        + ("我的知识" if scope.kind == "personal" else "本群知识")
-                        + " 页码。"
+                        + "资料仅属于本群，引用范围需另行开启。"
+                        + "\n查看全文：查看群知识 序号；翻页：本群知识 页码。"
                     )
                 if expected is None or state is None:
-                    return (
-                        "请发送「菜单」，选择"
-                        + ("8 → 5" if scope.kind == "personal" else "9 → 7")
-                        + "，预览后确认修改；直接发送文字不会修改知识库。"
-                    )
+                    return "请由已有后台权限的负责人在插件页面维护群知识。"
                 message = state.message
                 stamp = state.stamp
 

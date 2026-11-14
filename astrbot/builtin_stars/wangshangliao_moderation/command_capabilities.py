@@ -1,4 +1,4 @@
-"""One permission/location catalog for native help, menus and guidance prompts."""
+"""Active group command declarations and non-executable WebUI guidance."""
 
 import hashlib
 
@@ -7,13 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from astrbot.core.star.components import CommandSpec
 
 from .rule_replies import Advertisement, KeywordReply
-from .service_settings import SupportConfiguration
 from .syntax import (
     ALIASES,
     BLACKLIST_COMMANDS,
     BUSINESS_COMMANDS,
     NO_ARGUMENT,
-    PERSONAL_KNOWLEDGE_COMMANDS,
     RETIRED_CHAT_ACTIONS,
     WHITELIST_COMMANDS,
     WITH_ARGUMENT,
@@ -32,8 +30,7 @@ SERVER_COMMANDS = {
     "删除群知识",
     "群知识引用",
 }
-SUPPORT_COMMANDS = {c for c in BUSINESS_COMMANDS if "客服" in c}
-RULE_COMMANDS = BUSINESS_COMMANDS - SUPPORT_COMMANDS
+RULE_COMMANDS = BUSINESS_COMMANDS
 PUBLIC_GROUP = {
     "排名",
     "今日排名",
@@ -42,18 +39,8 @@ PUBLIC_GROUP = {
     "参加抽奖",
     "抽奖状态",
     "邀请奖励",
-}
-PUBLIC_PRIVATE = {
-    "客服列表",
-    "选择客服",
-    "退出客服",
-    "/chat",
-    "/exit",
     "我的邀请",
     "我的邀请明细",
-    "我的套餐",
-    "我的额度",
-    "套餐说明",
     "我拉了谁",
     "我邀请了谁",
     "我拉的人",
@@ -63,18 +50,8 @@ PUBLIC_PRIVATE = {
     "为什么邀请没统计",
     "邀请为什么没统计",
     "拉人没统计",
-} | PERSONAL_KNOWLEDGE_COMMANDS
-COMMON = {
-    "菜单",
-    "私聊菜单",
-    "帮助",
-    "群管帮助",
-    "help",
-    "取消",
-    "0",
-    "我的权限",
-    "sid",
 }
+COMMON = {"取消"}
 
 
 class NativeArguments(BaseModel):
@@ -96,39 +73,20 @@ def arguments_for(command):
         schema["x-parsed-value"] = KeywordReply.model_json_schema()
     elif command in {"添加广告", "修改广告"}:
         schema["x-parsed-value"] = Advertisement.model_json_schema()
-    elif command in {"客服话术", "客服风格", "客服长度", "客服链接", "添加客服知识"}:
-        field = {
-            "客服话术": "wording",
-            "客服风格": "style",
-            "客服长度": "length",
-            "客服链接": "links",
-            "添加客服知识": "knowledge",
-        }[command]
-        schema["x-parsed-value"] = SupportConfiguration.model_json_schema()[
-            "properties"
-        ][field]
     return schema
 
 
 COMMAND_SPECS = {}
 for _name in sorted(
-    NO_ARGUMENT | WITH_ARGUMENT | BUSINESS_COMMANDS | PUBLIC_PRIVATE | COMMON | {"结账"}
+    (NO_ARGUMENT | WITH_ARGUMENT | BUSINESS_COMMANDS | COMMON) - RETIRED_CHAT_ACTIONS
 ):
-    _role, _locations = "group_manager", ("group", "private")
+    _role, _locations = "group_manager", ("group",)
     if _name in COMMON:
         _role = "public"
     elif _name in PUBLIC_GROUP:
         _role, _locations = "public", ("group",)
-    elif _name in PUBLIC_PRIVATE:
-        _role, _locations = "public", ("private",)
-    elif _name in SUPPORT_COMMANDS:
-        _role, _locations = "support_editor", ("private",)
-    elif _name == "广告图片":
-        _locations = ("private",)
     elif _name in SERVER_COMMANDS:
-        _role = "server"
-    elif _name in {"结账", "结账结果", "确认已付款", "确认修改"}:
-        _role, _locations = "finance", ("private",)
+        _role, _locations = "server", ()
     COMMAND_SPECS[_name] = CommandSpec(
         id="wsl.command." + hashlib.sha256(_name.encode()).hexdigest()[:16],
         plugin="wangshangliao_moderation",
@@ -138,15 +96,22 @@ for _name in sorted(
         locations=_locations,
         capability="wsl.commands",
         arguments=arguments_for(_name),
-        retired=_name in RETIRED_CHAT_ACTIONS,
         preview=_name in RULE_COMMANDS - {"关键词回复", "定时广告"}
-        or _name in SUPPORT_COMMANDS - {"客服设置", "客服知识"}
         or _name in {"踢出", "添加管理员", "移除管理员", "定时禁言"}
         or _name in WHITELIST_COMMANDS - {"白名单"}
-        or _name in BLACKLIST_COMMANDS - {"黑名单", "黑名单列表"}
-        or _name
-        in PERSONAL_KNOWLEDGE_COMMANDS - {"我的知识", "查看我的知识", "我的知识容量"},
+        or _name in BLACKLIST_COMMANDS - {"黑名单", "黑名单列表"},
     )
+
+COMMAND_SPECS["禁言"] = CommandSpec(
+    id="wsl.command.delegated_mute",
+    plugin="wangshangliao_moderation",
+    command="禁言",
+    role="mute_delegate",
+    locations=("group",),
+    capability="wsl.commands",
+    arguments=arguments_for("禁言"),
+    preview=False,
+)
 
 CAPABILITIES = {
     name: {
@@ -162,16 +127,21 @@ CAPABILITIES = {
 
 def command_help(location, roles=(), *, include_server=False):
     """Render executable location and explicit roles without granting authority."""
+    if location != "group":
+        return (
+            "旺商聊私信功能已移除，不处理私信命令、菜单、AI、客服、财务或图片录入。"
+            "群管理请在目标群使用现有管理命令；使用帮助、授权管理、规则、图文、活动和财务由已有相应后台权限的负责人在WebUI维护。"
+            "普通群管理员不会因此获得全局后台权限。历史会话、账本与审计保留。"
+        )
     roles = {"public", *roles}
     labels = {
         "group_manager": "本群授权管理",
-        "support_editor": "专属客服所有者／本机器人指定客服负责人",
-        "finance": "独立财务角色",
         "public": "所有人",
         "server": "服务端专属",
+        "mute_delegate": "本群禁言专属授权",
     }
-    lines = ["【群内规则命令】" if location == "group" else "【私信规则命令】"]
-    for role in ("public", "group_manager", "support_editor", "finance"):
+    lines = ["【群内规则命令】"]
+    for role in ("public", "group_manager", "mute_delegate"):
         commands = [
             row
             for row in CAPABILITIES.values()
@@ -182,48 +152,63 @@ def command_help(location, roles=(), *, include_server=False):
                 labels[role]
                 + "："
                 + "、".join(
-                    row["command"]
-                    + (
-                        "（已停用）"
-                        if row["retired"]
-                        else "（预览确认）"
-                        if row["preview"]
-                        else ""
-                    )
+                    row["command"] + ("（预览确认）" if row["preview"] else "")
                     for row in commands
                 )
             )
+    lines.append("群内默认当前群，不列出或切换其他群。")
     lines.append(
-        "群内默认当前群。"
-        if location == "group"
-        else "群管理先「群列表」「选择群 序号」；专属客服按已核验开通者跨群跨机器人共用。"
-        "多个业务先「客服列表」「选择客服 序号」；旧账号客服保持兼容。"
+        "排名、排行及别名供所有群成员查询今日有效发言前20名，不分页、不显示UID；旧页码仍返回前20名。"
     )
     lines.append(
-        "群内命令不用先加好友；私聊管理先选本人授权群。开通后仍需机器人原生群管理权限。"
+        "群内命令不用先加好友；仍须本人本群授权及机器人原生群管理权限。私信功能已移除。"
     )
     lines.append("关键词回复仅群内触发，规则命中后AI不追加回复；时间均为北京时间。")
+    if "mute_delegate" in roles:
+        lines.append(
+            "禁言专属：客户端真正@一名成员发送「@成员 禁言128」或「@成员 禁言 128」，"
+            "表示禁言128分钟，范围1至4320整分钟（最多3天）。仅当前机器人和获授权群，不含踢人、解禁或名单管理。"
+            "也支持「@成员 禁言30分」和「@成员 禁言30分钟」；不填时长只提示，不会禁言。"
+            "不处理自己、群主、管理员、机器人、有效白名单及黑名单成员；已有禁言不覆盖。"
+            "禁言受理后，后台逐条限速撤回该成员本群命令前30分钟内的可核实消息，"
+            "单批最多500条，超限、忙碌或未知结果会提示或停止；进度请在后台查看。"
+            "受理、拒绝和未知分别提示，未知不自动重试。"
+        )
     if "group_manager" in roles:
         lines.append(
+            "名单简写：加黑＝黑名单，删黑＝解除黑名单，加白＝白名单，删白＝移除白名单。"
+            "原命令继续可用；加白用真正@，加黑和删黑用真正@或可信原生回复；"
+            "真正@一名成员＋删白或删白 名称均返回搜索结果，仍需选择并确认，不直接移除或解禁。"
+        )
+        lines.append(
             "黑名单：群内回复原消息或真正@一名成员发送「黑名单」，加入后立即按本群时长禁言，不踢人。"
-            "私信或后台添加只登记、不立即处罚。"
+            "后台添加只登记、不立即处罚。"
             "每次可信真实重入直接禁言，不踢人；「黑名单列表」查询。"
-            "「黑名单禁言时长 N分钟／小时／天」预览后本人另发「确认黑名单 令牌」，"
-            "范围1—41760整分钟，默认41760分钟（29天）。"
+            "禁言时长沿用本群已保存设置；已有相应后台权限的负责人可在WebUI黑名单设置中预览并确认修改，范围1—41760整分钟。"
             "只影响之后的群内拉黑和真实重入，不追罚旧名单或重设已有禁言，普通禁言24小时上限不变。"
-            "私信选群后「添加黑名单 名称／移除黑名单 名称 → 选择黑名单 序号 → 确认黑名单 令牌」。"
             "只影响当前机器人和本群。群内真实@或回复发送「解除黑名单」（兼容「移除黑名单」），"
-            "移出名单并解禁，分别反馈结果；私信或后台移除只移出名单，单独解禁不移除黑名单。"
+            "移出名单并解禁，分别反馈结果；后台移除只移出名单，机器人命令或后台解禁经核验后也移出本群黑名单。"
         )
         lines.append(
             "发言白名单：群内真正@一名成员＋白名单，直接加入，无需搜索、选择或确认。"
-            "移除白名单 名称 → 选择白名单 搜索序号 → "
+            "移除白名单 当前名／保存旧名／精确UID → 选择白名单 搜索序号 → "
             "确认白名单 预览令牌。仅可选择当前群真实成员，不授予管理权限，也不自动解禁。"
+        )
+        lines.append(
+            "普通手动禁言、全员禁言和解除全员禁言的聊天命令已停用，请用旺商聊App。"
+            "专门汇报成员只有经服务端单独授权才可用「@成员 禁言128」；管理身份不自动包含此授权。"
+            "本群授权管理可用「解禁 @成员」或「解除禁言 @成员」，必须客户端真实@；"
+            "普通用户不能自行解禁，AI不能代办。核验后同时移出本群当前黑名单；"
+            "平台未核验、名单或权限变化时分别反馈，不强行删除。"
+            "自动广告处罚、防刷屏和每日定时禁言、解除仍按设置运行。"
+            "「定时禁言 23:00 08:00」预览后本人「确认定时 令牌」。"
+            "未知结果暂停核对，不自动重试。"
         )
     if include_server:
         lines.append(
-            "【服务端专属设置】管理员指引的配置/人格/手册；群聊与热群的模型/人格/工具/"
-            "主题/时段/模式/群知识；客服的模型/密钥/工具/安全边界；客服负责人授权；"
-            "发送授权及预算。群管仅能切换已开通群AI总开关，不能代替承担人确认。"
+            "【WebUI与服务端】规则、关键词及定时图片、活动与财务；群聊与热群的模型/人格/"
+            "工具/主题/时段/模式/群知识、发送授权及预算。"
+            "仅已有相应后台权限者维护，不向普通群管理授予全局后台登录。"
+            "群管仅能切换已开通群AI总开关，不能代替承担人确认。"
         )
     return "\n".join(lines)

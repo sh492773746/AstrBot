@@ -4,6 +4,13 @@ title = "Reviewed production-source snapshot"
 useDefault = true
 
 [[allowlists]]
+description = "Diagnostic stage label and a runtime correlation variable, not a credential"
+condition = "AND"
+regexTarget = "line"
+paths = ['''astrbot/core/platform/sources/wangshangliao/advertisement_recall\.py''']
+regexes = ['''"advertisement_recall", outcome, key, failed=outcome != "accepted"''']
+
+[[allowlists]]
 description = "Reviewed non-secret public constant or synthetic fixture"
 condition = "AND"
 regexTarget = "line"

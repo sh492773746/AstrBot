@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Check, LoaderCircle, RefreshCw, Search, UserMinus, X } from "@lucide/vue";
+import WhitelistHistoryPanel from "./WhitelistHistoryPanel.vue";
+import type { WhitelistHistoryApi, WhitelistMember } from "./whitelistHistory";
 
-type Member = { id: string; name: string; conflict?: boolean; source?: "daily_top30"; count?: number };
+type Member = WhitelistMember;
 type Mode = "add" | "remove";
 type Preview = { token: string; mode: Mode; member: Member };
 type Operation = "read" | "search" | "preview" | "commit";
 type Scope = { account: string; group_id: string; tenant_version: number };
-interface MemberWhitelistApi {
+interface MemberWhitelistApi extends WhitelistHistoryApi {
   (action: "member_whitelist", payload: Scope & { operation: "read" }):
     Promise<{ version: number; members: Member[] }>;
   (action: "member_whitelist", payload: Scope & { operation: "search"; mode: Mode; query: string }):
@@ -21,6 +23,7 @@ const props = defineProps<{
   api: MemberWhitelistApi; account: string; group: string; tenantVersion: number; disabled?: boolean;
 }>();
 const members = ref<Member[]>([]);
+const listVersion = ref(0);
 const results = ref<Member[]>([]);
 const query = ref("");
 const mode = ref<Mode>("add");
@@ -82,6 +85,7 @@ async function execute(operation: Operation, removal?: Member) {
       const row = await props.api("member_whitelist", { ...target, operation });
       if (current !== generation) return;
       members.value = row.members;
+      listVersion.value = row.version;
       loaded.value = true;
     } else if (operation === "search") {
       const row = await props.api("member_whitelist", {
@@ -124,6 +128,7 @@ async function execute(operation: Operation, removal?: Member) {
       const latest = await props.api("member_whitelist", { ...target, operation: "read" });
       if (current !== generation) return;
       members.value = latest.members;
+      listVersion.value = latest.version;
       loaded.value = true;
     }
   } catch (e: unknown) {
@@ -169,7 +174,7 @@ onBeforeUnmount(() => { generation++; });
     <ul v-if="loaded && members.length" class="members" aria-label="已加入白名单的成员">
       <li v-for="member in members" :key="member.id">
         <div class="identity"><strong>{{ member.name || '已离群成员' }}</strong><small>UID {{ member.id }}</small>
-          <small v-if="member.source === 'daily_top30'">昨日前30名 · 昨日 {{ member.count }} 条有效发言</small>
+          <small v-if="member.source === 'daily_top30'">自动白名单 · 达标时 {{ member.count }} 条 · 7天无有效聊天退出</small>
           <small v-if="member.conflict" class="warning">同时在黑名单</small>
         </div>
         <button type="button" class="icon-button" title="移出白名单"
@@ -180,6 +185,9 @@ onBeforeUnmount(() => { generation++; });
       </li>
     </ul>
     <p v-else-if="loaded" class="muted">暂无白名单成员</p>
+    <WhitelistHistoryPanel v-if="loaded && members.length"
+      :api="api" :account="account" :group="group" :tenant-version="tenantVersion"
+      :list-version="listVersion" :members="members" :disabled="locked || Boolean(preview)" />
     <fieldset :disabled="locked || Boolean(preview) || !loaded">
       <legend class="visually-hidden">搜索当前群成员</legend>
       <div class="modes" role="group" aria-label="白名单操作">

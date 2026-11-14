@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -32,6 +33,8 @@ def room_scheduler():
     clock = SimpleNamespace(now=1000.0)
     scope = {
         "OWNER": 1,
+        "hashlib": hashlib,
+        "json_response": lambda value: value,
         "asyncio": asyncio,
         "json": json,
         "time": SimpleNamespace(time=lambda: clock.now, monotonic=lambda: clock.now),
@@ -44,7 +47,7 @@ def room_scheduler():
         n
         for n in cls.body
         if isinstance(n, ast.AsyncFunctionDef)
-        and n.name in {"action", "room_step", "tick"}
+        and n.name in {"action", "room_step", "tick", "web_status"}
     ]
     exec(
         compile(ast.Module(body=methods, type_ignores=[]), "<scheduler>", "exec"),
@@ -59,8 +62,9 @@ def room_scheduler():
         "cursor": 0,
     }
     obj = SimpleNamespace(
-        state={"rooms": {"r": room}},
+        state={"rooms": {"r": room}, "grants": {}},
         status="已登录",
+        remember=False,
         checked=clock.now,
         visible={"r": {"status": 1}},
         due={"r": 0},
@@ -89,6 +93,7 @@ async def test_added_text_has_confirmation_and_full_paged_list():
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef))
     scope = {
         "OWNER": 1,
+        "hashlib": hashlib,
         "time": time,
         "Button": Button,
         "Keyboard": Keyboard,
@@ -146,7 +151,7 @@ async def test_individual_text_actions_preserve_others_and_reject_stale():
         for n in cls.body
         if isinstance(n, ast.AsyncFunctionDef) and n.name == "action"
     )
-    scope = {"OWNER": 1, "time": time}
+    scope = {"OWNER": 1, "time": time, "hashlib": hashlib}
     exec(compile(ast.Module(body=[method], type_ignores=[]), "<action>", "exec"), scope)
     room = {"text": "one", "text2": "two", "revision": 4, "cursor": 1}
     obj = SimpleNamespace(
@@ -209,14 +214,22 @@ async def test_unknown_send_continues_next_item_without_replay(room_scheduler, g
     assert room["enabled"] and room["cursor"] == 1
     assert room["history"][-1]["result"] == "uncertain"
     assert obj.due["r"] == obj.clock.now + gap
-    obj.due["r"] = 0
+    obj.clock.now = obj.due["r"]
+    obj.checked = obj.clock.now
     await obj.room_step("r")
     assert [c.args[1] for c in send.await_args_list] == ["one", "two"]
     assert room["cursor"] == 2 and room["result"] == "confirmed"
     assert obj.due["r"] == obj.clock.now + gap
-    obj.due["r"] = 0
+    obj.clock.now = obj.due["r"]
+    obj.checked = obj.clock.now
     await obj.room_step("r")
     assert room["cursor"] == 0
+    assert [c.args[1] for c in send.await_args_list] == ["one", "two", "three"]
+    assert [entry["result"] for entry in room["history"]] == [
+        "uncertain",
+        "confirmed",
+        "confirmed",
+    ]
     assert obj.due["r"] == obj.clock.now + 50
 
 
@@ -400,6 +413,197 @@ async def test_stale_preflight_failure_cannot_override_admin_change(
 
 
 @pytest.mark.asyncio
+async def test_web_status_maps_disabled_content_to_current_indices(room_scheduler):
+    obj = room_scheduler
+    room = obj.state["rooms"]["r"]
+    room["disabled_texts"] = {
+        hashlib.sha256(b"two").hexdigest(): {"reason": "review rejected", "at": 1}
+    }
+    room["texts"] = ["two", "one", "two"]
+    view = await obj.web_status()
+    assert set(view["rooms"]["r"]["disabled_items"]) == {"0", "2"}
+    assert "disabled_items" not in room
+
+
+@pytest.mark.asyncio
+async def test_late_review_rejection_preserves_admin_edit(room_scheduler):
+    obj = room_scheduler
+    room = obj.state["rooms"]["r"]
+
+    async def reject_after_edit(*args):
+        await obj.action(
+            {
+                "action": "room",
+                "id": "r",
+                "texts": ["replacement"],
+                "enabled": False,
+            }
+        )
+        raise RemoteError(406)
+
+    obj.client.send.side_effect = reject_after_edit
+    await obj.room_step("r")
+    assert not room["enabled"] and room["status"] == "已暂停"
+    assert room["cursor"] == 0 and room["texts"] == ["replacement"]
+    assert hashlib.sha256(b"one").hexdigest() in room["disabled_texts"]
+    assert hashlib.sha256(b"replacement").hexdigest() not in room["disabled_texts"]
+    assert room["history"][-1]["text_disabled"]
+
+
+@pytest.mark.asyncio
+async def test_review_rejection_disables_only_matching_text_and_survives_restart(
+    room_scheduler,
+):
+    obj = room_scheduler
+    room = obj.state["rooms"]["r"]
+    room["texts"] = ["one", "two", "one", "three"]
+    obj.client.send.side_effect = RemoteError(406)
+    await obj.room_step("r")
+    assert room["enabled"] and room["cursor"] == 1
+    assert room["history"][-1]["text_disabled"]
+    assert "具体审核原因" in room["history"][-1]["reason"]
+    assert len(room["disabled_texts"]) == 1
+    assert obj.due["r"] == 1002
+    obj.state = json.loads(json.dumps(obj.state))
+    room = obj.state["rooms"]["r"]
+    obj.client.send.side_effect = None
+    for expected, cursor, delay in [("two", 3, 2), ("three", 1, 50), ("two", 3, 2)]:
+        obj.due["r"] = 0
+        await obj.room_step("r")
+        assert obj.client.send.await_args.args[1] == expected
+        assert room["cursor"] == cursor
+        assert obj.due["r"] == obj.clock.now + delay
+    assert [c.args[1] for c in obj.client.send.await_args_list] == [
+        "one",
+        "two",
+        "three",
+        "two",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rejected_last_item_waits_full_round(room_scheduler):
+    obj = room_scheduler
+    room = obj.state["rooms"]["r"]
+    room["cursor"] = 1
+    obj.client.send.side_effect = RemoteError(406, business_code=2010392001)
+    await obj.room_step("r")
+    assert room["enabled"] and room["cursor"] == 0
+    assert obj.due["r"] == 1050
+    assert "敏感词" in room["history"][-1]["reason"]
+    assert "2010392001" in room["history"][-1]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_all_rejected_pauses_without_reconnecting(room_scheduler):
+    obj = room_scheduler
+    room = obj.state["rooms"]["r"]
+    room["texts"] = ["one"]
+    obj.client.send.side_effect = RemoteError(406)
+    await obj.room_step("r")
+    assert not room["enabled"] and "全部文案已停用" in room["status"]
+    assert "r" not in obj.due
+    await obj.action({"action": "room", "id": "r", "enabled": True})
+    await obj.room_step("r")
+    assert not room["enabled"]
+    obj.client.send.assert_awaited_once()
+    obj.client.connect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_disabled_text_follows_content_not_index(room_scheduler):
+    obj = room_scheduler
+    room = obj.state["rooms"]["r"]
+    await obj.action(
+        {
+            "action": "room",
+            "id": "r",
+            "text_op": "disable",
+            "index": 1,
+            "revision": room["revision"],
+        }
+    )
+    obj.due["r"] = 0
+    await obj.action({"action": "room", "id": "r", "texts": ["two", "one", "two"]})
+    await obj.room_step("r")
+    assert obj.client.send.await_args.args[1] == "one"
+    assert obj.due["r"] == 1050
+    await obj.action(
+        {
+            "action": "room",
+            "id": "r",
+            "text_op": "edit",
+            "index": 0,
+            "value": "new approved text",
+            "revision": room["revision"],
+        }
+    )
+    room["cursor"] = 0
+    obj.due["r"] = 0
+    await obj.room_step("r")
+    assert obj.client.send.await_args.args[1] == "new approved text"
+    assert hashlib.sha256(b"two").hexdigest() in room["disabled_texts"]
+    with pytest.raises(ValueError):
+        await obj.action(
+            {
+                "action": "room",
+                "id": "r",
+                "text_op": "disable",
+                "index": 0,
+                "revision": 0,
+            }
+        )
+    with pytest.raises(ValueError):
+        await obj.action(
+            {
+                "action": "room",
+                "id": "r",
+                "text_op": "disable",
+                "index": 0,
+                "revision": room["revision"],
+            },
+            actor=2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_review_block_is_room_scoped(room_scheduler):
+    obj = room_scheduler
+    obj.state["grants"] = {}
+    room = obj.state["rooms"]["r"]
+    await obj.action(
+        {
+            "action": "room",
+            "id": "r",
+            "text_op": "disable",
+            "index": 0,
+            "revision": room["revision"],
+        }
+    )
+    obj.state["rooms"]["other"] = {
+        "enabled": True,
+        "revision": 1,
+        "interval": 50,
+        "text": "one",
+        "texts": ["one"],
+    }
+    obj.visible["other"] = {"status": 1}
+    obj.due["other"] = 0
+    await obj.room_step("other")
+    assert obj.client.send.await_args.args[1] == "one"
+
+
+@pytest.mark.asyncio
+async def test_permission_error_on_review_does_not_disable_text(room_scheduler):
+    obj = room_scheduler
+    room = obj.state["rooms"]["r"]
+    obj.client.send.side_effect = RemoteError(406, business_code=2010122004)
+    await obj.room_step("r")
+    assert room["enabled"] and "disabled_texts" not in room
+    assert room["retry_at"] == 1030
+
+
+@pytest.mark.asyncio
 async def test_room_mute_does_not_prevent_admin_chat_connection():
     session = SimpleNamespace(ws_connect=AsyncMock(return_value="socket"))
     client = Client(session, "device", {})
@@ -414,52 +618,17 @@ async def test_room_mute_does_not_prevent_admin_chat_connection():
 
 
 @pytest.mark.asyncio
-async def test_room_mute_flag_allows_send_and_explicit_rejection_retries():
-    cls = next(
-        n
-        for n in ast.parse(
-            Path("data/plugins/astrbot_plugin_rebo_live/main.py").read_text()
-        ).body
-        if isinstance(n, ast.ClassDef)
-    )
-    method = next(
-        n
-        for n in cls.body
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "room_step"
-    )
-    scope = {
-        "asyncio": asyncio,
-        "json": json,
-        "time": time,
-        "uuid": uuid,
-        "aiohttp": aiohttp,
-        "RemoteError": RemoteError,
-        "logger": logging.getLogger("test"),
-    }
-    exec(
-        compile(ast.Module(body=[method], type_ignores=[]), "<scheduler>", "exec"),
-        scope,
-    )
-    room = {"enabled": True, "revision": 1, "interval": 50, "texts": ["one"]}
-    ws = AsyncMock()
-    send = AsyncMock(side_effect=RemoteError(403, business_code=2010122004))
-    obj = SimpleNamespace(
-        state={"rooms": {"r": room}},
-        status="已登录",
-        checked=time.monotonic(),
-        visible={"r": {"status": 1}},
-        due={"r": 0},
-        network=asyncio.Semaphore(1),
-        client=SimpleNamespace(
-            request=AsyncMock(return_value={"all_muted": True}),
-            connect=AsyncMock(return_value=ws),
-            send=send,
-        ),
-        save=lambda *args: None,
-    )
-    await scope["room_step"](obj, "r")
-    send.assert_awaited_once()
+async def test_room_mute_flag_allows_send_and_explicit_rejection_retries(
+    room_scheduler,
+):
+    obj = room_scheduler
+    room = obj.state["rooms"]["r"]
+    room["texts"] = ["one"]
+    obj.client.request.return_value = {"all_muted": True}
+    obj.client.send.side_effect = RemoteError(403, business_code=2010122004)
+    await obj.room_step("r")
+    obj.client.send.assert_awaited_once()
     assert room["enabled"] is True
     assert room["result"] == "rejected"
-    assert room["retry_at"] > time.time()
+    assert room["retry_at"] == obj.clock.now + 30
     assert room["cursor"] == 0

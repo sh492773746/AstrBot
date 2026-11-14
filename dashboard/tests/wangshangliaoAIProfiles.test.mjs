@@ -21,10 +21,10 @@ const renderer = createRenderer({
   parentNode: () => null, nextSibling: () => null,
 });
 
-function mount(t, privateChat = false, modelValue = {}) {
+function mount(t, modelValue = {}) {
   const changes = [];
   const app = renderer.createApp({ ...module.exports.default, render: () => null }, {
-    privateChat, modelValue, label: "测试配置",
+    modelValue, label: "测试配置",
     choices: { configs: [], personas: [] }, providers: [],
     "onUpdate:modelValue": value => changes.push(value),
   });
@@ -55,7 +55,7 @@ test("configuration and persona are fixed outputs without rebinding handlers", (
 test("persona selections and legacy custom values survive without silent rewriting", async t => {
   const initial = { temperature: 0.3, top_p: 1, max_tokens: 512,
     history_turns: null, persona_id: "existing", config_id: "default" };
-  const { state, changes, instance } = mount(t, false, initial);
+  const { state, changes, instance } = mount(t, initial);
   assert.equal(state.level("temperature"), "existing");
   assert.equal(state.level("top_p"), "2");
   assert.equal(state.level("history_turns"), "");
@@ -85,8 +85,6 @@ test("group presets bound context to 4, 8, 12 messages and output to 512 tokens"
   assert.equal(changes.length, before);
 });
 
-test("consultation history and output presets remain separate from casual group AI", t => {
-  const { state } = mount(t, true);
-  assert.deepEqual(state.levels("history_turns"), [2, 6, 12]);
-  assert.deepEqual(state.levels("max_tokens"), [256, 512, 1024]);
+test("the shared editor no longer exposes a private-chat mode", () => {
+  assert.doesNotMatch(source, /privateChat|private-chat/);
 });

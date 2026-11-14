@@ -1,18 +1,26 @@
 """Administrative controls for the group-scoped K3 switch."""
 
+from .game_navigation import game_back, scoped_game_page
 from .game_switches import blocker
 from .store import Rejected
+from .tenants import platform_group
 
 
+@scoped_game_page
 async def action(ui, update, payload):
     """Render or update group K3 configuration and review actions."""
     store = ui.store
     uid = str(update.effective_user.id)
-    store.require(uid, "game", chat=payload.get("chat"))
     if update.effective_chat.type != "private":
         raise Rejected("请私聊管理积分快三。")
     name = payload["action"]
     if name == "k3_groups":
+        from .group_visibility import visible_groups
+
+        if not store.allowed(uid, "game"):
+            from .tenant_ui import action as tenant_action
+
+            return await tenant_action(ui, update, {"action": "tenant_home"})
         rows = store.db.execute(
             "SELECT g.chat,g.title,COALESCE(k.enabled,0) enabled,"
             "(SELECT COUNT(*) FROM k3_rounds r WHERE r.chat=g.chat "
@@ -20,8 +28,9 @@ async def action(ui, update, payload):
             "(SELECT COUNT(*) FROM k3_rounds r WHERE r.chat=g.chat "
             "AND r.status='review') reviews "
             "FROM platform_mod_groups g LEFT JOIN k3_groups k ON k.chat=g.chat "
-            "WHERE g.enabled=1 ORDER BY g.title,g.chat"
+            "WHERE g.enabled=1 ORDER BY g.title,g.chat",
         ).fetchall()
+        rows = await visible_groups(ui.runtime, uid, rows)
         modules = store.get("modules", {})
         return await ui.render(
             update,
@@ -53,6 +62,7 @@ async def action(ui, update, payload):
             + [("返回玩法管理", {"action": "admin_game"})],
             fold_sections=True,
         )
+    store.require(uid, "game", chat=payload.get("chat"))
     chat = str(payload["chat"])
     await ui.runtime.moderation.check(uid, chat, "view", enabled=False)
     group = store.db.execute(
@@ -163,14 +173,20 @@ async def action(ui, update, payload):
         update,
         text,
         [
-            (
-                "关闭本群" if enabled else "开启本群",
-                {
-                    "action": "k3_preview",
-                    "chat": chat,
-                    "version": version,
-                    "enabled": not enabled,
-                },
+            *(
+                []
+                if platform_group(store, chat)
+                else [
+                    (
+                        "本群下注限额",
+                        {
+                            "action": "tenant_edit",
+                            "chat": chat,
+                            "field": "k3_limits",
+                            "game": "k3",
+                        },
+                    )
+                ]
             ),
             *[
                 (
@@ -180,9 +196,7 @@ async def action(ui, update, payload):
                 for r in rounds
                 if r["status"] == "review"
             ],
-            ("返回群列表", {"action": "k3_groups"}),
-            ("返回玩法管理", {"action": "admin_game"}),
-            ("本群玩法总览", {"action": "games_group_view", "chat": chat}),
-        ],
+        ]
+        + game_back(ui, chat, "k3"),
         fold_sections=True,
     )

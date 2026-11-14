@@ -15,6 +15,19 @@ Do not adopt sample personas or restore retired tools from historical reports.
 - [Maintenance and dated deployment evidence](docs/wangshangliao-maintenance.md)
 - [Source publication and completeness checklist](docs/wangshangliao-source-release.md)
 
+## Latest Native Mention Acceptance (October 24, 2026)
+
+In isolated group1459282, a real administrator mention plus 黑名单 enrolled the
+test target and submitted41,760 minutes/29 days; the accepted command intent and
+current native mute list were verified, then test state restored. The dedicated
+sender refreshes the original account's directory before its structured mention.
+A separate failed-send abort records aborted/not-passed and never retries unknowns.
+Plugin reload preserved PID613188. A raw tenants digest difference was reconciled
+to one audited departure metadata sync for a non-enabled group, without rollback.
+See current testing and maintenance for evidence boundaries: no new phone,
+future-expiry or reply-path acceptance. Older “addition never immediately punishes”
+statements below describe earlier versions, not the current native group command.
+
 ## Latest Scoped Configuration (October 23, 2026; 23:39 Beijing Time)
 
 The latest authorized operation removed one whitelist entry while retaining its

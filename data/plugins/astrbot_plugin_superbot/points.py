@@ -69,6 +69,9 @@ class Points:
                 raise Rejected("请在已启用群中签到，积分按群独立")
             from .tenants import local_config
 
+            if not local_config(self.store, chat, "points_enabled", True, db):
+                raise Rejected("本群积分奖励已关闭。")
+
             cfg = local_config(
                 self.store, chat, "points", self.store.get("points", DEFAULT, db), db
             )
@@ -84,6 +87,10 @@ class Points:
             )
 
     def chat(self, uid, group, message_id, body):
+        from .tenants import local_config
+
+        if not local_config(self.store, group, "points_enabled", True):
+            return False
         now = self.store.clock()
         day = datetime.fromtimestamp(now, ZoneInfo("Asia/Shanghai")).date().isoformat()
         body = unicodedata.normalize("NFKC", body).strip().lower()
@@ -151,7 +158,7 @@ class Points:
             )
             return True
 
-    def adjust(self, actor, target, amount, reason, op, chat=None):
+    def adjust(self, actor, target, amount, reason, op, chat=None, *, notify=None):
         if not str(target).isdigit() or not reason.strip() or len(reason) > 200:
             raise Rejected("请提供有效 UID 和调整原因")
         with self.store.tx() as db:
@@ -177,3 +184,16 @@ class Points:
                         "chat": str(chat or ""),
                     },
                 )
+                if notify is not None:
+                    balance = self.store.balance(target, chat)
+                    text = (
+                        "🎁 群员积分派送\n━━━━━━━━━━━━━━\n"
+                        f"👤 群员：{notify}\n"
+                        f"{'➕ 派送' if amount > 0 else '➖ 扣减'}：{abs(amount)} 积分\n"
+                        f"💰 本群当前积分：{balance}\n"
+                        "━━━━━━━━━━━━━━\n仅变更本群娱乐积分，不涉及现金或其他群。"
+                    )
+                    db.execute(
+                        "INSERT INTO notices(id,chat,text) VALUES(?,?,?)",
+                        ("points-gift/" + op, str(chat), text),
+                    )

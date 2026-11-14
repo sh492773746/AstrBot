@@ -13,8 +13,9 @@ from astrbot.builtin_stars.wangshangliao_moderation import member_exemptions
 from astrbot.builtin_stars.wangshangliao_moderation.member_whitelist import REQUEST
 from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import OpenCall, OpenRPC
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
+from astrbot.builtin_stars.wangshangliao_moderation.syntax import recognize_command
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
-from tests.test_wangshangliao_command_menu import leaves, step
+from tests.test_wangshangliao_command_menu import step
 from tests.test_wangshangliao_command_parity import setup as setup
 from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
 
@@ -76,6 +77,104 @@ async def search_preview(value, event):
         **options,
     )
     return preview["token"]
+
+
+@pytest.mark.asyncio
+async def test_history_is_dashboard_only_and_rechecks_saved_membership(whitelist):
+    value, event, _ = whitelist
+    token = await search_preview(value, event)
+    await step(value, event, "确认白名单 " + token, native=True)
+    event.platform.ledger = type("Ledger", (), {"path": "/unused/offline.sqlite3"})()
+    value.plugin.speech_activity = type(
+        "Statistics", (), {"history": lambda *args, **kwargs: {"members": []}}
+    )()
+    options = {
+        "actor": "dashboard/offline",
+        "session": "dashboard/offline",
+        "member_ids": ["3"],
+        "list_version": 1,
+    }
+    result = await value.member_whitelist.run(event.platform, "5", "history", **options)
+    assert result == {"version": 1, "members": []}
+    for changed in (
+        {"member_ids": ["2"]},
+        {"member_ids": ["3", "3"]},
+        {"list_version": 0},
+        {"event": event},
+    ):
+        with pytest.raises(OpenError, match="member_whitelist_changed"):
+            await value.member_whitelist.run(
+                event.platform, "5", "history", **{**options, **changed}
+            )
+    event.platform.execute_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_history_revocation_during_read_discards_all_bodies(whitelist):
+    value, event, _ = whitelist
+    token = await search_preview(value, event)
+    await step(value, event, "确认白名单 " + token, native=True)
+    event.platform.ledger = type("Ledger", (), {"path": "/unused/offline.sqlite3"})()
+
+    def remove_during_read(*args, **kwargs):
+        member_exemptions.set_exemption(
+            event.platform.config["id"],
+            "1",
+            "5",
+            "3",
+            "903",
+            enabled=False,
+            actor="server/test",
+            reason="Concurrent removal",
+            guard=lambda: None,
+        )
+        return {"members": [{"id": "3", "messages": [{"text": "Must not leak"}]}]}
+
+    value.plugin.speech_activity = type(
+        "Statistics", (), {"history": staticmethod(remove_during_read)}
+    )()
+    with pytest.raises(OpenError, match="member_whitelist_changed"):
+        await value.member_whitelist.run(
+            event.platform,
+            "5",
+            "history",
+            actor="dashboard/offline",
+            session="dashboard/offline",
+            member_ids=["3"],
+            list_version=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_history_limits_and_midnight_revalidation(whitelist, monkeypatch):
+    from astrbot.builtin_stars.wangshangliao_moderation import speech_activity
+
+    value, event, _ = whitelist
+    token = await search_preview(value, event)
+    await step(value, event, "确认白名单 " + token, native=True)
+    event.platform.ledger = type("Ledger", (), {"path": "/unused/offline.sqlite3"})()
+    value.plugin.speech_activity = type(
+        "Statistics", (), {"history": lambda *args, **kwargs: {"members": []}}
+    )()
+    options = {
+        "actor": "dashboard/offline",
+        "session": "dashboard/offline",
+        "member_ids": ["3"],
+        "list_version": 1,
+    }
+    slots = value.member_whitelist.history_slots
+    await slots.acquire()
+    await slots.acquire()
+    try:
+        with pytest.raises(OpenError, match="service_busy"):
+            await value.member_whitelist.run(event.platform, "5", "history", **options)
+    finally:
+        slots.release()
+        slots.release()
+    dates = iter(((0, 1, 2), (1, 2, 3)))
+    monkeypatch.setattr(speech_activity, "day_window", lambda _: next(dates))
+    with pytest.raises(OpenError, match="member_whitelist_changed"):
+        await value.member_whitelist.run(event.platform, "5", "history", **options)
 
 
 @pytest.mark.asyncio
@@ -187,12 +286,9 @@ async def test_names_not_uid_and_homonyms_are_selected_individually(whitelist):
 
 
 @pytest.mark.asyncio
-async def test_add_menu_explains_native_mention_without_opening_a_draft(whitelist):
+async def test_add_command_explains_native_mention_without_opening_a_draft(whitelist):
     value, event, _ = whitelist
-    path = next(path for item, path in leaves() if item.command == "添加白名单")
-    await step(value, event, "菜单", native=True)
-    for number in path:
-        reply = await step(value, event, str(number), native=True)
+    reply = await step(value, event, "添加白名单 Target", native=True)
     assert "真正@" in reply and "无需搜索或确认" in reply
     assert not value.member_whitelist.pending
     assert not member_exemptions.is_exempt(
@@ -201,20 +297,162 @@ async def test_add_menu_explains_native_mention_without_opening_a_draft(whitelis
 
 
 @pytest.mark.asyncio
-async def test_private_add_menu_returns_to_the_target_group(whitelist):
+@pytest.mark.parametrize("spelling", ["白名单", "加白"])
+@pytest.mark.parametrize("source", ["before", "after", "compact"])
+async def test_whitelist_add_alias_uses_the_same_native_mention(
+    whitelist, spelling, source
+):
+    from tests.test_wangshangliao_member_blacklist import mention
+
     value, event, _ = whitelist
-    event.is_private_chat = lambda: True
-    event.get_group_id = lambda: ""
-    event.eligible = True
-    path = next(path for item, path in leaves() if item.command == "添加白名单")
-    await step(value, event, "菜单", native=True)
-    for number in path:
-        reply = await step(value, event, str(number), native=True)
-    assert "真正@" in reply and "目标群" in reply
+    text = {
+        "before": f"@Target {spelling}",
+        "after": f"{spelling} @Target",
+        "compact": f"{spelling}@Target",
+    }[source]
+    mention(event, text=text)
+    reply = await value.member_whitelist.command(event, recognize_command(text))
+    assert "已加入本群发言白名单：Target" in reply
+    instance = event.platform.config["id"]
+    assert member_exemptions.is_exempt(instance, "1", "5", "3", "903")
+    assert not member_exemptions.is_exempt(instance, "1", "6", "3", "903")
     assert not value.member_whitelist.pending
-    assert not member_exemptions.is_exempt(
-        event.platform.config["id"], "1", "5", "3", "903"
+    event.platform.execute_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spelling", ["移除白名单", "删白"])
+@pytest.mark.parametrize("source", ["name", "before", "after", "compact"])
+async def test_whitelist_remove_alias_still_requires_selection_and_confirmation(
+    whitelist, spelling, source
+):
+    from tests.test_wangshangliao_member_blacklist import mention
+
+    value, event, _ = whitelist
+    instance = event.platform.config["id"]
+    member_exemptions.set_exemption(
+        instance,
+        "1",
+        "5",
+        "3",
+        "903",
+        name="Target",
+        enabled=True,
+        actor="server/test",
+        reason="Removal alias fixture",
+        guard=lambda: None,
     )
+    text = {
+        "name": spelling + " Target",
+        "before": "@Target " + spelling,
+        "after": spelling + " @Target",
+        "compact": spelling + "@Target",
+    }[source]
+    if source != "name":
+        mention(event, text=text)
+    search = await value.member_whitelist.command(event, recognize_command(text))
+    assert "本群成员搜索结果" in search
+    assert member_exemptions.is_exempt(instance, "1", "5", "3", "903")
+    preview = await value.member_whitelist.command(event, "选择白名单 1")
+    assert "预览：移出本群发言白名单" in preview
+    assert member_exemptions.is_exempt(instance, "1", "5", "3", "903")
+    token = re.search(r"确认白名单 ([A-Za-z0-9_-]+)", preview)[1]
+    with pytest.raises(OpenError, match="member_whitelist_confirmation"):
+        await value.member_whitelist.command(event, "确认白名单 " + token)
+    event.message_obj.message_id += "/confirmation"
+    result = await value.member_whitelist.command(event, "确认白名单 " + token)
+    assert "已移出本群发言白名单：Target" in result
+    assert not member_exemptions.is_exempt(instance, "1", "5", "3", "903")
+    event.platform.execute_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_whitelist_remove_mention_is_identity_bound_not_a_display_name_search(
+    whitelist,
+):
+    from tests.test_wangshangliao_member_blacklist import mention
+
+    value, event, rows = whitelist
+    rows["4"] = {**rows["3"], "userId": "4", "nimId": "904"}
+    instance = event.platform.config["id"]
+    for uid, peer in (("3", "903"), ("4", "904")):
+        member_exemptions.set_exemption(
+            instance,
+            "1",
+            "5",
+            uid,
+            peer,
+            name="Target",
+            enabled=True,
+            actor="server/test",
+            reason="Same-name removal fixture",
+            guard=lambda: None,
+        )
+    text = "@Target 删白"
+    mention(event, text=text)
+    reply = await value.member_whitelist.command(event, recognize_command(text))
+    assert "1. Target · UID 3" in reply
+    assert "UID 4" not in reply
+    assert member_exemptions.is_exempt(instance, "1", "5", "3", "903")
+    assert member_exemptions.is_exempt(instance, "1", "5", "4", "904")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["typed", "multiple", "wrong_span"])
+async def test_whitelist_remove_rejects_unproven_mentions(whitelist, invalid):
+    from tests.test_wangshangliao_member_blacklist import mention
+
+    value, event, _ = whitelist
+    text = "@Target 删白"
+    mention(event, text=text)
+    payload = event.get_extra("wangshangliao_payload")
+    if invalid == "typed":
+        payload["mentions"] = []
+        payload["mention_spans"] = []
+    elif invalid == "multiple":
+        payload["mentions"].append("904")
+    else:
+        payload["mention_spans"][0]["start"] += 1
+    with pytest.raises(OpenError, match="member_whitelist_remove_target"):
+        await value.member_whitelist.command(event, "移除白名单 @Target")
+    assert not value.member_whitelist.pending
+    event.platform.execute_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "@Target 删白",
+        "删白",
+        "移除白名单 Target",
+        "选择白名单 1",
+        "确认白名单 abcdefgh12345678",
+    ],
+)
+async def test_bound_manager_transport_admits_whitelist_removal_workflow(
+    whitelist, text
+):
+    from astrbot.core.platform.sources.wangshangliao.event import managed_group_control
+    from astrbot.core.platform.sources.wangshangliao.group_scope import group_revision
+
+    _, event, _ = whitelist
+    adapter = event.platform
+    adapter.config["_business_active"] = True
+    payload = {
+        "sender": "2",
+        "text": text,
+        "recall_route": {"peer": "902"},
+        "_open_revision": group_revision(adapter.config, "5"),
+    }
+    assert managed_group_control(adapter, "5", payload) == recognize_command(text)
+    for changed in (
+        {"sender": "3"},
+        {"recall_route": {"peer": "999"}},
+        {"_open_revision": "stale"},
+    ):
+        assert not managed_group_control(adapter, "5", {**payload, **changed})
+    assert not managed_group_control(adapter, "6", payload)
 
 
 @pytest.mark.asyncio

@@ -100,12 +100,6 @@ def snapshot(runtime, chat):
         )
         avatar = getattr(runtime, "avatar", None)
         result["avatar"] = bool(avatar and avatar.enabled())
-        if result["avatar"] and owner and owner["tenant"] != "platform":
-            grant = store.db.execute(
-                "SELECT enabled,budget,used FROM tenant_resource_grants WHERE chat=? AND resource='avatar'",
-                (chat,),
-            ).fetchone()
-            result["avatar"] = bool(
-                grant and grant["enabled"] and grant["used"] < grant["budget"]
-            )
+        if result["avatar"] and getattr(runtime, "tenants", None):
+            result["avatar"] = runtime.tenants.resource_allowed("", chat, "avatar")
     return result

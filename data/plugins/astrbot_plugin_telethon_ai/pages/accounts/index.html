@@ -33,11 +33,21 @@
   </section>
   <section id="panel-groups" role="tabpanel" aria-labelledby="tab-groups" hidden>
     <h2>Telethon AI 群授权</h2><p id="group-count"></p>
+    <details class="scope-guide" open>
+      <summary>逐群功能划分</summary>
+      <div class="scope-grid">
+        <div><strong>Telethon AI</strong><span>账号、成员授权、额度和 AI 对话，仅由本页面控制。</span></div>
+        <div><strong>Superbot 群功能</strong><span>积分、签到、加拿大28、快三、转盘及其他游戏，按群独立启停。</span></div>
+        <div><strong>群主管理</strong><span>只允许已绑定群主或平台授权管理员修改本群设置。</span></div>
+        <div><strong>平台总控</strong><span>赔率、概率、抽水、密钥和平台开关不下放到群主。</span></div>
+      </div>
+      <p class="scope-note">AI 授权成功不代表积分或游戏已开启；Superbot 群管理页会再次校验本群开关、权限和预算。</p>
+    </details>
     <div class="table-wrap" tabindex="0" aria-label="群聊使用范围"><table>
-      <thead><tr><th>群名称 / 群号</th><th>开通用户</th><th>管理 Bot（克隆）</th><th>Telethon AI 账号</th><th>成员授权</th><th>使用状态</th></tr></thead>
+      <thead><tr><th>群名称 / 群号</th><th>开通用户</th><th>管理 Bot（克隆）</th><th>Telethon AI 账号</th><th>成员授权</th><th>AI 状态</th></tr></thead>
       <tbody id="groups"></tbody>
     </table></div>
-    <h2 class="section-heading">基础群管</h2><p id="management-count"></p>
+    <h2 class="section-heading">Superbot 群管状态</h2><p id="management-count"></p>
     <div class="table-wrap" tabindex="0" aria-label="基础群管绑定"><table>
       <thead><tr><th>群名称 / 群号</th><th>授权 / 所有者</th><th>群管 Bot</th><th>自动执行 Bot</th><th>功能开关</th><th>状态</th></tr></thead>
       <tbody id="management-groups"></tbody>

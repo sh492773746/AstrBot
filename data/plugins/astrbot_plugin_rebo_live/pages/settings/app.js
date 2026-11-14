@@ -1,3 +1,5 @@
+// Classic scripts retain Access cookies in the sandbox; load the bridge first.
+(async () => {
 const el = id => document.getElementById(id);
 const bridge = window.AstrBotPluginPage;
 try {
@@ -37,8 +39,11 @@ async function action(data) {
   el('notice').textContent = '⏳ 正在处理…';
   try {
     const result = await request('action', data);
-    if (result.status === 'error') throw new Error(result.message || '操作失败');
-    el('notice').textContent = result.token ? '一次性授权链接（24小时有效）：https://t.me/dhcm1bot?start=' + result.token : '✅ 已完成';
+    if (result.status === 'error') {
+      el('notice').textContent = result.message || '操作失败';
+      return false;
+    }
+    el('notice').textContent = result.token ? '一次性授权链接（24小时有效）：https://t.me/dhcm1bot?start=' + result.token : (result.message || '✅ 已完成');
     if (data.action === 'room') {
       const card = cards.get(data.id);
       if (card) card.dirty = false;
@@ -97,6 +102,7 @@ async function status() {
         (room.texts||[room.text,room.text2].filter(Boolean)).forEach((value,index)=>{
           const entry=document.createElement('div');
           const label=document.createElement('strong');label.textContent=`第${index+1}条`;
+          if(room.disabled_items?.[String(index)]) label.textContent+=` · 已停用：${room.disabled_items[String(index)].reason}`;
           const input=document.createElement('textarea');input.maxLength=300;input.value=value;
           input.oninput=()=>{card.dirty=true;card.dirtyLabel.textContent='尚未保存';};
           const revision=card.revision;
@@ -111,7 +117,7 @@ async function status() {
       card.remove.hidden=!(id in snapshot.rooms)||room.enabled||room.result==='sending';
       card.ack.hidden=true;
       card.invite.hidden=!(id in snapshot.rooms);
-      card.history.textContent=(room.history||[]).slice().reverse().map(x=>stamp(x.time)+' · '+(labels[x.result]||x.result)+(x.reason?' · '+x.reason:'')).join('\n');
+      card.history.textContent=(room.history||[]).slice().reverse().map(x=>stamp(x.time)+' · 第'+x.part+'条 · '+(labels[x.result]||x.result)+(x.reason?' · '+x.reason:'')).join('\n');
     }
     let empty=el('empty');
     if (!empty) {empty=document.createElement('p');empty.id='empty';el('rooms').append(empty);}
@@ -138,7 +144,68 @@ async function status() {
   } catch(e) {el('account').textContent='⚠️ 状态读取失败，不能确认当前登录状态';fail(e);}
 }
 el('login').onclick=async()=>{const password=el('password').value;el('password').value='';await action({action:'login',phone:el('phone').value,password,remember:el('remember').checked});};
+document.querySelectorAll('input[name="login-method"]').forEach(input=>{
+  input.onchange=()=>{
+    const sms=input.value==='sms';
+    el('sms-fields').hidden=!sms;el('password-fields').hidden=sms;
+    el('password').value='';el('sms-code').value='';
+  };
+});
+el('sms-login').onclick=async()=>{
+  const code=el('sms-code').value;el('sms-code').value='';
+  if(await action({action:'sms_login',phone:el('phone').value,code})) {
+    el('notice').textContent='登录成功；旧保存密码已清除，暂停的房间保持暂停。';
+  }
+};
+let smsOpening=false, smsUntil=0;
+el('sms-send').onclick=async()=>{
+  if(busy || smsOpening || Date.now()<smsUntil || !window.reboPageReady)return;
+  const phone=el('phone').value.trim();
+  if(!/^1[0-9]{10}$/.test(phone)) {
+    el('notice').textContent='请输入11位中国大陆手机号';return;
+  }
+  smsOpening=true;el('sms-send').disabled=true;
+  el('notice').textContent='请手动完成人机验证';
+  let verificationTimer;
+  try {
+    if(typeof bridge.verifyHuman!=='function')throw new Error('verification_bridge_missing');
+    const result=await Promise.race([
+      bridge.verifyHuman(),
+      new Promise((_,reject)=>{verificationTimer=setTimeout(()=>reject(new Error('verification_timeout')),180000);}),
+    ]);
+    clearTimeout(verificationTimer);
+    if(typeof result?.validate!=='string' || !result.validate || result.validate.length>4096)throw new Error('verification_invalid_result');
+    if(el('phone').value.trim()!==phone) {
+      el('notice').textContent='手机号已变更，请重新获取验证码';return;
+    }
+    // A timed-out request may already have sent an SMS. Never auto-retry.
+    smsUntil=Date.now()+60000;el('sms-send').disabled=true;
+    await action({action:'sms_send',phone,validate:result.validate});
+  } catch (error) {
+    const reasons={
+      verification_cancelled:'已取消人机验证，未发送验证码。',
+      verification_timeout:'人机验证已超时，请重新点击获取验证码；未发送验证码。',
+      verification_init_timeout:'官方人机验证加载超时，请检查网络后重试；未发送验证码。',
+      verification_sdk_load_failed:'无法加载官方验证脚本，请检查网络或浏览器拦截设置；未发送验证码。',
+      verification_script_error:'官方验证组件运行失败，请刷新整个 WebUI 后重试；未发送验证码。',
+      verification_service_unavailable:'官方验证服务暂不可用，请稍后重试；未发送验证码。',
+      verification_bridge_missing:'验证窗口尚未更新，请刷新整个 WebUI 后重试；未发送验证码。',
+    };
+    const reason=String(error?.message||'').startsWith('Unsupported plugin bridge action:')
+      ? 'verification_bridge_missing' : error?.message;
+    el('notice').textContent=reasons[reason]||'人机验证未完成，请重新点击获取验证码；未发送验证码。';
+  } finally {
+    clearTimeout(verificationTimer);
+    smsOpening=false;el('sms-send').disabled=Date.now()<smsUntil;
+  }
+};
+setInterval(()=>{
+  if(!smsOpening)el('sms-send').disabled=Date.now()<smsUntil;
+  el('sms-send').textContent=Date.now()<smsUntil?`${Math.ceil((smsUntil-Date.now())/1000)}秒后重发`:'获取验证码';
+},1000);
+window.addEventListener('pagehide',()=>{el('sms-code').value='';});
 for(const name of ['relogin','logout','refresh'])el(name).onclick=()=>action({action:name});
 el('status').onclick=status;
 await status();
 setInterval(() => {if (window.reboPageReady && !busy && !document.hidden) status();}, 15000);
+})();

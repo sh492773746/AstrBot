@@ -83,7 +83,8 @@ export type BotRegistrationRequest = {
     password?: string;
     validate_str?: string;
     verification_code?: string;
-    action: 'start' | 'poll' | 'login' | 'request_sms' | 'verify_sms' | 'resend_sms' | 'cancel' | 'logout' | 'groups' | 'moderation_preview' | 'moderation_execute' | 'test_status' | 'test_open' | 'test_close' | 'card_preview' | 'cleanup_preview' | 'card_execute' | 'card_status' | 'card_stop';
+    security_code?: string;
+    action: 'start' | 'poll' | 'login' | 'request_sms' | 'verify_sms' | 'resend_sms' | 'verify_security_code' | 'retry_connection' | 'cancel' | 'logout' | 'groups' | 'moderation_preview' | 'moderation_execute' | 'test_status' | 'test_open' | 'test_close' | 'card_preview' | 'cleanup_preview' | 'card_execute' | 'card_status' | 'card_stop';
     sender_instance?: string;
     groups?: Array<(string)>;
     scopes?: Array<('private_commands' | 'private_ai' | 'group_commands' | 'group_ai' | 'group_rules')>;
@@ -106,7 +107,7 @@ export type BotRegistrationRequest = {
 
 export type cleanup_state = 'ACCOUNT_STATE_BAN' | 'ACCOUNT_STATUS_CANCELLED';
 
-export type action = 'start' | 'poll' | 'login' | 'request_sms' | 'verify_sms' | 'resend_sms' | 'cancel' | 'logout' | 'groups' | 'moderation_preview' | 'moderation_execute' | 'test_status' | 'test_open' | 'test_close' | 'card_preview' | 'cleanup_preview' | 'card_execute' | 'card_status' | 'card_stop';
+export type action = 'start' | 'poll' | 'login' | 'request_sms' | 'verify_sms' | 'resend_sms' | 'verify_security_code' | 'retry_connection' | 'cancel' | 'logout' | 'groups' | 'moderation_preview' | 'moderation_execute' | 'test_status' | 'test_open' | 'test_close' | 'card_preview' | 'cleanup_preview' | 'card_execute' | 'card_status' | 'card_stop';
 
 export type operation_action = 'mute' | 'unmute' | 'mute_all' | 'unmute_all' | 'announce';
 

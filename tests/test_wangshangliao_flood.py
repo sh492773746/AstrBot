@@ -30,6 +30,22 @@ from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 from tests.fixtures.wsl_actions import bind_action_port
 
 
+async def drain_recalls(runtime):
+    """Drain admitted cleanup separately from sanction workers.
+
+    Args:
+        runtime: Isolated bounded rule runtime.
+    """
+    for _ in range(512):
+        await runtime.step()
+        await asyncio.gather(
+            *runtime.workers.values(), *runtime.recall_workers.values()
+        )
+        if not runtime.recalls and not any(runtime.recall_counts.values()):
+            return
+    pytest.fail("Recall cleanup did not drain")
+
+
 @pytest_asyncio.fixture
 async def fresh_bot(tmp_path, monkeypatch):
     for module in (automatic, content_rules):
@@ -418,11 +434,149 @@ async def test_flood_worker_still_punishes_a_real_media_burst(bot, kind):
     try:
         await runtime.step()
         await asyncio.gather(*runtime.workers.values())
+        assert bot.calls == [("mute", "2", 1)]
+        await drain_recalls(runtime)
         assert bot.calls == [("mute", "2", 1)] + [
             ("recall", str(800 + n), "22") for n in range(5)
         ]
     finally:
         await runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["video", "forward"])
+@pytest.mark.parametrize("advertising", [False, True])
+@pytest.mark.parametrize("integrated", [False, True])
+async def test_restricted_media_flood_mutes_before_recalling(
+    bot, kind, advertising, integrated
+):
+    bot.config["moderation"].update(
+        advertising_enabled=advertising,
+        video_whitelist_only=True,
+        recall_forward=True,
+    )
+    if integrated:
+        bot.config.update(
+            _open_groups={
+                "5": {
+                    "advertising": advertising,
+                    "flood": True,
+                    "keywords": [],
+                    "video_whitelist_only": True,
+                    "recall_forward": True,
+                }
+            },
+            _open_revisions={"5": "restricted-media-5"},
+            _open_native_roles={"5": "GROUP_ROLE_ADMIN"},
+        )
+    for n in range(5):
+        envelope = await ingest(bot, str(800 + n), "", kind=kind)
+    assert envelope["_ingress_content"]["category"] == "restricted_" + kind
+    assert await handle(bot, "804", envelope)
+    assert bot.calls == [("mute", "2", 1)] + [
+        ("recall", str(800 + n), "22") for n in range(5)
+    ]
+    with sqlite3.connect(bot.ledger.path.with_name("moderation.sqlite3")) as db:
+        assert db.execute(
+            "SELECT category,status FROM content_violations WHERE message='804'"
+        ).fetchone() == ("message_flood", "muted")
+    await handle(bot, "804", envelope)
+    assert len(bot.calls) == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["video", "forward"])
+@pytest.mark.parametrize("advertising", [False, True])
+async def test_restricted_media_flood_keeps_first_warning(fresh_bot, kind, advertising):
+    fresh_bot.config["moderation"].update(
+        advertising_enabled=advertising,
+        video_whitelist_only=True,
+        recall_forward=True,
+    )
+    for n in range(5):
+        envelope = await ingest(fresh_bot, str(800 + n), "", kind=kind)
+    assert await handle(fresh_bot, "804", envelope)
+    assert len(fresh_bot.calls) == 5
+    assert {call[1] for call in fresh_bot.calls} == {str(800 + n) for n in range(5)}
+    assert all(call[0] == "recall" for call in fresh_bot.calls)
+    fresh_bot.execute_moderation.assert_not_awaited()
+    with sqlite3.connect(fresh_bot.ledger.path.with_name("moderation.sqlite3")) as db:
+        assert db.execute(
+            "SELECT count(*) FROM progressive_warnings WHERE status='accepted'"
+        ).fetchone() == (1,)
+    await handle(fresh_bot, "804", envelope)
+    assert len(fresh_bot.calls) == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["video", "forward"])
+async def test_restricted_media_worker_counts_flood_after_individual_recalls(
+    bot, monkeypatch, kind
+):
+    # Keep the authenticated burst inside three seconds regardless of SQLite speed.
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    bot.config["moderation"].update(
+        video_whitelist_only=True,
+        recall_forward=True,
+    )
+    runtime = FloodRuntime(
+        SimpleNamespace(
+            platform_manager=SimpleNamespace(platform_insts=[bot]),
+            get_config=lambda _: {},
+        )
+    )
+    try:
+        for n in range(5):
+            clock[0] += 0.25
+            envelope = await ingest(bot, str(800 + n), "", kind=kind)
+            assert envelope["_ingress_flood"]["rapid"] == n + 1
+            assert envelope["_ingress_flood"]["category"] == (
+                "message_flood" if n == 4 else ""
+            )
+            await runtime.step()
+            await asyncio.gather(*runtime.workers.values())
+            await drain_recalls(runtime)
+            if n < 4:
+                assert bot.calls == [
+                    ("recall", str(800 + i), "22") for i in range(n + 1)
+                ]
+        assert bot.calls == [("recall", str(800 + n), "22") for n in range(4)] + [
+            ("mute", "2", 1),
+            ("recall", "804", "22"),
+        ]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["video", "forward"])
+@pytest.mark.parametrize("assessment", [None, "other_message", "clear_decision"])
+async def test_single_restricted_media_remains_recall_only(bot, kind, assessment):
+    bot.config["moderation"].update(
+        advertising_enabled=False,
+        video_whitelist_only=True,
+        recall_forward=True,
+        permissions={"5": ["recall"]},
+    )
+    envelope = await ingest(bot, "800", "", kind=kind)
+    decision = (
+        {
+            "decision": "clear" if assessment == "clear_decision" else "violation",
+            "category": "message_flood",
+            "message_id": "999" if assessment == "other_message" else "800",
+        }
+        if assessment
+        else None
+    )
+    assert await policy.handle(bot, "5", "800", envelope, assessment=decision)
+    assert bot.calls == [("recall", "800", "22")]
+    bot.execute_moderation.assert_not_awaited()
+    with sqlite3.connect(bot.ledger.path.with_name("moderation.sqlite3")) as db:
+        assert db.execute("SELECT count(*) FROM progressive_warnings").fetchone() == (
+            3,
+        )
+        assert db.execute("SELECT count(*) FROM flood_batches").fetchone() == (0,)
 
 
 @pytest.mark.asyncio
@@ -684,6 +838,7 @@ async def test_fast_flood_does_not_wait_for_an_earlier_model_and_keeps_idempoten
         for _ in range(3):
             await runtime.step()
             await asyncio.gather(*runtime.workers.values())
+        await drain_recalls(runtime)
         assert not model_task.done()
         assert bot.calls == [("mute", "2", 1)] + [
             ("recall", str(100 + n), "22") for n in range(5)
@@ -696,11 +851,43 @@ async def test_fast_flood_does_not_wait_for_an_earlier_model_and_keeps_idempoten
             if call.args[0] == "flood_response"
         ]
         assert len(timing) == 1
-        assert timing[0].args[1] == "completed"
+        assert timing[0].args[1] == "muted"
         assert timing[0].kwargs["duration_ms"] >= 0
     finally:
         model_task.cancel()
         await asyncio.gather(model_task, return_exceptions=True)
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fast_flood_logs_actual_directory_failure_without_completed(bot):
+    from astrbot.core.platform.sources.wangshangliao.business import BusinessError
+
+    bot.get_moderation_members = AsyncMock(
+        side_effect=BusinessError("business_rejected", -1)
+    )
+    runtime = FloodRuntime(
+        SimpleNamespace(
+            platform_manager=SimpleNamespace(platform_insts=[bot]),
+            get_config=lambda _: {"admins_id": []},
+        )
+    )
+    try:
+        for n in range(5):
+            await ingest(bot, str(100 + n), "repeat")
+        await runtime.step()
+        await asyncio.gather(*runtime.workers.values())
+        responses = [
+            call
+            for call in bot.diagnostics.emit.call_args_list
+            if call.args[0] == "flood_response"
+        ]
+        assert responses and all(
+            call.args[1] == "preflight_failed" for call in responses
+        )
+        assert all(call.kwargs["failed"] for call in responses)
+        assert not bot.calls
+    finally:
         await runtime.close()
 
 
@@ -817,6 +1004,7 @@ async def test_recalled_message_is_gated_after_inflight_model_review(
         for _ in range(3):
             await runtime.step()
             await asyncio.gather(*runtime.workers.values())
+        await drain_recalls(runtime)
         release.set()
         await task
         event.stop_event.assert_called_once()
@@ -981,8 +1169,9 @@ async def test_fast_flood_backlog_stays_bounded_without_losing_the_last_trigger(
             assert sum(len(queue) for queue in runtime.pending.values()) <= 2
             assert len(runtime.workers) <= 1
             await asyncio.gather(*runtime.workers.values())
+        await drain_recalls(runtime)
         assert [call for call in bot.calls if call[0] == "mute"] == [("mute", "2", 1)]
-        assert [call[1] for call in bot.calls if call[0] == "recall"] == [
+        assert sorted(call[1] for call in bot.calls if call[0] == "recall") == [
             str(100 + n) for n in range(9)
         ]
     finally:
@@ -1105,9 +1294,9 @@ def test_hot_reload_replaces_the_previous_review_repository(tmp_path):
 @pytest.mark.parametrize(
     "text",
     [
-        "\u7a33\u8d5a\u4e0d\u8d54",
-        "\u7a33 \u8d5a \u4e0d \u8d54",
-        "\u7a33\u200b\u8d5a\u4e0d\u8d54",
+        "\u52a0\u6211",
+        "\u52a0 \u6211",
+        "\u52a0\u200b\u6211",
     ],
 )
 def test_default_keywords_match_obfuscated_promotions(tmp_path, text):
@@ -1125,7 +1314,7 @@ def test_default_keywords_match_obfuscated_promotions(tmp_path, text):
 )
 def test_each_configured_default_matches_without_auto_kick(tmp_path, word):
     defaults = BusinessSettings(None, tmp_path).keyword_defaults
-    assert len(defaults["mute_keywords"]) == len(set(defaults["mute_keywords"])) == 39
+    assert len(defaults["mute_keywords"]) == len(set(defaults["mute_keywords"])) == 49
     assert not defaults["kick_keywords"]
     text = ("example" + word if word.startswith(".") else word) + " \u4e0a\u5206"
     assert (

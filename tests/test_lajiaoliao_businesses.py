@@ -3,6 +3,7 @@ import copy
 import json
 import threading
 import time
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,8 @@ from test_lajiaoliao_instance_management import provision
 from test_lajiaoliao_plugin_api import call, make_plugin
 
 from astrbot.core.platform.instance_control import instance_revision
+from data.plugins.astrbot_plugin_lajiaoliao import business as business_module
+from data.plugins.astrbot_plugin_lajiaoliao import commands as commands_module
 from data.plugins.astrbot_plugin_lajiaoliao.business import (
     DEFAULTS,
     Businesses,
@@ -20,6 +23,25 @@ from data.plugins.astrbot_plugin_lajiaoliao.business import (
 )
 from data.plugins.astrbot_plugin_lajiaoliao.commands import Commands, recognize
 from data.plugins.astrbot_plugin_lajiaoliao.storage import SessionError
+
+
+@pytest.fixture
+def business_clock(monkeypatch):
+    """Freeze only business wall clocks while preserving real async deadlines."""
+    clock = [datetime(2026, 11, 14, 12, tzinfo=business_module.ZONE).timestamp()]
+    local_time = SimpleNamespace(time=lambda: clock[0], monotonic=time.monotonic)
+    monkeypatch.setattr(business_module, "time", local_time)
+    monkeypatch.setattr(commands_module, "time", local_time)
+    monkeypatch.setattr(
+        business_module,
+        "datetime",
+        SimpleNamespace(
+            now=lambda tz=None: datetime.fromtimestamp(clock[0], tz),
+            fromtimestamp=datetime.fromtimestamp,
+            strptime=datetime.strptime,
+        ),
+    )
+    return clock
 
 
 def settings(**flags):
@@ -42,9 +64,11 @@ def test_store_permissions_default_off_and_optimistic_versions(tmp_path):
     assert len(store.audit("one")) == 1 and not store.audit("two")
 
 
-def test_rankings_freshness_throttle_same_text_isolation_and_recall(tmp_path):
+def test_rankings_freshness_throttle_same_text_isolation_and_recall(
+    tmp_path, business_clock
+):
     store = BusinessStore(tmp_path)
-    now = time.time()
+    now = business_clock[0]
     for mid, member, stamp, text, allowed, review in [
         ("m1", "u1", now - 100, "Hello", True, ""),
         ("m1", "u1", now - 100, "Hello", True, ""),
@@ -63,6 +87,41 @@ def test_rankings_freshness_throttle_same_text_isolation_and_recall(tmp_path):
     assert any(row["status"] == "review_only" for row in store.audit("one"))
     with pytest.raises(ValueError):
         store.ranking("one", True)
+
+
+@pytest.mark.parametrize(
+    "seconds,count",
+    [(-1, 2), (0, 0), (30, 0), (60, 1), (90, 2)],
+)
+def test_rankings_use_beijing_message_day_at_midnight(
+    tmp_path, business_clock, seconds, count
+):
+    midnight = datetime(2026, 11, 15, tzinfo=business_module.ZONE).timestamp()
+    business_clock[0] = midnight + seconds
+    store = BusinessStore(tmp_path)
+    for index, age in enumerate((90, 45)):
+        assert store.observe(
+            "one",
+            f"m{index}",
+            "u1",
+            "Member",
+            business_clock[0] - age,
+            f"Sample {index}",
+            True,
+            "",
+        )
+    with store.connect() as db:
+        rows = db.execute(
+            "SELECT stamp,day,counted FROM observations ORDER BY stamp"
+        ).fetchall()
+    assert len(rows) == 2 and all(row["counted"] == 1 for row in rows)
+    assert [row["day"] for row in rows] == [
+        "2026-11-14" if seconds - age < 0 else "2026-11-15" for age in (90, 45)
+    ]
+    assert [(row["member_id"], row["count"]) for row in store.ranking("one")] == (
+        [("u1", count)] if count else []
+    )
+    assert not store.ranking("two")
 
 
 def test_lottery_freeze_deduplication_fixed_draw_and_unknown_restart(tmp_path):
@@ -271,8 +330,12 @@ def test_chat_group_private_permissions_and_ai_preview_never_mutates(
         plugin, config, instance = prepared_plugin(tmp_path, monkeypatch)
         ref = config["session_ref"]
         await plugin.business.db(
-            ref, "save_settings", "g", 0,
-            settings(ai_management_enabled=True), "owner",
+            ref,
+            "save_settings",
+            "g",
+            0,
+            settings(ai_management_enabled=True),
+            "owner",
         )
         event = SimpleNamespace(
             platform=SimpleNamespace(session_ref=ref, config=config),
@@ -363,6 +426,7 @@ def test_business_hot_update_stops_only_known_jobs_and_preserves_unknown(tmp_pat
     store.activity_receipt(identifier, "opening", {"status": "sent"})
     current["rankings_enabled"] = True
     store.save_settings("g", 1, current, "admin")
+    assert store.reminders("g")[0]["id"] == task
     assert store.reminders("g")[0]["state"] == "active"
     assert store.activities("g")[0]["state"] == "open"
     assert store.reminders("g")[0]["revision"] == 2
@@ -605,8 +669,12 @@ def test_real_waking_and_process_pipeline_never_models_fixed_commands(
         process.star_request_sub_stage = commands
         process.agent_sub_stage = Model()
         await plugin.business.db(
-            config["session_ref"], "save_settings", "g", 0,
-            settings(manager_user_ids=["delegate"], group_ai_enabled=True), "dashboard:owner",
+            config["session_ref"],
+            "save_settings",
+            "g",
+            0,
+            settings(manager_user_ids=["delegate"], group_ai_enabled=True),
+            "dashboard:owner",
         )
         for mid, text, group, user, model_expected, sends_expected in [
             ("passive", "ordinary group text", True, "ordinary", False, 0),
@@ -622,7 +690,10 @@ def test_real_waking_and_process_pipeline_never_models_fixed_commands(
         ]:
             if mid == "off_model":
                 await plugin.business.db(
-                    config["session_ref"], "save_settings", "g", 1,
+                    config["session_ref"],
+                    "save_settings",
+                    "g",
+                    1,
                     settings(manager_user_ids=["delegate"], group_ai_enabled=False),
                     "dashboard:owner",
                 )
@@ -673,8 +744,12 @@ def test_platform_filter_and_tool_removal_are_scoped_and_do_not_mutate_global_to
     async def run():
         plugin, config, _ = prepared_plugin(tmp_path, monkeypatch)
         await plugin.business.db(
-            config["session_ref"], "save_settings", "g", 0,
-            settings(ai_management_enabled=True), "owner",
+            config["session_ref"],
+            "save_settings",
+            "g",
+            0,
+            settings(ai_management_enabled=True),
+            "owner",
         )
         event = SimpleNamespace(
             get_platform_name=lambda: "telegram",

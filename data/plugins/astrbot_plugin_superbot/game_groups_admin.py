@@ -1,9 +1,11 @@
 """One-group game overview and explicitly confirmed activation."""
 
+from .game_navigation import scoped_game_page
 from .game_switches import FEATURES, blocker, enable_group, snapshot
 from .store import Rejected
 
 
+@scoped_game_page
 async def action(ui, update, payload):
     """Render admission gates and confirm one-group changes under existing rights.
 
@@ -14,16 +16,31 @@ async def action(ui, update, payload):
     """
     store = ui.store
     uid = str(update.effective_user.id)
-    store.require(uid, "game", chat=payload.get("chat"))
     if update.effective_chat.type != "private":
         raise Rejected("请私聊管理本群玩法启停。")
     name = payload["action"]
+    from .tenants import platform_group
+
+    if payload.get("chat") and not platform_group(store, payload["chat"]):
+        from .tenant_ui import action as tenant_action
+
+        return await tenant_action(
+            ui, update, {"action": "tenant_switches", "chat": payload["chat"]}
+        )
     if name == "games_group_list":
-        rows = store.db.execute(
-            "SELECT chat,title FROM platform_mod_groups g WHERE enabled=1 AND "
-            "(? OR EXISTS(SELECT 1 FROM mod_acl a WHERE a.chat=g.chat AND a.uid=?)) ORDER BY chat",
-            (store.allowed(uid, "manager"), uid),
-        ).fetchall()
+        from .group_visibility import visible_groups
+
+        if not store.allowed(uid, "game"):
+            from .tenant_ui import action as tenant_action
+
+            return await tenant_action(ui, update, {"action": "tenant_home"})
+        rows = await visible_groups(
+            ui.runtime,
+            uid,
+            store.db.execute(
+                "SELECT chat,title FROM platform_mod_groups WHERE enabled=1 ORDER BY chat"
+            ).fetchall(),
+        )
         page = max(0, min(int(payload.get("page", 0)), max(0, (len(rows) - 1) // 8)))
         buttons = [
             (row["title"], {"action": "games_group_view", "chat": row["chat"]})
@@ -40,6 +57,7 @@ async def action(ui, update, payload):
             buttons + [("返回玩法管理", {"action": "admin_game"})],
             fold_sections=True,
         )
+    store.require(uid, "game", chat=payload.get("chat"))
     chat = str(payload["chat"])
     await ui.runtime.moderation.check(uid, chat, "view")
     current = snapshot(store, chat)
@@ -112,6 +130,7 @@ async def action(ui, update, payload):
             ("💣 扫雷设置", {"action": "mines_group", "chat": chat}),
             ("🎲 快三设置", {"action": "k3_group", "chat": chat}),
             ("🤝 对赌设置", {"action": "games_duel"}),
+            ("🕒 每日开放时段", {"action": "schedule_home", "chat": chat}),
             ("返回群列表", {"action": "games_group_list"}),
         ],
         fold_sections=True,

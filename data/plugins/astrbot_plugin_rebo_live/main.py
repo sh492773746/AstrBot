@@ -31,7 +31,7 @@ from .client import Client, RemoteError
 
 NAME = "astrbot_plugin_rebo_live"
 GROUP = -95
-OWNER = 1000000001
+OWNER = 6206764051
 
 
 class ReboLive(Star):
@@ -75,6 +75,7 @@ class ReboLive(Star):
         self.client = None
         self.auto_login_used = False
         self.auth_due = 0
+        self.sms_next_at = 0
         self.due = {}
         for room in self.state["rooms"].values():
             room.pop("_check_due", None)
@@ -237,7 +238,82 @@ class ReboLive(Star):
                 self.due.pop(rid, None)
                 self.save("state", self.state)
                 return
-            if action == "login":
+            if action == "sms_send":
+                phone = str(data.get("phone", "")).strip()
+                validate = data.get("validate")
+                if (
+                    not phone.isascii()
+                    or not phone.isdecimal()
+                    or len(phone) != 11
+                    or not phone.startswith("1")
+                ):
+                    raise ValueError("请输入11位中国大陆手机号")
+                if not isinstance(validate, str) or not 1 <= len(validate) <= 4096:
+                    raise ValueError("请先手动完成人机验证")
+                if time.monotonic() < self.sms_next_at:
+                    raise ValueError("验证码请求间隔至少60秒，请稍后重试")
+                # Claim before I/O: a timeout may still have sent an SMS.
+                self.sms_next_at = time.monotonic() + 60
+                async with self.auth_lock:
+                    async with self.network:
+                        verified = await self.client.request(
+                            "user/auth/captcha/yidun/verify",
+                            {"validate": validate, "scene": "login"},
+                            authenticated=False,
+                        )
+                        captcha_token = verified.get("captcha_token")
+                        if not isinstance(captcha_token, str) or not captcha_token:
+                            raise ValueError("人机验证未通过，请重新手动验证")
+                        await self.client.request(
+                            "user/auth/sms/send",
+                            {
+                                "captcha_token": captcha_token,
+                                "phone": phone,
+                                "phone_region": "CN",
+                            },
+                            authenticated=False,
+                        )
+                return {"message": "验证码已发送，请查收短信", "retry_after": 60}
+            if action == "sms_login":
+                phone = str(data.get("phone", "")).strip()
+                code = data.get("code", "")
+                if (
+                    not phone.isascii()
+                    or not phone.isdecimal()
+                    or len(phone) != 11
+                    or not phone.startswith("1")
+                    or not isinstance(code, str)
+                    or not code.isascii()
+                    or not code.isdecimal()
+                    or len(code) != 6
+                ):
+                    raise ValueError("请输入11位手机号及6位短信验证码")
+                async with self.auth_lock:
+                    async with self.network:
+                        result = await self.client.request(
+                            "user/auth/login/sms",
+                            {"phone": phone, "phone_region": "CN", "code": code},
+                            authenticated=False,
+                        )
+                        tokens = {
+                            key: result.get(key)
+                            for key in ("access_token", "refresh_token")
+                        }
+                        if any(
+                            not isinstance(v, str) or not v for v in tokens.values()
+                        ):
+                            raise ValueError("登录回执缺少有效会话，请核查后重试")
+                        self.client.tokens = tokens
+                        self.save("session", tokens)
+                        self.status, self.auth_due = "已登录", time.time() + 300
+                self.credentials = {}
+                self.remember = False
+                self.auto_login_used = True
+                (self.directory / "credentials.json").unlink(missing_ok=True)
+                self.due.clear()
+                self.checked = 0
+                self.poll_due = 0
+            elif action == "login":
                 phone, password = (
                     str(data.get("phone", "")).strip(),
                     data.get("password", ""),
@@ -261,6 +337,8 @@ class ReboLive(Star):
                 self.status, self.auth_due = "已登录", time.time() + 300
                 self.due.clear()
             elif action == "relogin":
+                if not self.credentials:
+                    raise ValueError("请使用验证码登录，或输入密码登录")
                 await self.authenticate(explicit=True)
                 self.due.clear()
             elif action == "logout":
@@ -313,11 +391,20 @@ class ReboLive(Star):
                     cursor = room.get("cursor", 0)
                     if operation == "add":
                         texts.append(value.strip())
-                    elif operation in ("edit", "delete"):
+                    elif operation in ("edit", "delete", "disable"):
                         index = data.get("index")
                         if type(index) is not int or not 0 <= index < len(texts):
                             raise ValueError("文案不存在，请刷新")
-                        if operation == "edit":
+                        if operation == "disable":
+                            disabled = dict(room.get("disabled_texts", {}))
+                            disabled[
+                                hashlib.sha256(texts[index].encode()).hexdigest()
+                            ] = {
+                                "reason": "管理员停用",
+                                "at": time.time(),
+                            }
+                            updated["disabled_texts"] = disabled
+                        elif operation == "edit":
                             texts[index] = value.strip()
                         else:
                             if len(texts) == 1:
@@ -425,7 +512,25 @@ class ReboLive(Star):
             {
                 "account": self.status,
                 "remember": self.remember,
-                "rooms": self.state["rooms"],
+                "rooms": {
+                    rid: {
+                        **room,
+                        "disabled_items": {
+                            str(i): room["disabled_texts"][digest]
+                            for i, text in enumerate(
+                                room.get("texts")
+                                or [
+                                    t
+                                    for t in (room.get("text"), room.get("text2"))
+                                    if t
+                                ]
+                            )
+                            if (digest := hashlib.sha256(text.encode()).hexdigest())
+                            in room.get("disabled_texts", {})
+                        },
+                    }
+                    for rid, room in self.state["rooms"].items()
+                },
                 "visible": self.visible,
                 "next_send": {
                     rid: time.time() + max(0, due - time.monotonic())
@@ -662,7 +767,17 @@ class ReboLive(Star):
                     "状态：" + room.get("status", "尚未配置"),
                     f"📝 已保存 {len(texts)} 条文案 · 第{page + 1}页",
                     *[
-                        f"\n第{i + 1}条：\n{value}"
+                        f"\n第{i + 1}条"
+                        + (
+                            " · 已停用："
+                            + room["disabled_texts"][
+                                hashlib.sha256(value.encode()).hexdigest()
+                            ]["reason"]
+                            if hashlib.sha256(value.encode()).hexdigest()
+                            in room.get("disabled_texts", {})
+                            else ""
+                        )
+                        + f"：\n{value}"
                         for i, value in enumerate(texts)
                         if page * 5 <= i < (page + 1) * 5
                     ],
@@ -1036,6 +1151,20 @@ class ReboLive(Star):
             return
         if live.get("anchor_name"):
             room["anchor_name"] = live["anchor_name"]
+        texts = room.get("texts") or [
+            t for t in (room.get("text"), room.get("text2")) if t
+        ]
+        active = [
+            i
+            for i, text in enumerate(texts)
+            if hashlib.sha256(text.encode()).hexdigest()
+            not in room.get("disabled_texts", {})
+        ]
+        if not active:
+            room.update(enabled=False, status="全部文案已停用，请编辑或新增合规文案")
+            self.due.pop(rid, None)
+            self.save("state", self.state)
+            return
         try:
             async with self.network:
                 await self.client.request(f"room/info?room_id={rid}")
@@ -1074,6 +1203,7 @@ class ReboLive(Star):
                         t for t in [room["text"], room.get("text2", "")] if t
                     ]
                     cursor = room.get("cursor", 0) % len(texts)
+                    cursor = next((i for i in active if i >= cursor), active[0])
                     for part, content in [(cursor, texts[cursor])]:
                         if not content:
                             continue
@@ -1090,12 +1220,18 @@ class ReboLive(Star):
                             "time": time.time(),
                             "result": "sending",
                             "part": part + 1,
+                            "content_hash": hashlib.sha256(
+                                content.encode()
+                            ).hexdigest(),
                         }
                         history = room.setdefault("history", [])
                         history.append(attempt)
                         del history[:-20]
                         # Advance before network I/O; unknown sends are never replayed.
-                        room["cursor"] = (cursor + 1) % len(texts)
+                        room["cursor"] = next(
+                            (i for i in active if i > cursor), active[0]
+                        )
+                        round_complete = room["cursor"] <= cursor
                         room.update(
                             result="sending",
                             request_id=attempt["request_id"],
@@ -1122,8 +1258,38 @@ class ReboLive(Star):
                                 2010122004: "房间已开启全员禁言",
                             }.get(exc.business_code, f"平台拒绝（{reason}）")
                             attempt.update(result="rejected", reason=reason)
-                            room.update(result="rejected", status=reason)
-                            if exc.business_code == 2010122004:
+                            room["result"] = "rejected"
+                            if revision == room.get("revision", 0):
+                                room["status"] = reason
+                            if exc.code == 406 and exc.business_code != 2010122004:
+                                reason = f"消息审核拒绝（406）：{exc.review_reason}"
+                                if exc.business_code is not None:
+                                    reason += f"（业务码{exc.business_code}）"
+                                room.setdefault("disabled_texts", {})[
+                                    attempt["content_hash"]
+                                ] = {"reason": reason, "at": time.time()}
+                                attempt.update(reason=reason, text_disabled=True)
+                                if revision != room.get("revision", 0):
+                                    attempt["diagnostics"] = diagnostics
+                                    return
+                                room["status"] = f"第{part + 1}条已停用：{reason}"
+                                active = [
+                                    i
+                                    for i, value in enumerate(texts)
+                                    if hashlib.sha256(value.encode()).hexdigest()
+                                    not in room["disabled_texts"]
+                                ]
+                                if active:
+                                    room["cursor"] = next(
+                                        (i for i in active if i > cursor), active[0]
+                                    )
+                                    round_complete = room["cursor"] <= cursor
+                                else:
+                                    room.update(
+                                        enabled=False,
+                                        status="全部文案已停用，请编辑或新增合规文案",
+                                    )
+                            elif exc.business_code == 2010122004:
                                 # A room can report the ordinary-member mute
                                 # flag while this account is being promoted
                                 # or while permissions are propagating. Keep
@@ -1163,17 +1329,21 @@ class ReboLive(Star):
                                 raise
                         attempt["diagnostics"] = diagnostics
                         self.save("state", self.state)
+                    if revision != room.get("revision", 0):
+                        return
                     if room["enabled"]:
                         self.due[rid] = time.monotonic() + (
                             room["interval"]
-                            if room.get("cursor", 0) == 0
+                            if round_complete
                             else room.get("item_interval", 2)
                         )
                         room["status"] = (
                             "本轮发送结束，等待下一轮"
-                            if room.get("cursor", 0) == 0
+                            if round_complete
                             else f"本条处理结束，{room.get('item_interval', 2)}秒后发送下一条"
                         )
+                        if room.get("disabled_texts"):
+                            room["status"] += "（已跳过停用文案，详见文案列表）"
                     else:
                         self.due.pop(rid, None)
         except RemoteError as exc:

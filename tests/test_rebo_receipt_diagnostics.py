@@ -126,3 +126,44 @@ async def test_explicit_rejection_stays_rejection():
     )
     with pytest.raises(RemoteError):
         await Client(None, "", {}).send(ws, "text", "r", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "SECRET private raw server error",
+        '{"code":2010392001,"message":"SECRET"}',
+        '{"code":123456,"token":"SECRET"}',
+        '{"code":true,"message":"SECRET"}',
+    ],
+)
+async def test_review_reason_is_allowlisted_and_never_leaks_payload(detail):
+    ws = SimpleNamespace(
+        send_json=AsyncMock(),
+        receive=AsyncMock(
+            return_value=SimpleNamespace(
+                type=aiohttp.WSMsgType.TEXT,
+                data=json.dumps(
+                    {
+                        "Type": "ERROR",
+                        "RequestId": "r",
+                        "ErrorCode": 406,
+                        "ErrorMessage": detail,
+                    }
+                ),
+            )
+        ),
+        close_code=None,
+    )
+    diagnostics = {}
+    with pytest.raises(RemoteError) as caught:
+        await Client(None, "", {}).send(ws, "text", "r", diagnostics)
+    assert caught.value.code == 406
+    assert diagnostics["error_code"] == 406
+    assert diagnostics["review_reason"] == caught.value.review_reason
+    assert "SECRET" not in json.dumps(diagnostics) + str(caught.value)
+    if "2010392001" in detail:
+        assert "敏感词" in diagnostics["review_reason"]
+    else:
+        assert "未提供" in diagnostics["review_reason"]

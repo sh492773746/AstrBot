@@ -66,6 +66,41 @@ const statuses: Record<string, string> = {
   accepted: "已受理 · 待核验",
   verified: "已核验",
 };
+const reasons: Record<string, string> = {
+  transport_timeout: "请求超时，未确认执行结果",
+  transport: "连接异常，未确认执行结果",
+  operation_cancelled: "处理被中断，未确认执行结果",
+  business_rejected: "平台返回异常，不能据此认定成员已退群",
+  http_rejected: "平台HTTP响应异常",
+  response_invalid: "平台响应无法解析",
+  response_shape: "平台响应格式不完整",
+  response_limit: "平台响应超过安全大小限制",
+  body_authentication_or_compression: "平台响应校验失败",
+  reauth_required: "账号认证已失效",
+  rate_limited: "平台限制请求频率",
+  moderation_permission: "机器人管理权限不足",
+  moderation_identity: "机器人身份已变化",
+  moderation_target: "目标已离群、身份变化或受保护",
+  blacklist_member_unavailable: "完整目录中已无此成员，可能已经退群",
+  blacklist_target_changed: "目标身份、群角色或权限已变化",
+  blacklist_identity_changed: "成员传输身份已变化",
+  blacklist_changed: "名单、成员或授权已变化",
+  blacklist_protected: "目标属于受保护成员或身份已变化",
+  mute_list_identity: "成员身份变化，当前禁言状态无法核实",
+  mute_list_unavailable: "当前禁言名单暂时无法读取",
+  mute_list_incomplete: "当前禁言名单不完整，无法核实",
+  mute_list_rejected: "平台拒绝读取当前禁言名单",
+};
+const memberships: Record<string, string> = {
+  present: "当前仍在群",
+  absent: "当前目录中已不在群",
+  identity_changed: "当前成员身份已变化",
+};
+const muteStates: Record<string, string> = {
+  muted: "平台当前已禁言",
+  not_muted: "平台当前未禁言",
+  unavailable: "当前禁言状态未确认",
+};
 
 function clearSearch() {
   generation++;
@@ -255,6 +290,21 @@ onBeforeUnmount(() => { generation++; });
             warning: ['pending', 'unknown', 'accepted'].includes(member.status),
             error: ['error', 'failed', 'rejected'].includes(member.status),
           }">{{ statuses[member.status] || `待核对（${member.status || '未提供'}）` }}</dd></div>
+          <div v-if="member.error || member.status === 'unknown'"><dt>原因</dt><dd>
+            {{ member.error ? reasons[member.error] || '执行异常，需核对审计记录' : '旧记录未保存具体原因' }}
+            <small v-if="member.provider_code !== undefined">平台代码 {{ member.provider_code }}</small>
+            <small v-if="member.error_phase === 'readback'">异常发生在状态核对阶段</small>
+          </dd></div>
+          <div v-if="member.current_state"><dt>当前核对</dt><dd>
+            {{ memberships[member.current_state.membership] }} · {{ muteStates[member.current_state.mute] }}
+            <small v-if="member.current_state.error">
+              {{ reasons[member.current_state.error] || '状态查询失败，请稍后刷新核对' }}
+            </small>
+            <small>{{ new Date(member.current_state.checked_at * 1000).toLocaleString('zh-CN', {
+              timeZone: 'Asia/Shanghai', hour12: false,
+            }) }} 北京时间</small>
+            <small>当前状态不证明原请求成功或原禁言时长；未重复处罚。</small>
+          </dd></div>
         </dl>
         <button type="button" class="icon-button remove-member" title="移出黑名单"
           :aria-label="`将${member.name || '已离群成员'}（UID ${member.id}）移出黑名单`"

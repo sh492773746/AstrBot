@@ -190,6 +190,46 @@ def test_recall_reconciliation_after_counting(activity):
     assert runtime.read("bot", "1", "5", now=now)["days"][0]["total"] == 1
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        "observed",
+        "preflight_failed",
+        "execution_rejected",
+        "review_only",
+        "identity_unverified",
+    ],
+)
+def test_failed_sanctions_do_not_count_violations_as_valid_speech(activity, status):
+    runtime, source, now, _ = activity
+    insert(source, now - 100, "violation")
+    insert(source, now - 100, "protected")
+    insert(source, now - 100, "safe")
+    runtime.collect("bot", "1", "5", source, now)
+    assert runtime.read("bot", "1", "5", now=now)["days"][0]["total"] == 3
+    with closing(sqlite3.connect(source.parent / "moderation.sqlite3")) as db, db:
+        db.execute(
+            "CREATE TABLE content_violations(account,group_id,message,observed,status)"
+        )
+        db.executemany(
+            "INSERT INTO content_violations VALUES(?,?,?,?,?)",
+            [
+                ("1", "5", "violation", now, status),
+                ("1", "5", "protected", now, "administrator_exempt"),
+                ("1", "6", "safe", now, status),
+                ("2", "5", "safe", now, status),
+            ],
+        )
+    restarted = SpeechActivity(SimpleNamespace())
+    restarted.collect("bot", "1", "5", source, now + 1)
+    snapshot = restarted.read("bot", "1", "5", now=now)
+    assert snapshot["days"][0]["total"] == 2
+    with closing(restarted.database("bot")) as db:
+        assert {
+            row[0] for row in db.execute("SELECT message FROM speech_messages")
+        } == {"protected", "safe"}
+
+
 def test_midnight_reset_retention_downtime_and_no_message_bodies(activity):
     runtime, source, now, _ = activity
     yesterday, today, tomorrow = day_window(now)
@@ -427,13 +467,23 @@ def test_focused_report_exact_ids_text_only_two_days_and_totals(activity):
         runtime.collect("bot", "1", group, source, now)
     report = runtime.report("bot", "1", report_definition(), now=now)
     assert report["catching_up"] is False
-    assert report["days"][0]["members"] == [
+    assert [
+        {key: value for key, value in member.items() if key != "hours"}
+        for member in report["days"][0]["members"]
+    ] == [
         {"id": "10", "name": "成员甲", "counts": [1, 1], "total": 2},
         {"id": "11", "name": "成员乙", "counts": [0, 1], "total": 1},
     ]
     assert report["days"][0]["totals"] == [1, 2]
     assert report["days"][0]["total"] == 3
     assert report["days"][1]["total"] == 1
+    for day in report["days"]:
+        for member in day["members"]:
+            assert len(member["hours"]) == 24
+            assert [
+                sum(hour[index] for hour in member["hours"]) for index in range(2)
+            ] == member["counts"]
+    assert report["days"][0]["members"][0]["hours"][11] == [1, 1]
     assert (
         runtime.report("bot", "2", report_definition(), now=now)["days"][0]["total"]
         == 0
@@ -444,6 +494,44 @@ def test_focused_report_exact_ids_text_only_two_days_and_totals(activity):
         ]
         == 3
     )
+
+
+def test_focused_hourly_boundaries_beijing_recall_and_zero_filling(activity):
+    runtime, source, now, _ = activity
+    midnight = day_window(now)[1]
+    for message, stamp, extra in (
+        ("midnight", midnight, {}),
+        ("last-second", midnight + 3599.999, {}),
+        ("next-hour", midnight + 3600, {}),
+        ("other-group", midnight + 3600, {"group": "6"}),
+        ("recalled", midnight + 3600, {}),
+        ("media", midnight + 3600, {"kind": "image"}),
+        ("command", midnight + 3600, {"text": "@Target 禁言128"}),
+        ("previous-day", midnight - 0.001, {"uid": "11"}),
+        ("other-account", midnight + 3600, {"account": "2"}),
+        ("other-person", midnight + 3600, {"uid": "12"}),
+    ):
+        insert(source, stamp, message, **extra)
+    with closing(sqlite3.connect(source)) as db, db:
+        db.execute("INSERT INTO observed_recalls VALUES('1','5','recalled',?)", (now,))
+    for group in ("5", "6"):
+        runtime.collect("bot", "1", group, source, now)
+    report = runtime.report("bot", "1", report_definition(), now=now)
+    today, yesterday = report["days"]
+    assert today["members"][0]["hours"] == [[2, 0], [1, 1], *([[0, 0]] * 22)]
+    assert today["members"][0]["total"] == 4
+    assert today["members"][1]["hours"] == [[0, 0]] * 24
+    assert yesterday["members"][1]["hours"][23] == [1, 0]
+    assert sum(sum(hour) for hour in yesterday["members"][1]["hours"]) == 1
+    # A later recall subtracts from the original hour as well as the daily total.
+    with closing(sqlite3.connect(source)) as db, db:
+        db.execute(
+            "INSERT INTO observed_recalls VALUES('1','5','next-hour',?)", (now + 1,)
+        )
+    runtime.collect("bot", "1", "5", source, now + 1)
+    today = runtime.report("bot", "1", report_definition(), now=now + 1)["days"][0]
+    assert today["members"][0]["hours"][1] == [0, 1]
+    assert today["members"][0]["total"] == 3
 
 
 @pytest.mark.parametrize(

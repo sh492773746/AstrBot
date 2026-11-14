@@ -3,23 +3,37 @@
 import ast
 from pathlib import Path
 
+from astrbot.builtin_stars.wangshangliao_moderation.command_capabilities import (
+    COMMAND_SPECS,
+)
 from astrbot.builtin_stars.wangshangliao_moderation.syntax import (
     ALIASES,
     NO_ARGUMENT,
+    RETIRED_CHAT_ACTIONS,
     WITH_ARGUMENT,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_plugin_readme_covers_every_canonical_command():
+def test_plugin_readme_covers_active_canonical_commands_not_retired_dm_inventory():
     text = (
         ROOT / "astrbot/builtin_stars/wangshangliao_moderation/README.md"
     ).read_text()
     inventory = text.split("## 完整命令索引", 1)[1].split("### 数值范围", 1)[0]
-    canonical = {ALIASES.get(name, name) for name in NO_ARGUMENT | WITH_ARGUMENT}
+    canonical = {
+        ALIASES.get(name, name)
+        for name in (NO_ARGUMENT | WITH_ARGUMENT) - RETIRED_CHAT_ACTIONS
+    }
     for command in canonical:
         assert f"`{command}`" in inventory or f"`{command} " in inventory, command
+    from astrbot.builtin_stars.wangshangliao_moderation import command_capabilities
+
+    assert not hasattr(command_capabilities, "RETIRED_DM_COMMANDS")
+    for command in ("菜单", "完整菜单", "客服设置", "我的套餐", "/chat", "/exit"):
+        assert command not in COMMAND_SPECS
+        assert f"`{command}`" not in inventory
+        assert f"`{command} " not in inventory
 
 
 def test_connection_guidance_does_not_confuse_missing_state_with_stopped_or_zero():
@@ -131,10 +145,10 @@ def test_current_ai_sources_document_profile_selection_without_write_tools():
     ).read_text()
     assert "wsl_private_management" not in examples
     assert "确认修改名片" not in examples
-    assert "热群开关" in examples and "热群状态" in examples
-    assert "定时发言" in examples and "每次发1张" in examples
+    assert "群聊活动示例" in examples
+    assert "示例数据 · 不会发送" in examples
+    assert "Invitation Settlement" in examples and "我的邀请" in examples
     assert "菜单9" not in examples
-    assert "预算门禁未通过时暂停调用" in examples
     assert "当前预算门禁仍关闭" not in examples
     for locale in ("zh", "en"):
         guide = (
@@ -148,7 +162,8 @@ def test_current_ai_sources_document_profile_selection_without_write_tools():
             "不继承工具" if locale == "zh" else "no real history, tools or skills"
         ) in guide
     page = (ROOT / "dashboard/plugin-pages/wangshangliao/OpenService.vue").read_text()
-    assert "客服AI咨询" in page and "群聊 / 热群AI默认配置" in page
+    assert "客服AI咨询" not in page
+    assert "群聊 / 热群AI默认配置" in page
     assert "普通聊天自主接话" in page
     editor = (
         ROOT / "dashboard/plugin-pages/wangshangliao/AIProfileEditor.vue"
@@ -156,6 +171,51 @@ def test_current_ai_sources_document_profile_selection_without_write_tools():
     assert (
         "AstrBot配置" in editor and "persona_id" in editor and "history_turns" in editor
     )
+
+
+def test_bilingual_retirement_maps_keep_webui_finance_and_no_global_admin_grant():
+    for locale, fragments in {
+        "zh": (
+            "2026-11-02 01:48（北京时间）",
+            "受控完整重启加载",
+            "普通群管理员",
+            "不会因此获得AstrBot全局后台访问权",
+            "历史会话",
+            "好友自动审批",
+            "个人知识",
+            "专属客服",
+            "私信AI",
+            "管理员私信指引",
+            "私信财务",
+            "图片收取",
+            "邀请记账／结账",
+            "完整实群验收未完成",
+        ),
+        "en": (
+            "Loaded by a controlled full restart",
+            "01:48 Asia/Shanghai, November 2, 2026",
+            "do not acquire global AstrBot Dashboard access",
+            "historical conversations",
+            "automatic friend approval",
+            "personal knowledge",
+            "dedicated support",
+            "private AI",
+            "private administrator guidance",
+            "private finance",
+            "image intake",
+            "Invitation Settlement",
+            "pending full live acceptance",
+        ),
+    }.items():
+        text = (
+            ROOT / "docs" / locale / "platform" / "wangshangliao-start.md"
+        ).read_text()
+        for fragment in fragments:
+            assert fragment in text, (locale, fragment)
+        for name in ("group-only-ai-zh-mobile.png", "group-only-matrix-en-desktop.png"):
+            assert name in text
+            image = ROOT / "docs/public/images/wangshangliao" / name
+            assert image.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_script_inventory_keeps_destructive_tools_out_of_daily_acceptance():
@@ -182,12 +242,29 @@ def test_script_inventory_keeps_destructive_tools_out_of_daily_acceptance():
         "check_wsl_saved_suffix.py",
         "check_wsl_shared_platforms.py",
         "check_wsl_welcome_repair.py",
+        "check_wsl_finance_chat_live.py",
+        "check_wsl_private_invitations_live.py",
+        "check_wsl_guidance_dialogue_live.py",
+        "check_wsl_three_guides_live.py",
     ):
         assert not (ROOT / "scripts" / removed).exists()
+        assert f"]({removed})" not in text
 
 
 def test_script_imports_resolve_without_executing_live_runners():
     """Detect broken cleanup dependencies without importing side-effectful tools."""
+    plugin = "astrbot.builtin_stars.wangshangliao_moderation"
+    removed = {
+        "owner_support",
+        "private_batches",
+        "private_interaction",
+        "private_invitation",
+        "friend_auto",
+        "guidance_trial",
+        "consultation_access",
+        "service_settings",
+        "finance_chat",
+    }
     sources = list((ROOT / "scripts").glob("*.py"))
     sources.extend((ROOT / "tests").rglob("*.py"))
     for source in sources:
@@ -195,11 +272,27 @@ def test_script_imports_resolve_without_executing_live_runners():
         for node in ast.walk(tree):
             modules = []
             if isinstance(node, ast.ImportFrom):
+                if node.module == plugin or (node.module or "").startswith(
+                    plugin + "."
+                ):
+                    assert node.module.split(".")[-1] not in removed, (
+                        source,
+                        node.lineno,
+                    )
+                    assert not (
+                        {"FeatureGuides"}
+                        | (removed if node.module == plugin else set())
+                    ) & {alias.name for alias in node.names}, (source, node.lineno)
                 if node.module == "scripts":
                     modules = [alias.name for alias in node.names]
                 elif node.module and node.module.startswith("scripts."):
                     modules = [node.module.split(".")[1]]
             elif isinstance(node, ast.Import):
+                assert not any(
+                    alias.name.startswith(plugin + ".")
+                    and alias.name.split(".")[-1] in removed
+                    for alias in node.names
+                ), (source, node.lineno)
                 modules = [
                     alias.name.split(".")[1]
                     for alias in node.names

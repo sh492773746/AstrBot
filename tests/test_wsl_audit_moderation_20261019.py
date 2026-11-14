@@ -33,7 +33,6 @@ from astrbot.builtin_stars.wangshangliao_moderation.flood import (
     FloodWindows,
 )
 from astrbot.builtin_stars.wangshangliao_moderation.review_store import ReviewStore
-from astrbot.builtin_stars.wangshangliao_moderation.syntax import recognize_command
 from astrbot.core.platform.sources.wangshangliao import (
     automatic,
     progressive,
@@ -510,25 +509,28 @@ async def test_schedule_checks_creator_membership_at_submission(bot):
 @pytest.mark.parametrize("scope", ["peer", "account", "origin", "claimed"])
 async def test_menu_confirmation_cannot_be_taken_over(bot, scope):
     service = SimpleNamespace(
-        integrated=True,
-        recognize_command=recognize_command,
-        admit_command=lambda event: True,
-        menu_command=AsyncMock(return_value="offline result"),
+        admit_command=Mock(return_value=True),
+        manager_command=AsyncMock(return_value="offline result"),
     )
     menu = CommandMenu(service)
     actor = ActorIdentity("1", "9", "109", "9")
     event = SimpleNamespace(
         platform=bot,
         actor_identity=actor,
+        is_private_chat=lambda: False,
         get_sender_id=lambda: "9",
         get_group_id=lambda: "5",
         unified_msg_origin="audit:GroupMessage:1/5",
         message_obj=SimpleNamespace(message_id="confirmation"),
+        set_extra=Mock(),
+        send=AsyncMock(),
     )
     original = menu.key(event)
+    assert original is not None
     menu.sessions[original] = Session(
-        time.monotonic() + 600, confirm="关闭防刷屏", preview_message="preview"
+        time.monotonic() + 600, confirm="确认本群扣费", preview_message="preview"
     )
+    assert menu.accepts(event, "1")
     if scope == "peer":
         event.actor_identity = replace(
             actor, peer="119", claimed_uid="19", verified_uid="19"
@@ -542,9 +544,13 @@ async def test_menu_confirmation_cannot_be_taken_over(bot, scope):
         event.get_group_id = lambda: "6"
     else:
         event.actor_identity = replace(actor, claimed_uid="19")
+    assert menu.key(event) != original
     assert not await menu.handle(event, "1")
-    service.menu_command.assert_not_awaited()
-    assert menu.sessions[original].confirm == "关闭防刷屏"
+    service.manager_command.assert_not_awaited()
+    event.set_extra.assert_not_called()
+    event.send.assert_not_awaited()
+    assert menu.sessions[original].confirm == "确认本群扣费"
+    assert not menu.sessions[original].closed
 
 
 @pytest.mark.asyncio
@@ -618,7 +624,12 @@ def test_warning_unknown_is_not_a_successful_prior_warning(tmp_path, receipt):
 
 
 @pytest.mark.asyncio
-async def test_rankings_exclude_the_successfully_recalled_warning_stage(bot, tmp_path):
+@pytest.mark.parametrize(
+    "name,display", [("Member Two", "Member Two"), ("", "未获取昵称")]
+)
+async def test_rankings_exclude_the_successfully_recalled_warning_stage(
+    bot, tmp_path, name, display
+):
     now = time.time()
     for mid, text, stamp in (
         ("3001", "synthetic advertisement", now - 100),
@@ -628,11 +639,18 @@ async def test_rankings_exclude_the_successfully_recalled_warning_stage(bot, tmp
             "1",
             "5",
             mid,
-            {"sender": "2", "text": text, "recall_route": {"time": stamp * 1000}},
+            {
+                "sender": "2",
+                "name": name,
+                "text": text,
+                "recall_route": {"time": stamp * 1000},
+            },
         )
     store = ReviewStore(tmp_path / "moderation.sqlite3")
     store.observe("1", "5", "3001", "2", "external_promotion", now, now - 200)
     store.finish("1", "5", "3001", "recalled", "accepted")
-    result = await rankings.DailyRankings().read(bot, "5", "9")
-    assert "1. 2 - 1 条" in result
-    assert "2 条" not in result
+    ranking = rankings.DailyRankings()
+    assert (await ranking.snapshot(bot, "5"))[2] == [("2", name, 1)]
+    result = await ranking.read(bot, "5", "9")
+    assert result == f"今日发言排行\n\n1:{display}（有效发言1条）"
+    assert "有效发言2条" not in result

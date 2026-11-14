@@ -2,12 +2,15 @@
 
 import json
 
+from .game_navigation import game_back, scoped_game_page
 from .game_switches import approve_rollout, blocker
 from .mines import RULES
 from .slots import group_stakes
 from .store import Rejected
+from .tenants import platform_group
 
 
+@scoped_game_page
 async def action(ui, update, payload):
     """Manage only groups authorized by existing game and moderation rights.
 
@@ -18,16 +21,29 @@ async def action(ui, update, payload):
     """
     store, runtime = ui.store, ui.runtime
     uid = str(update.effective_user.id)
-    store.require(uid, "game", chat=payload.get("chat"))
     if update.effective_chat.type != "private":
         raise Rejected("请私聊管理扫雷接龙。")
     name = payload["action"]
     if name == "mines_groups":
-        rows = store.db.execute(
-            "SELECT chat,title FROM platform_mod_groups g WHERE enabled=1 AND "
-            "(? OR EXISTS(SELECT 1 FROM mod_acl a WHERE a.chat=g.chat AND a.uid=?)) ORDER BY chat",
-            (store.allowed(uid, "manager"), uid),
-        ).fetchall()
+        from .group_visibility import visible_groups
+
+        if not store.allowed(uid, "game"):
+            # Older lightweight runtimes do not load tenant services; keep the
+            # game-scoped list available instead of crashing while delegating.
+            if not getattr(runtime, "tenants", None) or not getattr(
+                runtime, "merchant_ads", None
+            ):
+                raise Rejected("没有可管理的玩法群。")
+            from .tenant_ui import action as tenant_action
+
+            return await tenant_action(ui, update, {"action": "tenant_home"})
+        rows = await visible_groups(
+            runtime,
+            uid,
+            store.db.execute(
+                "SELECT chat,title FROM platform_mod_groups WHERE enabled=1 ORDER BY chat"
+            ).fetchall(),
+        )
         page = max(0, min(int(payload.get("page", 0)), max(0, (len(rows) - 1) // 8)))
         buttons = [
             (r["title"], {"action": "mines_group", "chat": r["chat"]})
@@ -43,6 +59,7 @@ async def action(ui, update, payload):
             buttons + [("返回玩法管理", {"action": "admin_game"})],
             fold_sections=True,
         )
+    store.require(uid, "game", chat=payload.get("chat"))
     chat = str(payload["chat"])
     await runtime.moderation.check(uid, chat, "view", enabled=False)
     row = store.db.execute(
@@ -161,17 +178,21 @@ async def action(ui, update, payload):
             or "暂无"
         )
     )
-    buttons = [
-        (
-            "关闭本群" if enabled else "开启本群",
-            {
-                "action": "mines_preview",
-                "chat": chat,
-                "version": version,
-                "enabled": not enabled,
-            },
-        )
-    ]
+    buttons = (
+        []
+        if platform_group(store, chat)
+        else [
+            (
+                "本群加入档位",
+                {
+                    "action": "tenant_edit",
+                    "chat": chat,
+                    "field": "mines_stakes",
+                    "game": "mines",
+                },
+            )
+        ]
+    )
     buttons += [
         (r["id"], {"action": "mines_table", "chat": chat, "table": r["id"]})
         for r in tables
@@ -179,10 +200,6 @@ async def action(ui, update, payload):
     return await ui.render(
         update,
         text,
-        buttons
-        + [
-            ("返回群列表", {"action": "mines_groups"}),
-            ("本群玩法总览", {"action": "games_group_view", "chat": chat}),
-        ],
+        buttons + game_back(ui, chat, "mines"),
         fold_sections=True,
     )

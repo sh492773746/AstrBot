@@ -4,15 +4,10 @@ import copy
 import hashlib
 import json
 import time
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
-from astrbot.builtin_stars.wangshangliao_moderation.consultation_access import (
-    consultation_access,
-)
 from astrbot.builtin_stars.wangshangliao_moderation.group_ai import DEFAULT
 from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import OpenCall, OpenRPC
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import (
@@ -22,7 +17,6 @@ from astrbot.builtin_stars.wangshangliao_moderation.open_store import (
     OpenError,
 )
 from astrbot.core.platform.sources.wangshangliao.group_scope import group_config
-from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
 
 
@@ -275,38 +269,3 @@ async def test_rules_manager_cannot_enable_group_ai_even_from_total_control(rpc_
             control=True,
             guard=lambda: None,
         )
-
-
-@pytest.mark.asyncio
-async def test_rules_only_private_guidance_never_resolves_or_calls_a_model(rpc_scope):
-    value, adapter, _ = rpc_scope
-    payload = await prepare(rpc_scope)
-    preview = await invoke(value, payload)
-    await invoke(
-        value, {**payload, "confirmation": preview["confirmation"]}, commit=True
-    )
-    event = SimpleNamespace(
-        platform=adapter,
-        actor_identity=ActorIdentity("99", "1", "1001", "1"),
-        get_sender_id=lambda: "1",
-        is_private_chat=lambda: True,
-        unified_msg_origin="offline/private",
-        message_str="怎么设置关键词？",
-        message_obj=SimpleNamespace(message_id="rules-only-question"),
-        get_extra=lambda *args: None,
-    )
-    # This caller is deliberately not authorized for the other test tenant.
-    with value.store.connect(write=True) as db:
-        db.execute(
-            "UPDATE tenants SET managers='[]' WHERE account='99' AND group_id='6'"
-        )
-    await value.refresh()
-    assert consultation_access(value, event)["rules_only"]
-    value.budget["confirmed"] = True
-    value.reject_reply = AsyncMock()
-    value.profiles.resolve = AsyncMock(side_effect=AssertionError("no model profile"))
-    await value._chat(event)
-    value.reject_reply.assert_awaited_once()
-    value.profiles.resolve.assert_not_called()
-    assert value.chat_count == 0
-    assert not value.chat_users

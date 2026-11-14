@@ -16,6 +16,7 @@ from .bet_text import NUMERIC_PAIRS, ItemLimit, is_candidate, parse_partial
 from .duel import Duel
 from .game_hours import description, is_open
 from .k3 import play_name as k3_play_name
+from .message_policy import retention
 from .play_center import PlayCenter
 from .reply_style import style_reply
 from .round_results import RoundResults
@@ -1256,12 +1257,7 @@ class TextGame:
             if not isinstance(message_id, int) or message_id <= 0:
                 raise ValueError("MissingMessageId")
             now = self.store.clock()
-            delete_due = now + {
-                "settlement": 30,
-                "history": 60,
-                "duel": 120,
-                "duel_result": 30,
-            }.get(row["result"], 10)
+            delete_due = now + retention(self.runtime, row["result"])
             with self.store.tx() as db:
                 db.execute(
                     "UPDATE gt_requests SET status='sent',message=?,error='' WHERE chat=? AND source=?",

@@ -11,6 +11,7 @@ from test_superbot_community import community  # noqa: F401
 from test_superbot_moderation import setup  # noqa: F401
 from test_superbot_text_game import text_service, update  # noqa: F401
 
+from data.plugins.astrbot_plugin_superbot.availability import refresh
 from data.plugins.astrbot_plugin_superbot.group_keyboard import QUERIES, GroupKeyboard
 from data.plugins.astrbot_plugin_superbot.store import Rejected
 
@@ -21,11 +22,16 @@ def keyboard(text_service):
     s.bot.get_chat.return_value = SimpleNamespace(type="supergroup")
     s.runtime.avatar = SimpleNamespace(enabled=lambda: True, message=AsyncMock())
     s.runtime.group_keyboard = GroupKeyboard(s.runtime)
+    s.store.db.execute(
+        "INSERT INTO group_keyboard_settings(chat,enabled) VALUES('-1001',1)"
+    )
     return s
 
 
-def test_keyboard_is_group_scoped_and_contains_no_admin_or_bet_buttons(keyboard):
+@pytest.mark.asyncio
+async def test_keyboard_is_group_scoped_and_contains_no_admin_or_bet_buttons(keyboard):
     s = keyboard
+    await refresh(s.runtime, "-1001")
     markup, labels, text = s.runtime.group_keyboard.render("-1001")
     assert not markup.is_persistent and markup.resize_keyboard and not markup.selective
     assert not markup.one_time_keyboard
@@ -33,9 +39,9 @@ def test_keyboard_is_group_scoped_and_contains_no_admin_or_bet_buttons(keyboard)
     assert "input_field_placeholder" not in markup.to_dict()
     assert {"🎮 玩法大全", *QUERIES, "客服", "帮助"} <= set(labels)
     assert "📖 玩法规则" not in labels
-    assert all(
-        b["style"] == "primary" for row in markup.to_dict()["keyboard"] for b in row
-    )
+    assert {
+        b["text"]: b["style"] for row in markup.to_dict()["keyboard"] for b in row
+    }["💰 积分"] == "success"
     assert "⚙️ 管理" not in labels and "广告投递" not in labels
     assert "🎡 积分转盘" not in labels
     assert s.store.balance("2") == 1000
@@ -54,6 +60,9 @@ async def test_send_once_across_restart_and_two_groups(keyboard):
     s = keyboard
     s.store.db.execute(
         "INSERT INTO mod_groups(chat,title,enabled) VALUES('-1002','Second',1)"
+    )
+    s.store.db.execute(
+        "INSERT INTO group_keyboard_settings(chat,enabled) VALUES('-1002',1)"
     )
     s.store.db.execute(
         "INSERT INTO mod_groups(chat,title,enabled) VALUES('-1003','Off',0)"

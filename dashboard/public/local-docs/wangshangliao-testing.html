@@ -7,12 +7,133 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 @page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
 </style></head>
 <body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>旺商聊测试与验收</h1>
+<h2>本轮：群内与WebUI、全部私信退役</h2>
+<p>本轮源码与界面尚未部署，以下是集成验收要求，不是已经完成的实群验收：</p>
+<ul>
+<li>私信菜单、选群、好友自动审批与欢迎、个人知识、专属客服、私信AI／管理员指引、
+财务聊天及图片录入全部零执行；不创建模型调用、回复、附件文件或新业务库，
+不以已有历史身份恢复入口，历史会话、知识、账本、付款和审计不删除。</li>
+<li>活动声明和帮助不得广告或登记私信专属命令／别名；兼容导出保持可导入，
+不以手册顶部提示掩盖仍然存在的大段私信操作步骤。</li>
+<li>群内真实@／可信原生回复黑名单、真实@白名单、名单查看、移除与时长确认保持；
+核对群内拉黑即时禁言、解除黑名单移出并解禁的独立回执，后台移除只移出。</li>
+<li>WebUI规则、关键词1图、定时最多3图每次1图、活动与邀请记账／结账保留，
+好友申请、客服／管理员私信指引及私信财务授权页移除。普通群管不获得全局后台账号。</li>
+<li>原3秒5条／10秒15条／30秒同文5条、三次警告后1／3／10分钟循环、
+自动白名单昨日TOP20且至少101条、7天有效聊天续期和黑名单优先不变。</li>
+<li>禁言优先与防袭群继续待加载；防袭群默认关闭，须另补完整真实处罚与恢复验收，
+手机显示与直接解禁事件单列，不用离线通过或浏览器截图替代。</li>
+</ul>
+<p>操作映射及中英文隔离截图见<a href="wangshangliao-start.html">入门指南</a>，
+本轮性能缺陷与修复路径见<a href="wangshangliao-maintenance.html">维护记录</a>。
+源码、隔离回归、待发布页面、运行进程和真实手机证据分开报告，不机械合并测试数量。
+下方带日期记录保留原轮次证据，旧私信测试和好友欢迎不再属于现行成功验收要求。</p>
+<h2>2026-10-28：拼手气额外奖励，三账号受控实测</h2>
+<p>北京时间19:58:24—20:04:45，仅测试群1459282使用43506527接收／开奖、
+23691273原生报名／独立收件、31846829核验群主身份并临时授予／撤回群管。
+三个账号实际在线；每段沿用300秒、10次操作及最多1元总预算。
+没有伪造群主聊天命令，没有向正式群发送测试内容或启用生产加奖。</p>
+<ul>
+<li>原生开场公告与结果均在另一个账号的入站账本核实，不只检查发送接口。
+自定义整句口令报名成功，重复发送仍只有一条报名。</li>
+<li>红包池0.60元、额外奖励0.40元；提前开奖返回409且本期冻结记录完全不变。
+倒计时自然到期后自动公布，唯一有效报名者随机红包0.57元、额外奖励0.40元，
+合计待发放0.97元；未领取红包0.03元记未支出，原池和开奖结果没有重抽。
+结果真实结构化@已由收件账号核实；没有实际付款或退款。</li>
+<li>首轮脚本误把正确的409预期写成400，已取消该轮并完整恢复；
+修正断言后创建独立新轮并通过，没有重试未知发送或改写首轮失败记录。</li>
+<li>验收夹具补齐红包池与额外奖励合计不超过1元的检查；
+负数及不支持模式拒绝，不改变生产金额上限。六组相关离线回归215项通过、
+2项条件跳过、1条既有警告；跳过项不是本次真实收发测试。</li>
+<li>文档检查发现命令索引漏项，已补充抽奖开始时间和白名单移除的选择／确认步骤，
+明确旧添加命令不执行；未恢复旧添加流程。文档12项、教程生成器5项检查通过，
+本轮验收记录及分类索引已重建发布；未改教程界面或沿用旧截图证明新实群效果。</li>
+<li>测试群活动草稿、邀请奖励设置、群管角色、测试窗口和两个账号原停用状态已恢复。
+主账号在线、队列积压／拒绝均0，PID2296909不变、NRestarts=0；
+实测生命周期30项正式业务保护投影及原配置摘要一致。</li>
+</ul>
+<p>预检生命周期19:42:31—19:57:18期间，真龙1516387自然新增两条黑名单，
+现有不可修改审计保留add／reserve／done证据；当时尚未开测试窗口或修改群角色。
+未把这项正式业务变化回滚，也不宣称预检前后全部原始摘要相同。
+两轮实测、取消与恢复记录：
+<code>/opt/backups/wsl-lottery-live-20261028-AJ4WDQ/</code>，不包含公开凭证。</p>
+<p>本轮仅有一名普通测试报名者；多人最高额竞争及并列随机由离线用例覆盖，
+不能扩大为多人实群通过。北京时间预约发布仍被短窗口夹具明确禁止，本轮未实测；
+已验证的是到期自动开奖，而不是预约开始。手机客户端显示、领奖与真实付款也未验收。
+10月27日需要重新登录的失败记录仍按原日期保留，不被本轮结果覆盖。</p>
+<p>English: three existing accounts cooperated only in group1459282. A native custom
+phrase enrolled one ordinary controlled entrant; duplicate enrollment stayed unique.
+Early draw returned409 without changing the frozen round. Natural deadline publication
+was independently received: CNY0.57 base plus0.40 extra, with0.03 base unclaimed.
+The first script's incorrect400 assertion caused a cancelled round, not a production
+failure; a separate round passed. The fixture now caps base plus bonus at CNY1.
+215 related offline checks passed, two skipped. Roles, drafts, windows and temporary
+enables were restored;30 production projections matched and the unchanged service had
+zero backlog. Multi-person/tie scenarios, scheduled publication, phone and payments
+were not accepted live.</p>
+<h2>白名单历史对话与合并复制（2026-10-28）</h2>
+<ul>
+<li>同群授权原始账本投影：每批5人、并发2项，每人最多100条有效文字；
+今日／昨日边界、同群同账号隔离、撤回／未知撤回排除、原文缺失、字面关键词、
+名单移除、名单版本、换日、取消与迟到结果均有离线覆盖。不向统计表保存正文。</li>
+<li>发布目录针对性后端回归206项通过；旧测试仍使用已停用的聊天搜索加白名单入口，
+对齐现行真实@指引及后台预览夹具后通过，没有恢复旧生产命令或减弱权限保护。</li>
+<li>前端白名单历史、原发言统计及专门汇报共22项单元通过；编译后的实际线上页面
+在隔离接口下通过320／390／1440px筛选、100条展示和整份复制流程。文档检查56项通过。
+浏览器复制重试可使用30秒内已加载快照；改筛选或已知权限／名单变化会立即清空快照。</li>
+<li>北京时间02:35:43完成一次插件热重载，PID1638375不变，未重启生产进程。
+02:37:27线上只读抽样5名现有白名单成员，每人返回100条；该次读取256ms，
+统计已补齐、消息队列0、31项业务保护摘要匹配，账号启停不变。
+这是单次读取观察，不是极限并发吞吐或手机客户端复制验收。</li>
+<li>未修改群规则、名单、广告、活动或财务；线上证据只保留条数和耗时，不留聊天正文。
+新增教程和中英文PDF、手机／桌面隔离截图已同步；现有批量撤回及图片审核功能保留。</li>
+</ul>
+<h2>合并记录与本地图片审核（2026-10-28）</h2>
+<ul>
+<li>发布源码回归1,130项通过、2项跳过；合入线上既有功能后的针对性回归617项通过。
+文档检查12项通过，前端单元10项通过，两个隔离浏览器流程通过，均覆盖320／390／1440px。
+另用线上实际构建页重跑新开关流程通过；这些测试相互有覆盖，不相加冒称独立总数。</li>
+<li>原生群图片资产元数据已补齐；合并卡片按真实格式9仅撤回外层消息，
+不宣称已展开子协议或处罚被引用者。新限制只撤回，不增加广告警告／禁言。</li>
+<li>实际本地OpenCV二维码、Tesseract数字／无数字图片测试通过；用户提供的590×1280截图
+得到<code>digits=true</code>，不是一次实群处罚。伪造JSON判定、跨群、白名单、目标晋升、
+撤权、暂停、超时、下载失败和迟到结果均有离线覆盖。</li>
+<li>既有图片去重会复用同一图片ID，浏览器夹具改为拖入未重复的图片，避免非法重复轮播引用；
+未放宽生产图片去重校验。线上旧关键词夹具由29对齐既有32项，不改实际关键词配置。</li>
+<li>北京时间01:57:56已受控完整重启，PID1112029→1638375；主账号在线、队列0，
+29项业务保护摘要匹配。原有批量撤回功能、成员目录刷新修复及动态关键词来源保留。</li>
+<li>三个新开关均缺省关闭，本轮未批量开启任何群，不变更现有广告、名单、活动或财务。
+没有新增正式群撤回／禁言实测，手机客户端效果仍待逐群启用后验收；
+不能以本地识别或平台代码已加载冒称手机实群通过。</li>
+</ul>
 <p>同步日期：2026-10-25（北京时间）。<a href="wangshangliao-index.html">文档目录</a> ·
 <a href="wangshangliao-architecture-permissions.html">架构权限</a> ·
 <a href="wangshangliao-acceptance-20261015.html">按日期逐项证据</a> ·
 <a href="wangshangliao-remediation-20261015.html">问题补齐</a>。</p>
 <p>本页说明当前方法，不将历史结果当作本次复测。离线回归、合成浏览器、真实平台回执、
 官方手机客户端观察和供应商账单分别留证。按日期报告保留原结果，不为消除缺项改写证据。</p>
+<h2>2026-10-27：自定义口令与多档红包，实群验收受登录阻断</h2>
+<p>本轮离线相关回归910项通过、2项跳过，包含固定档位预算、口令冻结、
+原生入站解析、重复报名、跨群隔离、提前开奖拒绝和窗口撤销。统计不与此前轮次累加。
+受控夹具仅在1459282使用三个既有账号，300秒以内、最多10次预算；
+多档测试固定30份且总额不超过1元，自定义测试口令必须以<code>WSL_TEST_</code>开头。
+仅已绑定本期夹具、原窗口及确切口令才能接收测试机器人的报名，
+普通机器人保护和真实用户的自定义口令规则不变。</p>
+<p>已备份并完成一次受控完整重启加载（PID1013043→953163），重启保护摘要匹配。
+随后临时启用另两账号：43506527、23691273在线，31846829返回<code>reauth_required</code>。
+因此<strong>本轮未通过实群验收</strong>，没有开启测试窗口、创建新抽奖、发送报名消息或修改群角色；
+未以离线通过代替真实到期开奖与独立收件。两个临时账号已恢复原停用状态，
+测试群配置、正式群配置、名单、财务及历史活动核对未变，消息队列无积压。
+须先在消息平台为31846829重新验证登录，再开启新一轮受控测试；不自动重试登录。
+原失败记录保留在私有运行证据中，不改写为通过。</p>
+<p>English: 910 related offline tests passed, with two skipped. The dedicated fixture
+retains group1459282, the fixed three identities, a 300-second/ten-operation window
+and a CNY1 maximum test budget. Its30-packet tiered draw admits only the exact
+<code>WSL_TEST_</code> phrase bound to the original fixture and window. One controlled restart
+loaded the extension. Native acceptance was blocked before any draw or test window
+was created because31846829 required reauthentication. Temporary account enables
+were restored; protected business state and the message queue were verified.
+Real deadline publication, independent recipients and phone observation remain untested.</p>
 <h2>2026-10-25：昨日达标自动白名单</h2>
 <p>新规则要求北京时间昨日前30名且昨日有效文字超过100条（至少101条）；今天发言不用于今天授予。
 离线覆盖100／101条边界、前30名及第31名不补位、今日与昨日榜缓存隔离、
@@ -179,7 +300,7 @@ business_rules／group_ai／ai_profiles／settings全匹配。tenants原始整�
 新群首次邀请、旧群重置后开通、欢迎图片协议收件和手机显示仍须分别判定。</p>
 <h3>群@路由与历史的现行验收口径</h3>
 <p>原生@、自主接话及冷场均须解析<code>profiles.resolve(&quot;group&quot;, account, group)</code>，
-不得使用私聊<code>consultation</code>；群配置及账号／单群覆盖生效，私聊只读AI保持原行为。
+不得使用私聊<code>consultation</code>；群配置及账号／单群覆盖生效，私信AI已退役。
 群@仅从新键<code>platform:GroupMessage:account/group/wsl-ai/account/group/mention/verifiedUid/peer</code>
 带入配置允许的有界本人历史，覆盖0轮、1轮和多轮；验证同群不同成员、不同群、
 不同账号及私聊互不混用，旧群客服历史不迁移、不复用。
@@ -246,7 +367,7 @@ business_rules／group_ai／ai_profiles／settings全匹配。tenants原始整�
 开始前核对本轮明确授权的运行基线，测试后不自动启用。历史“四绑定暂停”
 是对应日期证据，不能覆盖10月20日已授权的群AI状态。</li>
 <li>不修改账本金额、邀请归属、付款状态或返现规则，不自动冻结／追扣历史疑点。</li>
-<li>删除好友保持移除；自动同意既有异常暂停不擅自解除。</li>
+<li>全部好友审批与欢迎退役，历史异常暂停、认领库与未知回执保留，不擅自重放。</li>
 <li>不擅自变更公共AI预算门禁、价格或付款人。独立收费测试必须另行明确授权；
 有限额度配置确认和耗尽后强制拒绝是不同验收项。</li>
 <li>核心接收或HTTP代码更新须确认维护窗口，不以插件热重载冒充核心部署。</li>
@@ -273,8 +394,8 @@ business_rules／group_ai／ai_profiles／settings全匹配。tenants原始整�
 </tr>
 <tr>
 <td>合成浏览器</td>
-<td>登录错误、表单、好友入口移除、教程、布局</td>
-<td>真实短信登录或Access付款</td>
+<td>登录错误、表单、私信入口移除、教程、布局</td>
+<td>真实短信登录或WebUI付款登记</td>
 </tr>
 <tr>
 <td>固定对象真实测试</td>
@@ -288,7 +409,7 @@ business_rules／group_ai／ai_profiles／settings全匹配。tenants原始整�
 </tr>
 <tr>
 <td>外部观察</td>
-<td>手机自动撤回、新好友送达、供应商硬限额</td>
+<td>手机自动撤回、供应商硬限额</td>
 <td>单纯协议通知、余额或价格倍率</td>
 </tr>
 </tbody>
@@ -591,15 +712,19 @@ env ASTRBOT_DISABLE_FILE_LOGGING=1 .venv/bin/python -m scripts.check_wsl_test_ac
 观察工具先记录初始<code>NRestarts</code>，再断言本次观察没有增量，不能清零失败计数伪造零重启。
 修复前的观察结果与修复后的新观察分开记录。</p>
 <h2>性能门槛</h2>
-<p>使用二十群、每秒一百条、慢AI及私聊洪泛，覆盖真实接收／调度／规则／存储链路。
+<p>使用二十群、每秒一百条、群AI慢桩及被忽略的私信洪泛，覆盖真实接收／调度／规则／存储链路。
 这里的“真实”指执行实际代码，平台收发、慢模型和财务身份可以是隔离模拟；
 不是向二十个生产群发消息。规则P95目标不超过1秒，记录绝对账本查询P95、
 样本数、积压／拒绝、内存及任务峰值。模型测试可用本地慢桩，不必付费或改变公共门禁。</p>
 <p>用户于<strong>北京时间2026-10-17</strong>接受当轮查询P95 3.027ms，取消查询相对增长
 不超过10%作为本轮上线阻断。当前复测明确选用
-<code>check_wsl_open_load.py --integrated --finance --absolute-query-report --seconds 30</code>；
+<code>check_wsl_open_load.py --integrated --absolute-query-report --seconds 30</code>；
 没有该参数时工具仍执行旧10%断言。绝对报告模式不新增一个未经约定的绝对SLA，
 <code>within_ten_percent=false</code>保留为诊断，不改写成历史通过。</p>
+<p>2026-11-14发布版本已移除私信财务导航，旧<code>--finance</code>在访问数据库、网络或
+设置CPU亲和性前明确拒绝。慢模型隔离改用两个真实群AI请求，保留套餐成本预留与
+结算核验；私信仅确认接收，不解码正文、不写入消息账本。可用
+<code>ASTRBOT_WSL_EVIDENCE_ROOT</code>指定私有验收输出目录。</p>
 <p>旧记录<code>wsl-native-load-20261015T140619.json</code>：
 3000条消息，规则P95约13.51ms；账本P95从11.665ms升到17.846ms，增幅52.99%，<strong>未达标</strong>。
 这是当时相对门槛下的失败，原始结果不改写，也不恢复已取消的上线阻断。
@@ -624,10 +749,10 @@ env ASTRBOT_DISABLE_FILE_LOGGING=1 .venv/bin/python -m scripts.check_wsl_test_ac
 <p>受控真实链路已覆盖关键词、递进处罚、两种刷屏整批撤回、公告、名片、
 全员禁言、分钟边界定时、普通成员报名开奖及管理员增删／撤权。
 三十分钟灰度无服务重启；具体恢复和财务核对见当前报告。</p>
-<p>当前仍需分别核实：全新受控群首次真实邀请开通、新好友首次欢迎、
-欢迎图片手机显示、供应商额度耗尽拒绝、Access登录后真实登记／撤回、
+<p>当前仍需分别核实：全新受控群首次真实邀请开通、
+供应商额度耗尽拒绝、现行WebUI登录后真实登记／撤回、
 真实故障演练及生产资源配额下的持续负载表现。
-旧群重置／重入不证明全新群；已有欢迎原生图片回执不证明新好友首次送达或手机显示。
+旧群重置／重入不证明全新群；好友欢迎及私信图片已退役，旧证据不再作为当前待测项目。
 旧<code>unrestricted</code>费用测试不证明硬限额，10月20日<code>quota_limited</code>确认也不证明已实测耗尽；
 10月15日已有用户自动撤回画面确认，不能扩大为所有手机项目通过或全部未验证。
 未补齐前不宣称整体通过。</p>

@@ -11,6 +11,7 @@ from telegram import InlineKeyboardMarkup, InputFile
 from telegram.error import BadRequest, Forbidden, RetryAfter
 
 from .game_switches import blocker
+from .message_policy import retention
 from .panel_idle import PanelIdle
 from .store import Rejected, encode
 
@@ -139,7 +140,7 @@ class Slots:
         ).fetchall():
             self.finish(row["id"], cancel=True)
 
-    def check(self, chat):
+    def check(self, chat, *, admission=True):
         """Require all switches without creating a default-enabled group.
 
         Args:
@@ -148,7 +149,7 @@ class Slots:
         row = self.store.db.execute(
             "SELECT version FROM slots_groups WHERE chat=? AND enabled=1", (str(chat),)
         ).fetchone()
-        reason = blocker(self.store, chat, "slots", bool(row))
+        reason = blocker(self.store, chat, "slots", bool(row), admission=admission)
         if reason:
             raise Rejected(reason)
         return row["version"]
@@ -278,7 +279,7 @@ class Slots:
             ).fetchone()
             if table["status"] != "open" or now >= table["deadline"]:
                 raise Rejected("报名已结束，请查看结算。")
-            if self.check(chat) != version:
+            if self.check(chat, admission=action != "leave") != version:
                 raise Rejected("群设置已变化，请刷新后重试。")
             legacy = json.loads(table["snapshot"])["version"] == "slots-1"
             equal_stake = legacy or json.loads(table["snapshot"])["version"] in {
@@ -729,7 +730,7 @@ class Slots:
                     (self.store.clock(),),
                 ).fetchall():
                     try:
-                        self.check(row["chat"])
+                        self.check(row["chat"], admission=False)
                         cancel = False
                     except Rejected:
                         cancel = True
@@ -875,7 +876,7 @@ class Slots:
                             (row["id"],),
                         )
                 else:
-                    due = self.store.clock() + 60
+                    due = self.store.clock() + retention(self.runtime, "game_result")
                     table = db.execute(
                         "SELECT message,snapshot FROM slots_tables WHERE id=?",
                         (row["table_id"],),
@@ -985,8 +986,10 @@ class Slots:
                                 row["chat"],
                                 message,
                                 message,
-                                self.store.clock() + 60,
-                                self.store.clock() + 60,
+                                self.store.clock()
+                                + retention(self.runtime, "game_result"),
+                                self.store.clock()
+                                + retention(self.runtime, "game_result"),
                             ),
                         )
             except RetryAfter as exc:

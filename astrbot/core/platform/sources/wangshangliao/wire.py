@@ -21,6 +21,7 @@ from google.protobuf.message import DecodeError
 
 LIMIT = 1024 * 1024
 INVITATION_LOG_LIMIT = 3 * LIMIT
+MEMBER_DIRECTORY_LIMIT = 3 * LIMIT
 
 
 class ProtocolError(ValueError):
@@ -365,15 +366,26 @@ Mention = message_factory.GetMessageClass(_pool.FindMessageTypeByName("wsl.Menti
 Mentions = message_factory.GetMessageClass(_pool.FindMessageTypeByName("wsl.Mentions"))
 
 
-def image_metadata(message):
+def image_metadata(
+    message, *, allow_sticker=False, allow_incomplete=False, explain=False
+):
     """Read bounded native image metadata without changing the text codec.
 
     Args:
         message: Already authenticated ApplicationMessage.
+        allow_sticker: Permit static group stickers for local moderation only.
+        allow_incomplete: Permit native zero placeholders for bounded inspection.
+        explain: Raise a specific metadata error instead of returning None.
 
     Returns:
         Reviewed image asset metadata, or None for unsupported image shapes.
     """
+
+    def invalid(reason):
+        if explain:
+            raise ProtocolError("image_metadata_" + reason)
+        return None
+
     fields = [
         field
         for field in unknown_fields.UnknownFieldSet(message)
@@ -387,7 +399,7 @@ def image_metadata(message):
         or fields[0].wire_type != 2
         or len(fields[0].data) > 4096
     ):
-        return None
+        return invalid("shape")
     try:
         image = IncomingImage.FromString(fields[0].data)
         asset = image.asset.uri
@@ -397,21 +409,29 @@ def image_metadata(message):
             or not 1 <= len(asset) <= 20
             or asset.startswith("0")
             or not 0 < int(asset) < 1 << 64
-            or not 1 <= image.width <= 16384
-            or not 1 <= image.height <= 16384
-            or image.width * image.height > 16_000_000
-            or not 0 < image.size <= 5 * 1024 * 1024
-            or image.is_sticker
         ):
-            return None
+            return invalid("asset")
+        minimum = 0 if allow_incomplete else 1
+        if (
+            not minimum <= image.width <= 16384
+            or not minimum <= image.height <= 16384
+            or image.width * image.height > 16_000_000
+        ):
+            return invalid("dimensions")
+        if not minimum <= image.size <= 5 * 1024 * 1024:
+            return invalid("size")
+        if image.is_sticker and not allow_sticker:
+            return invalid("sticker")
         return {
             "asset": asset,
             "width": image.width,
             "height": image.height,
             "size": image.size,
         }
+    except ProtocolError:
+        raise
     except Exception:
-        return None
+        return invalid("decode")
 
 
 def _message_envelope(encoded):
@@ -458,31 +478,32 @@ def open_message(key: bytes, text: str):
         envelope = _message_envelope(encoded)
         phase = "envelope"
         if len(envelope.tag) != 16:
-            fields = {
-                (field.number, {4: 0, 6: 1, 12: 2}[field.type])
-                for field, _ in envelope.ListFields()
-            }
-            for index, field in enumerate(unknown_fields.UnknownFieldSet(envelope)):
-                if index >= 16:
-                    break
-                fields.add((min(field.field_number, 17), field.wire_type))
-            shape = "_".join(f"f{number}w{kind}" for number, kind in sorted(fields))
-            if not envelope.aad and not envelope.tag and envelope.body:
-                # Official 3.7.3 has a plaintext branch. Inspect only its type;
-                # neither its content nor its claimed identity is authenticated.
-                try:
-                    candidate = ApplicationMessage.FromString(envelope.body)
-                    if candidate.ListFields():
-                        unverified = {
-                            "reason": "unsigned_plaintext",
-                            "format": candidate.format
-                            if 0 <= candidate.format <= 65535
-                            else -1,
-                        }
-                except DecodeError:
-                    pass
             packet = MessagePacket.FromString(encoded)
             if not packet.msg or not packet.sign:
+                # Build diagnostic metadata only for rejected envelopes, not
+                # for every valid current-version packet.
+                fields = {
+                    (field.number, {4: 0, 6: 1, 12: 2}[field.type])
+                    for field, _ in envelope.ListFields()
+                }
+                for index, field in enumerate(unknown_fields.UnknownFieldSet(envelope)):
+                    if index >= 16:
+                        break
+                    fields.add((min(field.field_number, 17), field.wire_type))
+                shape = "_".join(f"f{number}w{kind}" for number, kind in sorted(fields))
+                if not envelope.aad and not envelope.tag and envelope.body:
+                    # Plaintext can supply diagnostic types, never authority.
+                    try:
+                        candidate = ApplicationMessage.FromString(envelope.body)
+                        if candidate.ListFields():
+                            unverified = {
+                                "reason": "unsigned_plaintext",
+                                "format": candidate.format
+                                if 0 <= candidate.format <= 65535
+                                else -1,
+                            }
+                    except DecodeError:
+                        pass
                 raise ProtocolError("message_unsigned")
             phase = "packet_version"
             if packet.version != 1:
@@ -556,11 +577,11 @@ def open_message(key: bytes, text: str):
 
 
 def seal_message(key: bytes, message, nonce: int, aad: int, timestamp: int) -> str:
-    """Encode a new text message with a caller-reserved nonce."""
+    """Encode a new group text message with a caller-reserved nonce."""
     if not (
         0 < message.sender.id < 1 << 30
         and 0 < message.target.id < 1 << 30
-        and message.session in (1, 2)
+        and message.session == 2
         and message.device == 1
         and message.format == 0
         and (message.content.data.strip() or message.mentions.content.data.strip())
@@ -568,8 +589,7 @@ def seal_message(key: bytes, message, nonce: int, aad: int, timestamp: int) -> s
     ):
         raise ProtocolError("message_binding")
     if message.HasField("reply") and (
-        message.session != 2
-        or message.appoint != 1
+        message.appoint != 1
         or not 0 < len(message.reply.client_id.encode()) <= 128
         or not message.reply.server_id.isascii()
         or not message.reply.server_id.isdigit()
@@ -580,11 +600,7 @@ def seal_message(key: bytes, message, nonce: int, aad: int, timestamp: int) -> s
     ):
         raise ProtocolError("quote_binding")
     if message.HasField("mentions"):
-        if (
-            message.session != 2
-            or message.HasField("content")
-            or not message.mentions.people
-        ):
+        if message.HasField("content") or not message.mentions.people:
             raise ProtocolError("mention_binding")
         text = message.mentions.content.data
         previous = 0

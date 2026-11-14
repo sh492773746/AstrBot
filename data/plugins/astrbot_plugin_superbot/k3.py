@@ -8,6 +8,7 @@ from html import escape
 from telegram.error import BadRequest, RetryAfter
 
 from .game_switches import blocker
+from .message_policy import retention
 from .rich_text import send_html
 from .store import Rejected, encode
 
@@ -547,6 +548,11 @@ class K3:
                 if prior["uid"] != uid:
                     raise Rejected("消息身份不一致。")
                 return prior["issue"], prior["total"], prior["balance"]
+            from .game_schedule import reason
+
+            closed = reason(self.store, chat, "k3")
+            if closed:
+                raise Rejected(closed)
             session = db.execute(
                 "SELECT * FROM k3_sessions WHERE chat=? AND uid=?", (chat, uid)
             ).fetchone()
@@ -1003,7 +1009,13 @@ class K3:
                     )
                     db.execute(
                         "INSERT OR IGNORE INTO gt_delete(chat,message,source,due,next) VALUES(?,?,?,?,?)",
-                        (chat, sent.message_id, sent.message_id, now + 60, now + 60),
+                        (
+                            chat,
+                            sent.message_id,
+                            sent.message_id,
+                            now + retention(self.runtime, "k3_settlement"),
+                            now + retention(self.runtime, "k3_settlement"),
+                        ),
                     )
             now = self.store.clock()
             with self.store.tx() as db:
@@ -1023,7 +1035,13 @@ class K3:
                     if message:
                         db.execute(
                             "INSERT OR IGNORE INTO gt_delete(chat,message,source,due,next) VALUES(?,?,?,?,?)",
-                            (chat, message, message, now + 60, now + 60),
+                            (
+                                chat,
+                                message,
+                                message,
+                                now + retention(self.runtime, "k3_settlement"),
+                                now + retention(self.runtime, "k3_settlement"),
+                            ),
                         )
         except asyncio.CancelledError:
             # The claim survives shutdown; constructor makes it review-only.

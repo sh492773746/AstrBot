@@ -143,7 +143,8 @@ def test_batched_status_matches_individual_snapshots_and_existing_lists(plans):
     insert_charge(plans, "unknown", "uid/2", state="unknown")
     insert_charge(plans, "overlap-charge", "uid/3", period="overlap")
     insert_charge(plans, "transport", "nim/4004")
-    plans.queue_notices("nim/1001", "1", "99", reason="site_budget", now=NOW)
+    for name in ("queue_notices", "claim_notice", "finish_notice"):
+        assert not hasattr(plans, name)
 
     with plans.store.connect() as db:
         expected = [
@@ -157,17 +158,14 @@ def test_batched_status_matches_individual_snapshots_and_existing_lists(plans):
             )
         ]
         payers = [dict(row) for row in db.execute("SELECT * FROM ai_payers")]
-        notices = [
-            dict(row)
-            for row in db.execute(
-                "SELECT * FROM ai_quota_notices ORDER BY created DESC LIMIT 100"
-            )
-        ]
+        assert not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='ai_quota_notices'"
+        ).fetchone()
     result = plans.status()
     assert result["pools"] == expected
     assert result["subscriptions"] == subscriptions
     assert result["payers"] == payers
-    assert result["notices"] == notices
+    assert "notices" not in result
     assert result["unknown"][0]["request"] == "unknown"
     assert result["site"]["cost_micro"] == expected[0]["site_cost_micro"]
     assert result["prices"][0]["config"]["multiplier"] == "0.25"
@@ -191,7 +189,8 @@ def test_status_select_count_is_constant_and_month_is_summed_once(plans, sql_tra
     selects = [sql for _, sql in sql_trace.statements if sql.startswith("SELECT ")]
     assert len(first["pools"]) == 1
     assert len(result["pools"]) == 64
-    assert len(selects) == len(first_selects) == 12
+    assert len(selects) == len(first_selects) == 11
+    assert not any("ai_quota_notices" in sql for sql in selects)
     assert (
         sum("WHERE month=" in sql and "SUM(charged_micro)" in sql for sql in selects)
         == 1
@@ -287,21 +286,15 @@ def test_read_snapshot_is_consistent_across_concurrent_commit(
     assert after["cost_micro"] == after["site_cost_micro"] == 200
 
 
-def test_snapshot_migrates_identity_and_deduplicates_notices_atomically(
+def test_snapshot_migrates_identity_and_unknown_charge_without_retired_notices(
     plans, sql_trace
 ):
     plans.snapshot("nim/700")
     insert_charge(plans, "unverified", "nim/700", state="unknown", cost=123)
     with plans.store.connect(write=True) as db:
         db.execute("INSERT INTO ai_pools VALUES('uid/7','7','nim/700',4)")
-        db.executemany(
-            "INSERT INTO ai_quota_notices VALUES(?,?,?,'99','','nim/700','notice','pending',?)",
-            [
-                ("old-duplicate", "nim/700", "same", NOW),
-                ("new-duplicate", "uid/7", "same", NOW),
-                ("old-other", "nim/700", "other", NOW),
-            ],
-        )
+        original_charge = dict(db.execute("SELECT * FROM ai_charges").fetchone())
+        original_calls = [tuple(row) for row in db.execute("SELECT * FROM calls")]
     plans.store.link_principal("7", "nim/700")
     sql_trace.connections.clear()
     sql_trace.statements.clear()
@@ -310,12 +303,22 @@ def test_snapshot_migrates_identity_and_deduplicates_notices_atomically(
     assert state["used"] == 1 and state["cost_micro"] == 123
     assert sql_trace.connections == [False, True, False]
     assert not any(write and "SUM(" in sql for write, sql in sql_trace.statements)
+    assert not any("ai_quota_notices" in sql for _, sql in sql_trace.statements)
+    for name in ("queue_notices", "claim_notice", "finish_notice"):
+        assert not hasattr(plans, name)
     with plans.store.connect() as db:
         assert not db.execute("SELECT 1 FROM ai_pools WHERE pool='nim/700'").fetchone()
         assert db.execute("SELECT pool FROM ai_charges").fetchone()[0] == "uid/7"
-        assert {
-            tuple(row) for row in db.execute("SELECT id,pool FROM ai_quota_notices")
-        } == {("new-duplicate", "uid/7"), ("old-other", "uid/7")}
+        assert dict(db.execute("SELECT * FROM ai_charges").fetchone()) == {
+            **original_charge,
+            "pool": "uid/7",
+        }
+        assert [
+            tuple(row) for row in db.execute("SELECT * FROM calls")
+        ] == original_calls
+        assert not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='ai_quota_notices'"
+        ).fetchone()
 
 
 @pytest.mark.parametrize("principal,uid", [("nim/1001", "2"), ("nim/forged", "1")])

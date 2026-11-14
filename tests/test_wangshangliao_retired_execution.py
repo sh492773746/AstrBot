@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import (
     OpenCall,
@@ -40,18 +41,17 @@ async def test_socket_retirement_does_not_read_or_remove_legacy_files(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "action",
+    ("action", "error"),
     [
-        "login",
-        "login_save",
-        "tenant",
-        "limits",
-        "model",
-        "activation_code",
-        "ai_budget",
+        ("login", "isolated_mode_retired"),
+        ("login_save", "isolated_mode_retired"),
+        ("tenant", "isolated_mode_retired"),
+        ("limits", "isolated_mode_retired"),
+        ("model", "isolated_mode_retired"),
+        ("ai_budget", "isolated_mode_retired"),
     ],
 )
-async def test_obsolete_service_cannot_execute_inprocess_mutations(action):
+async def test_obsolete_service_cannot_execute_inprocess_mutations(action, error):
     blocked = Mock(side_effect=AssertionError("Retired RPC attempted IO"))
     rpc = OpenRPC(
         SimpleNamespace(
@@ -83,10 +83,41 @@ async def test_obsolete_service_cannot_execute_inprocess_mutations(action):
             "api_key": "secret",
         },
     }.get(action, {})
-    with pytest.raises(OpenError, match="isolated_mode_retired"):
+    with pytest.raises(OpenError, match=error):
         await rpc.dispatch(
             OpenCall(action=action, actor="dashboard/admin", payload=payload)
         )
+    blocked.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("integrated", [False, True])
+async def test_activation_code_is_schema_rejected_before_dispatch_or_io(
+    monkeypatch, integrated
+):
+    blocked = Mock(side_effect=AssertionError("Retired activation attempted IO"))
+    rpc = OpenRPC(
+        SimpleNamespace(
+            integrated=integrated,
+            activation_code=blocked,
+            context=SimpleNamespace(get_config=blocked),
+            store=SimpleNamespace(connect=blocked),
+        )
+    )
+    dispatch = AsyncMock(side_effect=AssertionError("Retired action was dispatched"))
+    monkeypatch.setattr(rpc, "dispatch", dispatch)
+    with pytest.raises(ValidationError) as error:
+        await rpc.dispatch(
+            OpenCall(
+                action="activation_code",
+                actor="dashboard/admin",
+                payload={"uid": "1", "code": "retired"},
+            )
+        )
+    assert [
+        (item["loc"], item["type"], item["input"]) for item in error.value.errors()
+    ] == [(("action",), "literal_error", "activation_code")]
+    dispatch.assert_not_awaited()
     blocked.assert_not_called()
 
 

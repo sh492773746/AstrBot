@@ -28,7 +28,7 @@ async def action(mod_ui, update, payload):
         if op == "mod_ak_fp_rollout":
             return await ui.render(
                 update,
-                "🌐 全局观察推广\n对当前广告杀手已启用且无故障、尚未配置样本识别的群建立观察快照。\n"
+                "🌐 全局观察推广\n对当前执行开关已启用且无故障、尚未配置样本识别的群建立观察快照。\n"
                 "需要完成离线与测试群验收；不覆盖已有人为设置的群。",
                 [
                     (
@@ -288,5 +288,5 @@ async def action(mod_ui, update, payload):
             "\n".join(f"{r['message']} · {r['reason']} · {r['status']}" for r in rows)
             or "暂无记录"
         ),
-        buttons + [("返回广告杀手", {"action": "mod_ak_home", "chat": chat})],
+        buttons + [("返回检测规则", {"action": "mod_ak_rules", "chat": chat})],
     )

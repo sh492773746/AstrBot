@@ -6,14 +6,12 @@ import threading
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from astrbot.api.message_components import Plain
-from astrbot.builtin_stars.wangshangliao_moderation.conversation_profiles import (
-    DEFAULT as PROFILE_DEFAULT,
-)
+from astrbot.builtin_stars.wangshangliao_moderation.group_ai import DEFAULT
 from astrbot.builtin_stars.wangshangliao_moderation.open_service import (
     ActivationContext,
     OpenService,
@@ -30,6 +28,8 @@ from astrbot.core.platform.sources.wangshangliao.event import WangshangliaoEvent
 from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 from tests.fixtures.wsl_native_conversations import conversation_manager
+from tests.test_wangshangliao_group_ai import fake_http, model_scope
+from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
 
 
 @pytest.fixture
@@ -41,9 +41,6 @@ def public(tmp_path, monkeypatch):
     )
     plugin = SimpleNamespace(context=context, commands=SimpleNamespace(selections={}))
     service = OpenService(plugin, tmp_path)
-    service.profiles.save(
-        "consultation", "99", "", 0, PROFILE_DEFAULT, "offline/fixture"
-    )
     service.store.discover(
         "99", {"5": {"name": "test", "team": "1005"}}, allow_auto=True
     )
@@ -66,7 +63,6 @@ def public(tmp_path, monkeypatch):
         group_catalog={"5": {"team": "1005"}},
         members={},
         business=SimpleNamespace(request=AsyncMock()),
-        refresh_member_mapping=AsyncMock(),
         send_reply_text=AsyncMock(),
         onboarding_reply=delivery,
         meta=lambda: PlatformMetadata("wangshangliao", "fixture", id="fixture"),
@@ -85,7 +81,7 @@ def public(tmp_path, monkeypatch):
 
 
 def chat_event(adapter, message="offline"):
-    """Build a complete offline private transport envelope for AI admission.
+    """Build an offline private transport envelope for retirement checks.
 
     Args:
         adapter: Authenticated synthetic account.
@@ -108,6 +104,7 @@ def chat_event(adapter, message="offline"):
         set_extra=lambda key, val: extras.update({key: val}),
         send=AsyncMock(),
         plain_result=lambda text: text,
+        stop_event=Mock(),
     )
 
 
@@ -126,40 +123,37 @@ def invitation(*, identity="123", stamp=None, kind="INVITATION"):
 
 
 @pytest.mark.asyncio
-async def test_unmatched_private_uid_never_gets_manager_authority(public):
+async def test_unmatched_private_uid_never_gets_manager_authority(public, monkeypatch):
     service, adapter, _ = public
     await service.refresh()
-    event = SimpleNamespace(
-        platform=adapter,
-        actor_identity=ActorIdentity("99", "1", "1999"),
-        get_sender_id=lambda: "1",
-        is_private_chat=lambda: True,
-    )
-    with pytest.raises(wire.ProtocolError, match="private_identity_unverified"):
-        await service.verify_actor(event)
+    event = chat_event(adapter)
+    event.actor_identity = ActorIdentity("99", "1", "1999")
+    assert not hasattr(service, "verify_actor")
+    blocked = Mock(side_effect=AssertionError("Retired private event attempted IO"))
+    with monkeypatch.context() as guard:
+        guard.setattr(service.store, "connect", blocked)
+        guard.setattr(service, "roster", blocked)
+        await service.on_event(event)
+    blocked.assert_not_called()
     assert event.actor_identity.verified_uid == ""
-    assert not service.management.groups(
-        SimpleNamespace(
-            **event.__dict__,
-            eligible=True,
-            get_extra=lambda _: None,
-        )
-    )
+    assert not service.management.groups(event)
+    event.stop_event.assert_called_once()
+    event.send.assert_not_awaited()
+    adapter.business.request.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_verified_private_identity_preserves_native_sender(public):
+async def test_retired_private_identity_preserves_sender_without_verification(public):
     service, adapter, _ = public
     await service.refresh()
-    event = SimpleNamespace(
-        platform=adapter,
-        actor_identity=ActorIdentity("99", "1", "1001"),
-        get_sender_id=lambda: "1",
-        is_private_chat=lambda: True,
-    )
-    await service.verify_actor(event)
-    assert event.actor_identity.require_verified() == "1"
+    event = chat_event(adapter)
+    await service.on_event(event)
+    with pytest.raises(wire.ProtocolError, match="private_identity_unverified"):
+        event.actor_identity.require_verified()
     assert event.actor_identity.principal == "nim/1001"
+    event.send.assert_not_awaited()
+    event.stop_event.assert_called_once()
+    adapter.business.request.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -187,8 +181,11 @@ async def test_real_candidate_path_activates_without_framework_methods(public):
     )
     assert service.store.tenant("99", "5")["managers"] == ["1"]
     adapter.onboarding_reply.assert_awaited_once()
-    assert adapter.onboarding_reply.call_args.kwargs == {"private": False}
-    assert "本群已开通" in adapter.onboarding_reply.call_args.args[4]
+    call = adapter.onboarding_reply.call_args
+    assert call.args[:3] == (adapter, "5", "1005")
+    assert not call.kwargs
+    assert "本群已开通" in call.args[4]
+    call.args[5]()
     adapter.send_reply_text.assert_not_awaited()
 
 
@@ -385,102 +382,116 @@ def test_restart_preserves_pending_trusted_claim_but_not_unknown_history(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_budget_default_denies_http_and_does_not_reserve(public):
-    service, adapter, _ = public
-    service.model = {"provider_id": "missing"}
-    event = chat_event(adapter)
-    service.resolve_model = AsyncMock()
-    await service.chat(event)
+async def test_budget_default_denies_http_and_does_not_reserve(rpc_scope, monkeypatch):
+    service, adapter, _ = rpc_scope
+    tenant = service.store.tenant("99", "5")
+    service.group_ai.configure(
+        "99",
+        "5",
+        0,
+        tenant["version"],
+        {**DEFAULT, "enabled": True},
+        "dashboard/test",
+        guard=lambda: None,
+        control=True,
+    )
+    await service.group_ai.refresh()
+    service.resolve_model = Mock(
+        side_effect=AssertionError("Closed budget resolved model")
+    )
+    requests = fake_http(monkeypatch)
+    await service.group_ai.run(
+        adapter,
+        service.group_ai.configs[("99", "5")],
+        "mention/no-budget/2/1002",
+        "hello",
+    )
+    assert not requests
     assert service.store.usage()["used"] == 0
     service.resolve_model.assert_not_called()
-    assert "硬预算" in event.send.call_args.args[0]
+    assert not service.context.conversation_manager.db.rows
+    with service.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM calls").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM ai_charges").fetchone()[0] == 0
 
 
 @pytest.mark.asyncio
-async def test_invalid_model_does_not_consume_quota(public):
-    service, adapter, _ = public
-    service.integrated = True
+async def test_invalid_model_does_not_consume_quota(rpc_scope, monkeypatch):
+    service, adapter, _ = rpc_scope
+    row = await model_scope(service, adapter)
     service.context.get_provider_by_id = lambda _: None
-    service.model = {"provider_id": "removed"}
-    service.store.confirm_budget(1, True, "removed", "test", "root")
-    service.budget = service.store.budget()
-    event = chat_event(adapter, "missing")
-    await service.chat(event)
+    requests = fake_http(monkeypatch)
+    await service.group_ai.run(adapter, row, "mention/missing-model/2/1002", "hello")
+    assert not requests
+    adapter.send_text.assert_not_awaited()
     assert service.store.usage()["used"] == 0
     with service.store.connect() as db:
         assert db.execute("SELECT COUNT(*) FROM calls").fetchone()[0] == 0
 
 
 @pytest.mark.asyncio
-async def test_model_credential_change_requires_new_hard_budget(public):
-    service, adapter, _ = public
-    service.integrated = True
-    service.model = {"provider_id": "test"}
-    old = {"base_url": "https://example.com/v1", "model": "fixture", "api_key": "old"}
-    service.store.confirm_budget(
-        1,
-        True,
-        "test",
-        "fixture hard cap",
-        "root",
-        binding=service.store.model_binding(old),
-    )
-    service.budget = service.store.budget()
+async def test_model_credential_change_requires_new_hard_budget(rpc_scope, monkeypatch):
+    service, adapter, _ = rpc_scope
+    row = await model_scope(service, adapter)
+    old = service.resolve_model()
     service.resolve_model = lambda selection=None: {**old, "api_key": "new"}
-    event = chat_event(adapter, "changed")
-    await service.chat(event)
+    requests = fake_http(monkeypatch)
+    await service.group_ai.run(adapter, row, "mention/changed-key/2/1002", "hello")
+    assert not requests
+    adapter.send_text.assert_not_awaited()
     assert service.store.usage()["used"] == 0
-    assert "重新核验" in event.send.call_args.args[0]
+    with service.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM calls").fetchone()[0] == 0
 
 
 @pytest.mark.asyncio
-async def test_exit_cancels_inflight_and_revokes_late_delivery(public):
-    service, _, _ = public
-    waiting = asyncio.Event()
-    key = ("99", "nim/1001")
+async def test_group_close_cancels_inflight_and_revokes_late_delivery(
+    rpc_scope, monkeypatch
+):
+    service, adapter, _ = rpc_scope
+    row = await model_scope(service, adapter)
+    waiting, release = asyncio.Event(), asyncio.Event()
+    requests = fake_http(monkeypatch, barrier=(waiting, release))
     native = service.context.conversation_manager
-    origin = "fixture:FriendMessage:99/private/1001/wsl-ai/99/customer"
-    cid = await native.new_conversation(
-        origin, content=[{"role": "user", "content": "private"}]
+    origin = (
+        "rpc-offline:GroupMessage:99/5/wsl-ai/99/group/"
+        + service.profiles.resolve("group", "99", "5")["fingerprint"]
+        + "/mention/2/1002"
     )
-    old_generation = service.chat_generations.get(key, 0)
-    task = asyncio.create_task(waiting.wait())
-    service.chat_tasks[key] = task
-    await service.end_chat(*key)
-    await asyncio.gather(task, return_exceptions=True)
-    assert task.cancelled()
-    assert service.chat_generations[key] != old_generation
-    assert (await native.get_conversation(origin, cid)).history
+    cid = await native.new_conversation(
+        origin, content=[{"role": "user", "content": "existing group context"}]
+    )
+    service.group_ai.launch(adapter, row, "mention/cancelled-model/2/1002", "hello")
+    tasks = list(service.group_ai.tasks.values())
+    try:
+        await asyncio.wait_for(waiting.wait(), 3)
+        await service.group_ai.close()
+    finally:
+        release.set()
+        await service.group_ai.close()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    assert len(requests) == 1 and len(tasks) == 1
+    assert tasks[0].cancelled()
+    assert not service.group_ai.tasks and service.chat_count == 0
+    adapter.send_text.assert_not_awaited()
+    assert json.loads((await native.get_conversation(origin, cid)).history) == [
+        {"role": "user", "content": "existing group context"}
+    ]
     dialogue = await service.conversations.load(origin, "test", "", fresh=True)
     assert dialogue.history == [] and dialogue.cid is None
+    with service.store.connect() as db:
+        assert db.execute("SELECT state FROM calls").fetchone()[0] == "unknown"
 
 
 @pytest.mark.asyncio
-async def test_cancelled_durable_reservation_releases_unsent_quota(public):
-    service, adapter, _ = public
-    service.context.get_config = lambda *args: {"admins_id": []}
-    service.integrated = True
-    service.model = {"provider_id": "test"}
-    model = {
-        "base_url": "https://example.com/v1",
-        "model": "fixture",
-        "api_key": "fixture",
-    }
-    service.store.confirm_budget(
-        1,
-        True,
-        "test",
-        "fixture hard cap",
-        "root",
-        binding=service.store.model_binding(model),
-    )
-    service.budget = service.store.budget()
-    service.resolve_model = lambda selection=None: model
-    from tests.test_wangshangliao_ai_plans import setup_billing
-
-    setup_billing(service)
+async def test_cancelled_durable_reservation_releases_unsent_quota(
+    rpc_scope, monkeypatch
+):
+    service, adapter, _ = rpc_scope
+    row = await model_scope(service, adapter)
+    requests = fake_http(monkeypatch)
     entered, release = asyncio.Event(), threading.Event()
-    loop, reserve = asyncio.get_running_loop(), service.plans.reserve
+    loop, reserve = asyncio.get_running_loop(), service.group_ai.reserve
 
     def delayed(*args, **kwargs):
         result = reserve(*args, **kwargs)
@@ -488,20 +499,11 @@ async def test_cancelled_durable_reservation_releases_unsent_quota(public):
         assert release.wait(5)
         return result
 
-    service.plans.reserve = delayed
-    event = SimpleNamespace(
-        platform=adapter,
-        actor_identity=ActorIdentity("99", "1", "1001"),
-        get_sender_id=lambda: "1",
-        message_str="hello",
-        message_obj=SimpleNamespace(message_id="cancelled"),
-        is_private_chat=lambda: True,
-        unified_msg_origin="fixture:FriendMessage:99/private/1001",
-        get_extra=lambda _: False,
-        send=AsyncMock(),
-        plain_result=lambda text: text,
+    monkeypatch.setattr(service.group_ai, "reserve", delayed)
+    service.group_ai.launch(
+        adapter, row, "mention/cancelled-reservation/2/1002", "hello"
     )
-    task = asyncio.create_task(service.chat(event))
+    task = next(iter(service.group_ai.tasks.values()))
     try:
         await asyncio.wait_for(entered.wait(), 2)
         task.cancel()
@@ -509,10 +511,14 @@ async def test_cancelled_durable_reservation_releases_unsent_quota(public):
         await asyncio.gather(task, return_exceptions=True)
         assert task.cancelled()
         assert service.store.usage()["used"] == 0
-        assert service.chat_count == 0 and not service.chat_users
-        event.send.assert_not_called()
+        assert service.chat_count == 0 and not service.group_ai.tasks
+        assert not requests and not service.context.conversation_manager.db.rows
+        adapter.send_text.assert_not_awaited()
         with service.store.connect() as db:
             assert db.execute("SELECT state FROM calls").fetchone()[0] == "not_sent"
+            assert (
+                db.execute("SELECT state FROM ai_charges").fetchone()[0] == "not_sent"
+            )
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)
@@ -587,12 +593,12 @@ def test_retention_preserves_uncertain_calls_and_onboarding_independent(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_private_backlog_binds_real_peer_not_claimed_uids(tmp_path):
+async def test_private_backlog_is_dropped_despite_claimed_uid_rotation(tmp_path):
     ledger = Ledger(tmp_path / "inbox.sqlite3")
     await ledger.open()
     try:
         for index in range(20):
-            await ledger.ingest(
+            assert not await ledger.ingest(
                 "99",
                 f"private/{index + 1}/MTAwMQ==",
                 str(index),
@@ -605,25 +611,30 @@ async def test_private_backlog_binds_real_peer_not_claimed_uids(tmp_path):
         async with ledger.db.execute(
             "SELECT state,COUNT(*) FROM inbox GROUP BY state"
         ) as cursor:
-            assert dict(await cursor.fetchall()) == {"pending": 4, "queue_full": 16}
+            assert await cursor.fetchall() == []
+        assert not ledger.review_groups
     finally:
         await ledger.close()
 
 
 @pytest.mark.asyncio
-async def test_private_text_limit_drops_body_without_widening_decoder(tmp_path):
+@pytest.mark.parametrize("length", [5, 16384, 16385])
+async def test_private_text_is_never_stored_without_widening_decoder(tmp_path, length):
     ledger = Ledger(tmp_path / "inbox.sqlite3")
     await ledger.open()
     try:
-        await ledger.ingest(
+        observer = Mock()
+        assert not await ledger.ingest(
             "99",
             "private/1/MTAwMQ==",
             "huge",
-            {"text": "x" * 16385, "sender": "1", "transport_peer": "1001"},
+            {"text": "x" * length, "sender": "1", "transport_peer": "1001"},
+            observe=observer,
         )
         async with ledger.db.execute("SELECT state,payload FROM inbox") as cursor:
-            state, payload = await cursor.fetchone()
-        assert state == "oversized" and "text" not in json.loads(payload)
+            assert await cursor.fetchone() is None
+        observer.assert_not_called()
+        assert not ledger.review_groups
         assert wire.LIMIT == 1024 * 1024
     finally:
         await ledger.close()
@@ -685,6 +696,9 @@ async def test_public_event_never_enters_framework_command_filters(monkeypatch):
     )
     event.actor_identity = ActorIdentity("99", "1", "1001", "1")
     monkeypatch.setattr(runtime, "open_service", object())
-    assert await event.prepare_waking_check({"admins_id": ["1"]}, None)
+    registry = Mock()
+    assert not await event.prepare_waking_check({"admins_id": ["1"]}, registry)
+    assert not registry.mock_calls
+    assert event.is_stopped()
     assert event.role == "member" and not event.is_admin()
     assert event.get_extra("_context_only") is True

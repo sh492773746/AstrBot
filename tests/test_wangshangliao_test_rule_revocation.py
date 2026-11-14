@@ -179,12 +179,9 @@ async def test_automatic_mute_keeps_original_guard_after_upstream_lock(
             ]
     else:
         assert mutes == []
-        if case.assessment:
-            assert bot.calls == []
-            bot.nim.request.assert_not_awaited()
-        else:
-            # The legacy path recalls before it reaches its mute IO wait.
-            assert bot.calls == [("recall", case.mid, harness.sender.nim_account)]
+        # Both paths submit the mute first; revoked authority blocks later recalls.
+        assert bot.calls == []
+        bot.nim.request.assert_not_awaited()
 
 
 @pytest.mark.asyncio

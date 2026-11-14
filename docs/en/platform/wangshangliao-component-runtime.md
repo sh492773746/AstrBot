@@ -1,6 +1,16 @@
 # Component Governance and Wangshangliao Pilot
 
-Updated October 21, 2026, Beijing time. The Wangshangliao plugin, management page
+Active declarations retain executable group commands and server metadata without
+chat locations. Exclude private-only commands and aliases from the active catalog.
+Support, private AI/admin guidance, menus, friend automation, personal knowledge,
+private finance and image intake are retired; compatible imports do not restore
+routes, and historical data remains. Existing authorized Dashboard operators
+maintain rules/images/activities/Invitation Settlement; ordinary group admins
+receive no global login. This batch is not deployed; mute-first/raid loading and
+live acceptance remain pending, with raid defense off by default.
+See [the current mapping](wangshangliao-start.md).
+
+The following is historical status from October 21, 2026, Beijing time. The Wangshangliao plugin, management page
 and help fix were hot-deployed. Core routes and pipeline updates remain unloaded:
 `/api/v1/plugins/runtime/status` still returns 404. The pilot remains disabled and
 none of the three native connectors was restarted. Plugin loading is not complete
@@ -20,9 +30,9 @@ Catalogs contain metadata, never executable bindings, message bodies or secrets.
 Only server-registered handlers execute. Existing identity, native group rights,
 budget, payer consent, version checks and send guards remain authoritative.
 
-The native command catalog is generated from declarations. Existing aliases,
-parsers, retired-command explanations and confirmation tokens remain compatible.
-Keyword replies, advertisements and support forms reuse Pydantic schemas;
+The native command catalog is generated from declarations. Active group aliases,
+parsers and confirmation tokens remain compatible.
+Keyword replies and advertisements reuse Pydantic schemas;
 cross-field validation and authorization remain server-side. Other plugins are
 not migrated. This is cooperative isolation, not a process sandbox or low-code UI.
 
@@ -69,29 +79,18 @@ not a live production circuit.
 
 ## Message Ownership
 
-Commands, menu input, confirmations and matching keyword rules permanently claim
+Active group commands, confirmations and matching keyword rules permanently claim
 their input. Rejection, cooldown, busy status, circuit opening and send failures
 never fall back to AI. Only explicitly migrated, noncritical observers may continue
 after an exception while their message remains unclaimed.
 Legacy plugins retain their previous stop-event behavior.
 
-## Private Batches
+## Private Batching Retired
 
-Support and administrator guidance in controlled windows use a fixed two-second
-window from the first message. Keys include instance, account, trusted sender,
-conversation generation, role and configuration version.
-Limits are twelve messages and 4,096 characters; overflow rejects the whole batch.
-Commands, menu input, confirmations, finance and exit interrupt pending buffers.
-Combined text goes only to read-only AI, never back through command parsing.
-Real group mentions remain immediate. Existing group-chat batching is unchanged.
-
-Native receipt processing does not sleep. At most eight detached batch tasks run.
-Bodies remain in memory; persistent records contain batch/source IDs and states.
-Restart discards buffered work and marks dispatched work unknown without replay.
-Identity, access, configuration, session and test-window checks run again before
-dispatch and delivery. Waiting counts toward the forty-five-second deadline.
-Batching itself is free; each model request retains independent pricing,
-admission and settlement.
+Old support/admin-guidance batches no longer dispatch or send. Retain historical
+batch audits and unknown outcomes without replay. Native group mentions remain
+immediate; autonomous group candidates keep their two-second/twelve-message/
+120-second boundaries.
 
 ## Rollout
 
@@ -107,7 +106,7 @@ Disable the pilot to return to compatibility routing and revoke pilot leases.
 Core route/pipeline activation must not trigger an unauthorized production restart.
 In-memory circuits reset with lifecycle; durable unknown business states remain.
 
-## Acceptance Record
+## Historical Acceptance Record: October 21, 2026
 
 Offline acceptance completed on October 21, 2026, Beijing time. Production
 activation remains pending:

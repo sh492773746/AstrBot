@@ -1,17 +1,16 @@
-"""Offline contracts for the digest-pinned native guide uploader."""
+"""Offline contracts for verified native group-image uploads."""
 
 import asyncio
 import hashlib
+import io
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
+from PIL import Image
 
-from astrbot.builtin_stars.wangshangliao_moderation import (
-    feature_image,
-)
 from astrbot.builtin_stars.wangshangliao_moderation import (
     native_guide_upload as upload,
 )
@@ -69,7 +68,9 @@ class Session:
 
 @pytest.fixture
 def transport(monkeypatch):
-    _, data, _ = upload.load_fixed_guide(public=True)
+    stream = io.BytesIO()
+    Image.new("RGB", (320, 180), "red").save(stream, "JPEG")
+    data = stream.getvalue()
     session = Session(
         [
             Response(json.dumps({"code": 0, "id": ASSET}).encode()),
@@ -83,6 +84,7 @@ def transport(monkeypatch):
         upload, "REVIEWED_MEDIA_ENDPOINTS", {ORIGIN: (UPLOAD, DOWNLOAD)}
     )
     client = SimpleNamespace(
+        image_data=data,
         deployment=SimpleNamespace(origin=ORIGIN),
         fields=[0, 0, 0, 43506527],
         jwt="fixture-not-a-real-token",
@@ -94,36 +96,47 @@ def transport(monkeypatch):
     return client, session, factory
 
 
-@pytest.mark.parametrize("public", [False, True])
-def test_current_artwork_matches_fixed_digest_and_dimensions(public):
-    path, data, digest = upload.load_fixed_guide(public=public)
-    assert hashlib.sha256(data).hexdigest() == digest
-    image = feature_image.FeatureImage(public=public)
-    assert image.path == path
-    assert image.digest == digest
-    assert image.size == len(data) <= upload.IMAGE_LIMIT
-
-
-@pytest.mark.parametrize("value", [None, 0, 1, "public", "/tmp/image.jpg", b"image"])
-def test_artwork_selector_cannot_be_a_path_or_media_payload(value):
-    with pytest.raises(wire.ProtocolError, match="guide_image_selection"):
-        upload.load_fixed_guide(public=value)
-
-
-@pytest.mark.parametrize("failure", ["digest", "oversize", "symlink"])
-def test_changed_fixed_artwork_is_rejected_before_upload(
-    tmp_path, monkeypatch, failure
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data,width,height",
+    [
+        ("https://image.invalid/x", 320, 180),
+        ("/tmp/image.jpg", 320, 180),
+        (b"not a jpeg", 320, 180),
+        (b"", 320, 180),
+        (b"x" * (upload.IMAGE_LIMIT + 1), 320, 180),
+        (None, 0, 180),
+        (None, True, 180),
+        (None, 320, 2049),
+        (None, 319, 180),
+    ],
+    ids=[
+        "url",
+        "path",
+        "not-jpeg",
+        "empty",
+        "oversize",
+        "zero-width",
+        "boolean-width",
+        "oversize-height",
+        "wrong-width",
+    ],
+)
+async def test_only_bounded_jpeg_bytes_with_exact_dimensions_reach_upload(
+    transport, data, width, height
 ):
-    path = tmp_path / "fixed.jpg"
-    if failure == "symlink":
-        path.symlink_to(upload.OPEN_GUIDE_PATH)
-    elif failure == "oversize":
-        path.write_bytes(b"x" * (upload.IMAGE_LIMIT + 1))
-    else:
-        path.write_bytes(b"replacement image")
-    monkeypatch.setattr(upload, "OPEN_GUIDE_PATH", path)
-    with pytest.raises(wire.ProtocolError, match="guide_image_"):
-        feature_image.FeatureImage(public=True)
+    client, session, factory = transport
+    with pytest.raises(BusinessError) as caught:
+        await upload.upload_verified_image(
+            client,
+            client.image_data if data is None else data,
+            width=width,
+            height=height,
+            authorize=Mock(),
+        )
+    assert caught.value.submitted is False
+    factory.assert_not_called()
+    assert not session.calls
 
 
 @pytest.mark.parametrize(
@@ -144,6 +157,9 @@ def test_changed_fixed_artwork_is_rejected_before_upload(
         True,
         None,
     ],
+    ids=lambda value: (
+        "oversize" if isinstance(value, str) and len(value) > 64 else None
+    ),
 )
 def test_native_asset_id_is_bounded_and_not_a_url(value):
     assert not upload.is_native_asset_id(value)
@@ -155,10 +171,11 @@ async def test_unreviewed_endpoint_is_fail_closed_without_session(
 ):
     client, session, factory = transport
     monkeypatch.setattr(upload, "REVIEWED_MEDIA_ENDPOINTS", {})
-    with pytest.raises(
-        BusinessError, match="guide_upload_endpoint_unreviewed"
-    ) as caught:
-        await upload.upload_fixed_guide(client, public=True, authorize=Mock())
+    with pytest.raises(BusinessError) as caught:
+        await upload.upload_verified_image(
+            client, client.image_data, width=320, height=180, authorize=Mock()
+        )
+    assert str(caught.value) == "guide_upload_endpoint_unreviewed"
     assert caught.value.submitted is False
     factory.assert_not_called()
     assert not session.calls
@@ -190,32 +207,32 @@ async def test_even_reviewed_addresses_cannot_downgrade_or_leak_credentials(
     client, session, factory = transport
     monkeypatch.setattr(upload, "REVIEWED_MEDIA_ENDPOINTS", {ORIGIN: endpoints})
     with pytest.raises(BusinessError) as caught:
-        await upload.upload_fixed_guide(client, public=True, authorize=Mock())
+        await upload.upload_verified_image(
+            client, client.image_data, width=320, height=180, authorize=Mock()
+        )
     assert caught.value.submitted is False
     factory.assert_not_called()
     assert not session.calls
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("public", [False, True])
 @pytest.mark.parametrize("asset", [ASSET, 18446744073709551615])
-async def test_official_multipart_and_two_readbacks_are_fixed(
-    transport, monkeypatch, public, asset
-):
+async def test_official_multipart_and_two_readbacks_are_fixed(transport, asset):
     client, session, factory = transport
-    path, data, digest = upload.load_fixed_guide(public=public)
+    data = client.image_data
+    digest = hashlib.sha256(data).hexdigest()
     session.responses = [
         Response(json.dumps({"code": 0, "id": asset}).encode()),
         Response(data),
         Response(data),
     ]
-    monkeypatch.setattr(feature_image, "REVIEWED_ASSETS", {})
     guard = AsyncMock()
-    result = await upload.upload_fixed_guide(client, public=public, authorize=guard)
+    result = await upload.upload_verified_image(
+        client, data, width=320, height=180, authorize=guard
+    )
     assert result == upload.VerifiedGuideAsset(
         "43506527", digest, str(asset), len(data)
     )
-    assert feature_image.REVIEWED_ASSETS == {}
     assert [(method, url) for method, url, _ in session.calls] == [
         ("POST", UPLOAD),
         ("GET", DOWNLOAD + str(asset)),
@@ -243,12 +260,12 @@ async def test_official_multipart_and_two_readbacks_are_fixed(
     for key, value in {
         "asset_type": "1",
         "use_for": "1",
-        "height": "1024",
-        "width": "1024",
+        "height": "180",
+        "width": "320",
     }.items():
         assert fields[key][2] == value
     for key in ("file", "thumbnail"):
-        assert fields[key][0]["filename"] == path.name
+        assert fields[key][0]["filename"] == "scheduled-image.jpg"
         assert fields[key][1]["Content-Type"] == "image/jpeg"
         assert fields[key][2] == data
     for method, _, kwargs in session.calls:
@@ -282,12 +299,15 @@ async def test_official_multipart_and_two_readbacks_are_fixed(
         b'{"code":0,"id":"999","id":"123"}',
         b"x" * 65537,
     ],
+    ids=lambda value: "oversize-response" if len(value) > 65536 else None,
 )
 async def test_untrusted_upload_response_cannot_produce_a_native_id(transport, body):
     client, session, _ = transport
     session.responses[0] = Response(body)
     with pytest.raises(BusinessError) as caught:
-        await upload.upload_fixed_guide(client, public=True, authorize=Mock())
+        await upload.upload_verified_image(
+            client, client.image_data, width=320, height=180, authorize=Mock()
+        )
     assert caught.value.submitted is True
     assert len(session.calls) == 1
 
@@ -301,7 +321,9 @@ async def test_upload_and_readbacks_never_follow_redirects_or_retry(
     client, session, _ = transport
     session.responses[phase] = Response(status=status)
     with pytest.raises(BusinessError) as caught:
-        await upload.upload_fixed_guide(client, public=True, authorize=Mock())
+        await upload.upload_verified_image(
+            client, client.image_data, width=320, height=180, authorize=Mock()
+        )
     assert caught.value.submitted is True
     assert len(session.calls) == phase + 1
     assert all(not kwargs["allow_redirects"] for _, _, kwargs in session.calls)
@@ -309,14 +331,20 @@ async def test_upload_and_readbacks_never_follow_redirects_or_retry(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", [1, 2])
-@pytest.mark.parametrize("body", [b"", b"wrong picture", b"x" * (1024 * 1024 + 1)])
+@pytest.mark.parametrize(
+    "body",
+    [b"", b"wrong picture", b"x" * (1024 * 1024 + 1)],
+    ids=["empty", "different-image", "oversize"],
+)
 async def test_both_original_and_thumbnail_must_match_fixed_digest(
     transport, phase, body
 ):
     client, session, _ = transport
     session.responses[phase] = Response(body)
     with pytest.raises(BusinessError, match="guide_upload_") as caught:
-        await upload.upload_fixed_guide(client, public=True, authorize=Mock())
+        await upload.upload_verified_image(
+            client, client.image_data, width=320, height=180, authorize=Mock()
+        )
     assert caught.value.submitted is True
     assert len(session.calls) == phase + 1
 
@@ -327,10 +355,9 @@ async def test_both_original_and_thumbnail_must_match_fixed_digest(
     "error_type", [TimeoutError, aiohttp.ClientError, asyncio.CancelledError]
 )
 async def test_unknown_outcome_is_not_retried_or_registered(
-    transport, monkeypatch, phase, error_type
+    transport, phase, error_type
 ):
     client, session, _ = transport
-    monkeypatch.setattr(feature_image, "REVIEWED_ASSETS", {})
     session.responses[phase] = Response(error=error_type())
     expected = (
         asyncio.CancelledError
@@ -338,10 +365,12 @@ async def test_unknown_outcome_is_not_retried_or_registered(
         else BusinessError
     )
     with pytest.raises(expected) as caught:
-        await upload.upload_fixed_guide(client, public=True, authorize=Mock())
+        await upload.upload_verified_image(
+            client, client.image_data, width=320, height=180, authorize=Mock()
+        )
     assert caught.value.submitted is True
     assert len(session.calls) == phase + 1
-    assert feature_image.REVIEWED_ASSETS == {}
+    assert not hasattr(upload, "upload_fixed_guide")
     assert not client.lock.locked()
 
 
@@ -349,8 +378,11 @@ async def test_unknown_outcome_is_not_retried_or_registered(
 async def test_missing_authentication_never_constructs_media_session(transport):
     client, session, factory = transport
     client.jwt = ""
-    with pytest.raises(BusinessError, match="reauth_required") as caught:
-        await upload.upload_fixed_guide(client, public=True, authorize=Mock())
+    with pytest.raises(BusinessError) as caught:
+        await upload.upload_verified_image(
+            client, client.image_data, width=320, height=180, authorize=Mock()
+        )
+    assert str(caught.value) == "reauth_required"
     assert caught.value.submitted is False
     factory.assert_not_called()
     assert not session.calls
@@ -362,7 +394,9 @@ async def test_guard_runs_after_lock_admission_before_any_network(transport):
     guard = Mock(side_effect=wire.ProtocolError("revoked"))
     await client.lock.acquire()
     task = asyncio.create_task(
-        upload.upload_fixed_guide(client, public=True, authorize=guard)
+        upload.upload_verified_image(
+            client, client.image_data, width=320, height=180, authorize=guard
+        )
     )
     try:
         await asyncio.sleep(0)
@@ -400,7 +434,10 @@ async def test_changed_account_or_authority_never_publishes_receipt(
             monkeypatch.setattr(upload, "REVIEWED_MEDIA_ENDPOINTS", {})
 
     session.responses[phase].after_read = mutate
-    with pytest.raises(BusinessError, match="guide_upload_scope_changed") as caught:
-        await upload.upload_fixed_guide(client, public=True, authorize=Mock())
+    with pytest.raises(BusinessError) as caught:
+        await upload.upload_verified_image(
+            client, client.image_data, width=320, height=180, authorize=Mock()
+        )
+    assert str(caught.value) == "guide_upload_scope_changed"
     assert caught.value.submitted is True
     assert len(session.calls) == phase + 1

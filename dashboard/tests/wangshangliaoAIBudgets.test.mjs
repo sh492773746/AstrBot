@@ -96,3 +96,38 @@ test("failed versioned save does not report success or retry automatically", asy
   assert.equal(state.busy, false);
   assert.deepEqual(saved, []);
 });
+
+test("a plan preview arriving after the parent switches groups is discarded", async t => {
+  const { state, instance, calls } = mount(t);
+  instance.$.props.tenant = { account: "1", group_id: "5", version: 1, managers: ["2"] };
+  await nextTick();
+  let release;
+  instance.$.props.api = async (action, payload) => {
+    calls.push({ action, payload });
+    return new Promise(resolve => { release = resolve; });
+  };
+  await nextTick();
+  const pending = state.grantPreview();
+  assert.equal(typeof release, "function");
+  instance.$.props.tenant = { account: "1", group_id: "6", version: 2, managers: ["3"] };
+  await nextTick();
+  release({ confirmation: "old-scope" });
+  await pending;
+  assert.equal(state.preview, null);
+  assert.equal(state.manager, "3");
+  assert.equal(calls.length, 1);
+});
+
+test("editing a received amount invalidates a pending plan preview", async t => {
+  const { state, instance } = mount(t);
+  instance.$.props.tenant = { account: "1", group_id: "5", version: 1, managers: ["2"] };
+  await nextTick();
+  let release;
+  instance.$.props.api = async () => new Promise(resolve => { release = resolve; });
+  await nextTick();
+  const pending = state.grantPreview();
+  state.received = "335";
+  release({ confirmation: "old-amount" });
+  await pending;
+  assert.equal(state.preview, null);
+});

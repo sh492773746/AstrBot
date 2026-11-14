@@ -141,7 +141,12 @@ class Game:
         return row["issue"] + 1, closes
 
     def _place(self, db, uid, room_id, issue, plays, amount, op, chat=None):
+        from .game_schedule import reason
         from .tenants import local_config, platform_group
+
+        closed = reason(self.store, chat, "canada")
+        if closed:
+            raise Rejected(closed)
 
         if (
             chat

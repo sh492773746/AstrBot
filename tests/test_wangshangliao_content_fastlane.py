@@ -11,7 +11,7 @@ import pytest
 from astrbot.builtin_stars.wangshangliao_moderation import content_rules, policy
 from astrbot.builtin_stars.wangshangliao_moderation.flood import FloodRuntime
 from astrbot.core.pipeline.rate_limit_check.stage import RateLimitStage
-from tests.test_wangshangliao_flood import fresh_bot, ingest
+from tests.test_wangshangliao_flood import drain_recalls, fresh_bot, ingest
 
 bot = fresh_bot
 
@@ -71,11 +71,24 @@ async def test_keyword_review_is_independent_of_chat_rate_limit(bot, state):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", [None, "image", "video", "forward"])
-async def test_high_confidence_ads_use_the_fastlane_without_custom_keywords(bot, kind):
+@pytest.mark.parametrize(
+    "text",
+    [
+        "加我vx:abc123456",
+        "☜☜☜几十款 祝㊗️兄弟们一路长洪",
+        "拿扶＋22406063",
+        "五四三三三每天不定时爆料网红视频",
+        "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth",
+    ],
+)
+async def test_high_confidence_ads_use_the_fastlane_without_custom_keywords(
+    bot, kind, text
+):
+    text = text.replace("abc123456", "abc12345").replace("22406063", "22406")
     bot.config["moderation"]["flood_enabled"] = False
     runtime = runtime_for(bot)
     try:
-        payload = await ingest(bot, "100", "加我vx:abc123456", kind=kind)
+        payload = await ingest(bot, "100", text, kind=kind)
         assert payload["_ingress_content"]["category"] == "external_promotion"
         await runtime.step()
         await asyncio.gather(*runtime.workers.values())
@@ -140,10 +153,16 @@ async def test_group_combinations_keep_all_terms_and_group_isolation(bot):
         "stale",
     ],
 )
-async def test_fastlane_never_weakens_sanction_authorization(bot, monkeypatch, change):
+@pytest.mark.parametrize(
+    "text",
+    ["fixture-ad", "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth"],
+)
+async def test_fastlane_never_weakens_sanction_authorization(
+    bot, monkeypatch, change, text
+):
     bot.config["moderation"].update(mute_keywords=["fixture-ad"], flood_enabled=False)
     runtime = runtime_for(bot)
-    payload = await ingest(bot, "100", "fixture-ad")
+    payload = await ingest(bot, "100", text)
     if change == "revision":
         bot.config["_business_revision"] = "new"
     elif change == "epoch":
@@ -169,12 +188,35 @@ async def test_fastlane_never_weakens_sanction_authorization(bot, monkeypatch, c
     elif change == "forged_group":
         payload["_ingress_content"]["group"] = "6"
     elif change == "forged_category":
-        payload["_ingress_content"]["category"] = "external_promotion"
+        payload["_ingress_content"]["category"] = (
+            "mute_keyword" if "\n" in text else "external_promotion"
+        )
     else:
         payload["recall_route"]["time"] = str(int((time.time() - 301) * 1000))
     try:
         await runtime.execute(("fixture", "1", "5", "2"), bot, "100", payload, None)
         assert not bot.calls
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("advertising", [False, True])
+@pytest.mark.parametrize("lines", [4, 5, 7, 8])
+async def test_multiline_ingress_respects_advertising_gate(bot, advertising, lines):
+    bot.config["moderation"].update(
+        advertising_enabled=advertising, flood_enabled=False, mute_keywords=[]
+    )
+    runtime = runtime_for(bot)
+    try:
+        payload = await ingest(bot, "100", "\n".join(["ordinary text"] * lines))
+        assert ("_ingress_content" in payload) is (advertising and lines > 7)
+        await runtime.step()
+        await asyncio.gather(*runtime.workers.values())
+        assert bot.calls == (
+            [("recall", "100", "22")] if advertising and lines > 7 else []
+        )
+        bot.execute_moderation.assert_not_awaited()
     finally:
         await runtime.close()
 
@@ -226,30 +268,101 @@ async def test_fastlane_backlog_is_bounded_and_scans_past_benign_messages(bot):
     try:
         for n in range(12):
             await ingest(bot, str(100 + n), "fixture-ad" if n % 2 else "hello")
-        for _ in range(10):
+        for _ in range(32):
             await runtime.step()
             assert sum(len(lane) for lane in runtime.pending.values()) <= 2
             assert len(runtime.workers) <= 1
             await asyncio.gather(*runtime.workers.values())
-        assert len([call for call in bot.calls if call[0] == "recall"]) == 6
-        assert len([call for call in bot.calls if call[0] == "mute"]) == 3
+            if len([call for call in bot.calls if call[0] == "recall"]) == 6:
+                break
+        await drain_recalls(runtime)
+        assert sorted(call for call in bot.calls if call[0] == "recall") == [
+            ("recall", str(mid), "22") for mid in (101, 103, 105, 107, 109, 111)
+        ]
+        assert [call for call in bot.calls if call[0] == "mute"] == [
+            ("mute", "2", minutes) for minutes in (1, 3, 10)
+        ]
         assert bot.diagnostics.gauges["rule_queue_full"] > 0
         assert bot.diagnostics.gauges["rule_pending"] == 0
+        assert not runtime.recalls
+        assert not any(runtime.recall_counts.values())
+        with bot._review_store.connect() as db:
+            assert db.execute(
+                "SELECT message,status,warning FROM content_violations ORDER BY message"
+            ).fetchall() == [
+                (str(mid), "recalled" if mid < 107 else "muted", "accepted")
+                for mid in (101, 103, 105, 107, 109, 111)
+            ]
     finally:
         await runtime.close()
 
 
 @pytest.mark.asyncio
+async def test_fastlane_drain_waits_for_independent_recall_receipt(bot):
+    bot.config["moderation"].update(mute_keywords=["fixture-ad"], flood_enabled=False)
+    runtime = runtime_for(bot, slots=1, backlog=2)
+    entered, release = asyncio.Event(), asyncio.Event()
+    draining = None
+    try:
+        for mid in (101, 103, 105):
+            await ingest(bot, str(mid), "fixture-ad")
+            await runtime.step()
+            await asyncio.gather(*runtime.workers.values())
+        original = bot.nim.request.side_effect
+
+        async def delayed_recall(*args):
+            entered.set()
+            await release.wait()
+            return await original(*args)
+
+        bot.nim.request.side_effect = delayed_recall
+        await ingest(bot, "107", "fixture-ad")
+        await runtime.step()
+        await asyncio.gather(*runtime.workers.values())
+        assert bot.calls[-1] == ("mute", "2", 1)
+        draining = asyncio.create_task(drain_recalls(runtime))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert all(task.done() for task in runtime.workers.values())
+        assert len(runtime.recall_workers) == 1
+        assert not next(iter(runtime.recall_workers.values())).done()
+        assert not draining.done()
+        assert sum(runtime.recall_counts.values()) == 1
+        with bot._review_store.connect() as db:
+            assert db.execute(
+                "SELECT status,warning FROM content_violations WHERE message='107'"
+            ).fetchone() == ("muted", "pending")
+        release.set()
+        await asyncio.wait_for(draining, 5)
+        assert [call for call in bot.calls if call[0] == "recall"] == [
+            ("recall", str(mid), "22") for mid in (101, 103, 105, 107)
+        ]
+        assert not runtime.recalls
+        assert not any(runtime.recall_counts.values())
+        with bot._review_store.connect() as db:
+            assert db.execute(
+                "SELECT status,warning FROM content_violations WHERE message='107'"
+            ).fetchone() == ("muted", "accepted")
+    finally:
+        release.set()
+        if draining is not None:
+            if not draining.done():
+                draining.cancel()
+            await asyncio.gather(draining, return_exceptions=True)
+        await runtime.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("when", ["before", "during_directory"])
+@pytest.mark.parametrize("text", ["fixture-ad", "first\nsecond\nthird\nfourth\nfifth"])
 async def test_new_fastlane_retains_exact_speech_exemption_checks(
-    bot, tmp_path, monkeypatch, when
+    bot, tmp_path, monkeypatch, when, text
 ):
     from astrbot.builtin_stars.wangshangliao_moderation import member_exemptions
 
     monkeypatch.setattr(member_exemptions, "instance_dir", lambda _: tmp_path)
     bot.config["moderation"].update(mute_keywords=["fixture-ad"], flood_enabled=False)
     runtime = runtime_for(bot)
-    payload = await ingest(bot, "100", "fixture-ad")
+    payload = await ingest(bot, "100", text)
 
     def grant():
         member_exemptions.set_exemption(

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from astrbot.core.platform.sources.wangshangliao.database import AsyncDatabase
 from astrbot.core.platform.sources.wangshangliao.event import is_managed_account
 from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
@@ -119,6 +120,7 @@ class RuleConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     keywords: list[KeywordReply] = Field(default_factory=list, max_length=50)
     ads: list[Advertisement] = Field(default_factory=list, max_length=20)
+    replace_previous_ad: bool = False
 
     @model_validator(mode="after")
     def distinct_ids(self):
@@ -179,7 +181,6 @@ class RuleReplies:
         self.tasks = {}
         self.ad_locks = {}
         self.ad_ready_at = {}
-        self.image_sessions = {}
         self.started = time.time()
         with self.store.connect(write=True) as db:
             db.executescript("""
@@ -200,7 +201,15 @@ class RuleReplies:
                 CREATE TABLE IF NOT EXISTS business_ad_cursors(
                     account TEXT,group_id TEXT,rule_id TEXT,next_at REAL,
                     blocked TEXT NOT NULL DEFAULT '',PRIMARY KEY(account,group_id,rule_id));
+                CREATE TABLE IF NOT EXISTS business_ad_heads(
+                    account TEXT,group_id TEXT,operation TEXT NOT NULL,
+                    previous TEXT NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL,
+                    updated REAL NOT NULL,PRIMARY KEY(account,group_id));
             """)
+            db.execute(
+                "UPDATE business_ad_heads SET state='unknown',error='process_interrupted' "
+                "WHERE state='pending'"
+            )
             # A process interruption cannot establish whether native delivery succeeded.
             db.execute(
                 "UPDATE business_ad_cursors SET blocked='delivery_unknown' WHERE EXISTS("
@@ -341,6 +350,11 @@ class RuleReplies:
                 "DELETE FROM business_ad_cursors WHERE account=? AND group_id=?",
                 (account, group),
             )
+            if not config.get("replace_previous_ad", False):
+                db.execute(
+                    "DELETE FROM business_ad_heads WHERE account=? AND group_id=?",
+                    (account, group),
+                )
             ad_ids = [ad["id"] for ad in config["ads"]]
             db.execute(
                 "DELETE FROM business_ad_rotations WHERE account=? AND group_id=?"
@@ -376,95 +390,14 @@ class RuleReplies:
             )
         return {"saved": True, "version": draft["version"] + 1}
 
-    async def receive_image(self, event):
-        """Preview one requested attachment under the same native rule authority.
-
-        Args:
-            event: Fresh authenticated private image event.
-
-        Returns:
-            Explicit preview or scope feedback; no schedule is committed.
-
-        Raises:
-            OpenError: If the request, image or current authorization changed.
-        """
-        key = self.service.navigation.key(event)
-        pending = self.image_sessions.get(key)
-        if not pending:
-            return ""
-        if pending["receiving"]:
-            return "上一张图片仍在录入，请稍后核对预览。"
-        pending["receiving"] = True
-        try:
-            group, tenant, authority = await self.context(event)
-            stamp = self.service.navigation.stamp(event)
-
-            def guard():
-                authority()
-                if (
-                    self.image_sessions.get(key) is not pending
-                    or pending["expires"] <= time.monotonic()
-                    or pending["stamp"] != stamp
-                    or self.service.navigation.stamp(event) != stamp
-                ):
-                    raise OpenError("advertisement_image_request_changed")
-
-            guard()
-            payload = event.get_extra("wangshangliao_payload") or {}
-            if (
-                payload.get("kind") != "image"
-                or type(payload.get("created_at")) not in (int, float)
-                or payload["created_at"] / 1000 < pending["created"]
-            ):
-                raise OpenError("advertisement_image_invalid")
-            account = str(event.platform.account)
-            row = await asyncio.to_thread(self.read, account, group)
-            if row["version"] != pending["version"]:
-                raise OpenError("business_rules_changed")
-            ad = next(
-                (ad for ad in row["config"]["ads"] if ad["id"] == pending["rule"]),
-                None,
-            )
-            if ad is None or len(ad.get("images", [])) >= 3:
-                raise OpenError("advertisement_image_request_changed")
-            image = await self.media.receive(
-                event.platform, group, payload.get("image"), guard=guard
-            )
-            guard()
-            ad.setdefault("images", []).append(image["id"])
-            preview = await asyncio.to_thread(
-                self.preview,
-                account,
-                group,
-                row["version"],
-                row["config"],
-                event.actor_identity.principal,
-                str(event.unified_msg_origin),
-                tenant,
-                owner=event.actor_identity.verified_uid,
-                peer=event.actor_identity.peer,
-                guard=guard,
-            )
-            return (
-                f"图片已录入预览，尚未保存。\n目标群：{group}\n"
-                f"发言计划：{ad['name']}，共{len(ad['images'])}/3张图片。\n"
-                f"确认保存请发送：确认广告 {preview['token']}\n"
-                "不确认不会修改计划；再加一张，请保存后重新发送“广告图片 计划序号”。"
-            )
-        finally:
-            if self.image_sessions.get(key) is pending:
-                self.image_sessions.pop(key, None)
-
     async def context(self, event):
-        """Resolve a native manager's current/selected group without AI authority."""
-        service, adapter = self.service, event.platform
+        """Resolve only a native manager's actual group without AI authority."""
         if event.is_private_chat():
-            await service.verify_actor(event)
+            raise OpenError("private_messages_retired")
+        service, adapter = self.service, event.platform
         identity = event.actor_identity
         identity.require_verified()
-        group = event.get_group_id() or service.navigation.stamp(event)[3]
-        if not group and event.is_private_chat():
-            raise OpenError("business_group_required")
+        group = event.get_group_id()
         if not group or not service.management.allowed(event, group):
             raise OpenError("permission_denied")
         tenant = dict(service.tenants.get((identity.account, group), {}))
@@ -515,37 +448,7 @@ class RuleReplies:
         action, _, argument = command.partition(" ")
         row = await asyncio.to_thread(self.read, account, group)
         if action == "广告图片":
-            if not event.is_private_chat():
-                return "图片录入请私信机器人，先选择群，再发送“广告图片 计划序号”。"
-            if not re.fullmatch(r"[1-9][0-9]?", argument):
-                raise OpenError("business_rule_number")
-            index = int(argument) - 1
-            ads = row["config"]["ads"]
-            if index >= len(ads):
-                raise OpenError("business_rule_number")
-            if len(ads[index].get("images", [])) >= 3:
-                return "这个计划已有3张图片，请先到插件页面替换或删除图片。"
-            key = self.service.navigation.key(event)
-            self.image_sessions = {
-                k: value
-                for k, value in self.image_sessions.items()
-                if value["expires"] > time.monotonic()
-            }
-            if len(self.image_sessions) >= 100:
-                raise OpenError("advertisement_image_busy")
-            self.image_sessions[key] = {
-                "stamp": self.service.navigation.stamp(event),
-                "version": row["version"],
-                "rule": ads[index]["id"],
-                "expires": time.monotonic() + 300,
-                "created": time.time(),
-                "receiving": False,
-            }
-            return (
-                f"已选择本群计划：{ads[index]['name']}（已有{len(ads[index].get('images', []))}/3张）。\n"
-                "请在5分钟内发送一张5MB以内的JPG、PNG或WebP静态图片。\n"
-                "收到后只生成预览，按提示确认才会保存；发送“取消”放弃。"
-            )
+            return "对话收图已移除；请由已有后台权限的负责人在插件页面的关键词回复或定时发言中上传图片。"
         if action in {"确认回复", "确认广告"}:
             result = await asyncio.to_thread(
                 self.commit,
@@ -701,7 +604,20 @@ class RuleReplies:
 
         check_execution()
         service, account, group = self.service, row["account"], row["group_id"]
-        tenant = service.store.tenant(account, group)
+        # Native callbacks must stay synchronous. WAL reads fail closed instead
+        # of waiting on a database lock while the message loop owns submission.
+        with self.store.connect() as db:
+            db.execute("PRAGMA busy_timeout=0")
+            saved = db.execute(
+                "SELECT t.active,t.present,t.paused,t.epoch,t.version,t.admission,"
+                "t.native_role,t.cleanup_epoch,t.cleanup_done,t.managers,"
+                "b.version AS rule_version FROM tenants t LEFT JOIN business_rules b "
+                "ON b.account=t.account AND b.group_id=t.group_id "
+                "WHERE t.account=? AND t.group_id=?",
+                (account, group),
+            ).fetchone()
+        tenant = dict(saved) if saved else None
+        config = adapter.config
         key = (account, group)
         if (
             not service.active
@@ -722,11 +638,11 @@ class RuleReplies:
             or group in service.retired_groups
             or str(adapter.account) != account
             or adapter.connection_state != "online"
-            or not adapter.config.get("enable", True)
-            or not adapter.config.get("_business_active")
-            or group not in adapter.config.get("enabled_groups", [])
-            or not adapter.config.get("reply_groups", {}).get(group, True)
-            or self.read(account, group)["version"] != row["version"]
+            or not config.get("enable", True)
+            or not config.get("_business_active")
+            or group not in config.get("enabled_groups", [])
+            or not config.get("reply_groups", {}).get(group, True)
+            or tenant["rule_version"] != row["version"]
         ):
             raise OpenError("business_rules_inactive")
         members = service.member_evidence.get(key, {})
@@ -739,17 +655,34 @@ class RuleReplies:
         ):
             raise OpenError("business_native_permission")
         if row["owner"] and (
-            row["owner"] not in tenant["managers"]
+            row["owner"] not in json.loads(tenant["managers"])
             or str(members.get(row["owner"], {}).get("nimId", "")) != row["peer"]
             or members.get(row["owner"], {}).get("groupRole")
             not in {"GROUP_ROLE_OWNER", "GROUP_ROLE_ADMIN"}
         ):
             raise OpenError("business_owner_revoked")
         if posting and (
-            not adapter.config.get("proactive_send", {}).get("enabled", False)
-            or group not in adapter.config.get("proactive_send", {}).get("targets", [])
+            not config.get("proactive_send", {}).get("enabled", False)
+            or group not in config.get("proactive_send", {}).get("targets", [])
         ):
             raise OpenError("proactive_not_authorized")
+
+    async def _settle_send(self, settlement):
+        """Drain receipt bookkeeping before propagating task cancellation.
+
+        Args:
+            settlement: Coroutine persisting only the already-known outcome.
+        """
+        task = asyncio.create_task(settlement)
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        task.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def observe(self, event):
         """Consume a matching group message even when no reply can be sent."""
@@ -820,18 +753,18 @@ class RuleReplies:
             if test_guard:
                 test_guard()
             self.send_guard(event.platform, row)
-            with self.store.connect(write=True) as db:
-                if db.execute(
+            async with AsyncDatabase(self.media._connect, write=True) as db:
+                if await db.fetchone(
                     "SELECT 1 FROM business_rule_sends WHERE operation=?", (operation,)
-                ).fetchone():
+                ):
                     return True
-                recent = db.execute(
+                recent = await db.fetchone(
                     "SELECT 1 FROM business_rule_sends WHERE account=? AND group_id=? "
                     "AND rule_id=? AND kind='keyword' AND state IN ('dispatched','accepted','verified','unknown','partial') "
                     "AND created>? LIMIT 1",
                     (account, group, rule["id"], now - rule["cooldown_seconds"]),
-                ).fetchone()
-                db.execute(
+                )
+                await db.execute(
                     "INSERT INTO business_rule_sends VALUES(?,?,?,?,?,?,?,?,'')",
                     (
                         operation,
@@ -886,11 +819,15 @@ class RuleReplies:
                 }:
                     state = "unknown"
             finally:
-                with self.store.connect(write=True) as db:
-                    db.execute(
-                        "UPDATE business_rule_sends SET state=? WHERE operation=?",
-                        (state, operation),
-                    )
+
+                async def settle():
+                    async with AsyncDatabase(self.media._connect, write=True) as db:
+                        await db.execute(
+                            "UPDATE business_rule_sends SET state=? WHERE operation=?",
+                            (state, operation),
+                        )
+
+                await self._settle_send(settle())
         except Exception as exc:
             from astrbot.core.star.component_runtime import report_execution_fault
 
@@ -927,11 +864,9 @@ class RuleReplies:
         """Serialize account campaigns without holding the native message lock."""
         account = cursor["account"]
         async with self.ad_locks.setdefault(account, asyncio.Lock()):
-            while True:
-                remaining = self.ad_ready_at.get(account, 0) - time.monotonic()
-                if remaining <= 0:
-                    break
-                await asyncio.sleep(remaining)
+            # Recheck the pacing deadline if the timer wakes early.
+            while (delay := self.ad_ready_at.get(account, 0) - time.monotonic()) > 0:  # noqa: ASYNC110
+                await asyncio.sleep(delay)
             try:
                 governance = getattr(self.service, "governance", None)
                 if governance is None or adapter is None:
@@ -962,6 +897,10 @@ class RuleReplies:
         now, planned = time.time(), cursor["next_at"]
         operation = f"advertisement/{account}/{group}/{rule_id}/{int(planned)}"
         state, error, claimed = "skipped", "", False
+        delivery_failed = False
+        ledger = getattr(adapter, "ledger", None)
+        superseded = False
+        replace_previous = row["config"].get("replace_previous_ad", False)
         image_ids, image_position = ad.get("images", []), 0
         try:
             if adapter is None:
@@ -979,36 +918,41 @@ class RuleReplies:
             if time.time() - planned > ADMISSION_WINDOW_SECONDS:
                 error = "advertisement_slot_expired"
                 return
-            with self.store.connect(write=True) as db:
-                current = db.execute(
+            async with AsyncDatabase(
+                self.media._connect,
+                write=True,
+                guard=lambda: self.send_guard(adapter, row, posting=True),
+            ) as db:
+                current = await db.fetchone(
                     "SELECT next_at,blocked FROM business_ad_cursors WHERE "
                     "account=? AND group_id=? AND rule_id=?",
                     (account, group, rule_id),
-                ).fetchone()
+                )
                 if (
                     not current
                     or current["next_at"] != planned
                     or current["blocked"]
-                    or db.execute(
+                    or await db.fetchone(
                         "SELECT 1 FROM business_rule_sends WHERE operation=?",
                         (operation,),
-                    ).fetchone()
+                    )
                 ):
+                    superseded = True
                     return
                 if image_ids:
-                    rotation = db.execute(
+                    rotation = await db.fetchone(
                         "SELECT images,position FROM business_ad_rotations "
                         "WHERE account=? AND group_id=? AND rule_id=?",
                         (account, group, rule_id),
-                    ).fetchone()
+                    )
                     if not rotation or rotation["images"] != json.dumps(image_ids):
                         raise OpenError("advertisement_image_rotation_changed")
                     image_position = rotation["position"] % len(image_ids)
-                db.execute(
+                await db.execute(
                     "INSERT INTO business_rule_sends VALUES(?,?,?,?,?,?,'dispatched',?,'')",
                     (operation, account, group, "advertisement", rule_id, planned, now),
                 )
-                claimed = True
+            claimed = True
             state = "unknown"
             if image_ids:
                 state = await self.media.send(
@@ -1017,18 +961,14 @@ class RuleReplies:
                     image_ids[image_position],
                     operation + "/image",
                     lambda: self.send_guard(adapter, row, posting=True),
+                    **({"retain_recall": True} if replace_previous else {}),
                 )
             if ad["text"].strip() and (
                 not image_ids or state in {"accepted", "verified"}
             ):
                 state = "unknown"
                 if image_ids:
-                    ready_at = time.monotonic() + IMAGE_TEXT_GAP_SECONDS
-                    while True:
-                        remaining = ready_at - time.monotonic()
-                        if remaining <= 0:
-                            break
-                        await asyncio.sleep(remaining)
+                    await asyncio.sleep(IMAGE_TEXT_GAP_SECONDS)
                 state = await adapter.send_reply_text(
                     group,
                     operation,
@@ -1036,18 +976,22 @@ class RuleReplies:
                     proactive=True,
                     auto_recall=False,
                     authorize=lambda: self.send_guard(adapter, row, posting=True),
+                    **({"retain_recall": True} if replace_previous else {}),
                 )
                 if image_ids and state in {"not_sent", "rejected"}:
                     state, error = "partial", "advertisement_text_not_sent"
             if state not in {"accepted", "verified", "not_sent", "rejected", "partial"}:
                 state = "unknown"
         except asyncio.CancelledError:
-            if not claimed:
+            delivery_failed = True
+            if state == "skipped":
                 error = "advertisement_cancelled_before_send"
             raise
         except (OpenError, ProtocolError) as exc:
+            delivery_failed = True
             error = str(exc)
         except Exception as exc:
+            delivery_failed = True
             from astrbot.core.star.component_runtime import report_execution_fault
 
             report_execution_fault(exc)
@@ -1057,64 +1001,210 @@ class RuleReplies:
                 else "advertisement_preflight_failed"
             )
         finally:
-            with self.store.connect(write=True) as db:
-                if claimed:
-                    db.execute(
-                        "UPDATE business_rule_sends SET state=?,error=? WHERE operation=?",
-                        (state, error, operation),
-                    )
-                    if image_ids and state in {"accepted", "verified"}:
-                        db.execute(
-                            "UPDATE business_ad_rotations SET position=? WHERE "
-                            "account=? AND group_id=? AND rule_id=? AND images=? AND "
-                            "EXISTS(SELECT 1 FROM business_rules WHERE account=? AND "
-                            "group_id=? AND version=?)",
-                            (
-                                (image_position + 1) % len(image_ids),
-                                account,
-                                group,
-                                rule_id,
-                                json.dumps(image_ids),
-                                account,
-                                group,
-                                row["version"],
-                            ),
+
+            async def settle():
+                nonlocal state
+                # Only the owning sender may advance or block this slot.
+                if superseded:
+                    return
+                if claimed and delivery_failed and ledger is not None:
+                    try:
+                        # Native helpers reserve before submission. Absence or a
+                        # rejected intent proves no delivery; never infer from an
+                        # exception's wording or overwrite an ambiguous receipt.
+                        keys = [operation]
+                        if image_ids:
+                            keys.append(operation + "/image")
+                        receipts = [await ledger.receipt(key) for key in keys]
+                        statuses = {
+                            receipt["status"] for receipt in receipts if receipt
+                        }
+                        state = (
+                            "unknown"
+                            if statuses
+                            - {"accepted", "verified", "rejected", "not_sent"}
+                            else "partial"
+                            if statuses & {"accepted", "verified"}
+                            else "rejected"
                         )
-                advanced = db.execute(
-                    "UPDATE business_ad_cursors SET next_at=?,blocked=? WHERE "
-                    "account=? AND group_id=? AND rule_id=? AND next_at=?",
-                    (
-                        next_ad_boundary(ad, time.time()),
-                        "delivery_unknown"
-                        if state == "unknown"
-                        else "partial_delivery"
-                        if state == "partial"
-                        else "",
-                        account,
-                        group,
-                        rule_id,
-                        planned,
-                    ),
-                ).rowcount
-                if advanced and not claimed and error:
-                    db.execute(
-                        "INSERT OR IGNORE INTO business_rule_sends "
-                        "VALUES(?,?,?,?,?,?,'skipped',?,?)",
+                    except Exception:
+                        state = "unknown"
+                async with AsyncDatabase(self.media._connect, write=True) as db:
+                    if not claimed and await db.fetchone(
+                        "SELECT 1 FROM business_rule_sends WHERE operation=? "
+                        "AND state!='skipped'",
+                        (operation,),
+                    ):
+                        return
+                    if claimed:
+                        await db.execute(
+                            "UPDATE business_rule_sends SET state=?,error=? WHERE operation=?",
+                            (state, error, operation),
+                        )
+                        if image_ids and state in {"accepted", "verified"}:
+                            await db.execute(
+                                "UPDATE business_ad_rotations SET position=? WHERE "
+                                "account=? AND group_id=? AND rule_id=? AND images=? AND "
+                                "EXISTS(SELECT 1 FROM business_rules WHERE account=? AND "
+                                "group_id=? AND version=?)",
+                                (
+                                    (image_position + 1) % len(image_ids),
+                                    account,
+                                    group,
+                                    rule_id,
+                                    json.dumps(image_ids),
+                                    account,
+                                    group,
+                                    row["version"],
+                                ),
+                            )
+                    advanced = await db.execute(
+                        "UPDATE business_ad_cursors SET next_at=?,blocked=? WHERE "
+                        "account=? AND group_id=? AND rule_id=? AND next_at=?",
                         (
-                            operation,
+                            next_ad_boundary(ad, time.time()),
+                            "delivery_unknown"
+                            if state == "unknown"
+                            else "partial_delivery"
+                            if state == "partial"
+                            else "",
                             account,
                             group,
-                            "advertisement",
                             rule_id,
                             planned,
-                            time.time(),
-                            error,
                         ),
                     )
+                    if advanced and state == "skipped" and error:
+                        await db.execute(
+                            "INSERT OR IGNORE INTO business_rule_sends "
+                            "VALUES(?,?,?,?,?,?,'skipped',?,?)",
+                            (
+                                operation,
+                                account,
+                                group,
+                                "advertisement",
+                                rule_id,
+                                planned,
+                                time.time(),
+                                error,
+                            ),
+                        )
+
+            await self._settle_send(settle())
+        if claimed and state in {"accepted", "verified"} and replace_previous:
+            await self.replace_ad(adapter, row, operation)
+
+    async def replace_ad(self, adapter, row, operation):
+        """Advance the successful group ad head, then recall its predecessor.
+
+        Args:
+            adapter: Original account-bound sender.
+            row: Frozen, still-authorized business configuration.
+            operation: Entire newly accepted image/text batch.
+
+        Returns:
+            None. Delivery and recall outcomes remain independently auditable.
+        """
+        from astrbot.core.platform.sources.wangshangliao.advertisement_recall import (
+            recall_advertisement,
+        )
+
+        account, group = row["account"], row["group_id"]
+        previous, state, error, advanced = "", "not_needed", "", False
+        try:
+            self.send_guard(adapter, row, posting=True)
+            async with AsyncDatabase(
+                self.media._connect,
+                write=True,
+                guard=lambda: self.send_guard(adapter, row, posting=True),
+            ) as db:
+                saved = await db.fetchone(
+                    "SELECT state FROM business_rule_sends WHERE operation=? "
+                    "AND account=? AND group_id=? AND kind='advertisement'",
+                    (operation, account, group),
+                )
+                if not saved or saved["state"] not in {"accepted", "verified"}:
+                    raise OpenError("advertisement_replacement_not_delivered")
+                head = await db.fetchone(
+                    "SELECT operation FROM business_ad_heads WHERE account=? AND group_id=?",
+                    (account, group),
+                )
+                previous = head["operation"] if head else ""
+                if previous == operation:
+                    return
+                if previous:
+                    saved = await db.fetchone(
+                        "SELECT state FROM business_rule_sends WHERE operation=? "
+                        "AND account=? AND group_id=? AND kind='advertisement'",
+                        (previous, account, group),
+                    )
+                    if not saved or saved["state"] not in {"accepted", "verified"}:
+                        state, error = (
+                            "rejected",
+                            "advertisement_replacement_previous_invalid",
+                        )
+                    else:
+                        state = "pending"
+                await db.execute(
+                    "INSERT INTO business_ad_heads VALUES(?,?,?,?,?,?,?) "
+                    "ON CONFLICT(account,group_id) DO UPDATE SET operation=excluded.operation,"
+                    "previous=excluded.previous,state=excluded.state,error=excluded.error,"
+                    "updated=excluded.updated",
+                    (account, group, operation, previous, state, error, time.time()),
+                )
+                advanced = True
+            if previous and state == "pending":
+                state = "unknown"
+                state = await recall_advertisement(
+                    adapter,
+                    group,
+                    previous,
+                    authorize=lambda: self.send_guard(adapter, row, posting=True),
+                )
+        except asyncio.CancelledError:
+            error = "advertisement_recall_interrupted"
+            raise
+        except (OpenError, ProtocolError) as exc:
+            error = str(exc)
+            if state != "unknown":
+                state = "rejected"
+        except Exception as exc:
+            from astrbot.core.star.component_runtime import report_execution_fault
+
+            report_execution_fault(exc)
+            error = "advertisement_recall_unconfirmed"
+            state = "unknown"
+        finally:
+
+            async def settle():
+                async with AsyncDatabase(self.media._connect, write=True) as db:
+                    if advanced:
+                        await db.execute(
+                            "UPDATE business_ad_heads SET state=?,error=?,updated=? WHERE "
+                            "account=? AND group_id=? AND operation=?",
+                            (state, error, time.time(), account, group, operation),
+                        )
+                    if advanced and previous:
+                        await db.call(
+                            lambda connection: self.store.log(
+                                connection,
+                                "system",
+                                account,
+                                group,
+                                "advertisement_recall",
+                                {
+                                    "operation": operation,
+                                    "previous": previous,
+                                    "state": state,
+                                    "error": error,
+                                },
+                            )
+                        )
+
+            await self._settle_send(settle())
 
     async def close(self):
         """Cancel detached ad jobs before unloading their original service."""
-        self.image_sessions.clear()
         tasks = tuple(self.tasks.values())
         for task in tasks:
             task.cancel()

@@ -127,7 +127,7 @@ def available(store, package, package_key="", db=None):
     from .tenants import platform_group
 
     if not platform_group(store, package["target"], db):
-        raise Rejected("平台广告不能投递到独立经营者群")
+        raise Rejected("本BOT广告不能投递到独立经营者群")
     packages = store.get("packages", {}, db)
     current = (
         packages.get(package_key)

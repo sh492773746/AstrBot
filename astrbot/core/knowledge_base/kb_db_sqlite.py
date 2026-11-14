@@ -117,7 +117,7 @@ class KBSQLiteDatabase:
                 )
                 await session.execute(
                     text(
-                        "CREATE INDEX IF NOT EXISTS idx_doc_kb_id "
+                        "CREATE INDEX IF NOT EXISTS ix_kb_documents_kb_id "
                         "ON kb_documents(kb_id)",
                     ),
                 )
@@ -149,13 +149,13 @@ class KBSQLiteDatabase:
                 )
                 await session.execute(
                     text(
-                        "CREATE INDEX IF NOT EXISTS idx_media_doc_id "
+                        "CREATE INDEX IF NOT EXISTS ix_kb_media_doc_id "
                         "ON kb_media(doc_id)",
                     ),
                 )
                 await session.execute(
                     text(
-                        "CREATE INDEX IF NOT EXISTS idx_media_kb_id ON kb_media(kb_id)",
+                        "CREATE INDEX IF NOT EXISTS ix_kb_media_kb_id ON kb_media(kb_id)",
                     ),
                 )
                 await session.execute(

@@ -263,6 +263,11 @@ async def action(ui, update, payload):
                         "UPDATE ad_operations SET status='rolled_back' WHERE id=?",
                         (row["id"],),
                     )
+                    if data.get("revision"):
+                        db.execute(
+                            "UPDATE merchant_revisions SET status='rejected' WHERE id=? AND operation=?",
+                            (data["revision"], row["id"]),
+                        )
                     store.audit(db, uid, "ad_manual_restore_before", {"op": row["id"]})
             return await ui.render(
                 update, "已记录人工核查并恢复原状；未发布订单须重新审核。", back

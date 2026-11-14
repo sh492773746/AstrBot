@@ -786,7 +786,6 @@ async def test_guarded_pipeline_does_not_merge_unscoped_followups(
     capture = MagicMock(side_effect=AssertionError("must not merge private scopes"))
     monkeypatch.setattr(core, "try_capture_follow_up", capture)
     monkeypatch.setattr(core, "call_event_hook", AsyncMock(return_value=False))
-    monkeypatch.setattr(core, "build_main_agent", AsyncMock(return_value=None))
     stage = object.__new__(core.InternalAgentSubStage)
     stage.ctx = SimpleNamespace(plugin_manager=SimpleNamespace(context=plugin.context))
     stage.streaming_response = False

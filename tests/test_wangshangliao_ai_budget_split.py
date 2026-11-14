@@ -284,31 +284,52 @@ def test_legacy_migration_only_uses_recorded_period_not_current_plan(split):
     assert AIPlans(split.store).settings()["version"] == version + 1
 
 
-def test_trial_budget_private_notices_persist_without_notifying_paid(split):
+def test_retired_trial_notices_preserve_budget_and_paid_isolation(split):
     charge(split, "free", now=NOW)
     with split.store.connect(write=True) as db:
         db.execute("UPDATE ai_charges SET charged_micro=?", (20 * MICRO,))
-    notices = []
-    while pending := split.queue_notices(
-        "nim/1001", "1", "99", reason="trial_budget", now=NOW
-    ):
-        notices.extend(pending)
-        for notice in pending:
-            assert notice["principal"] == "nim/1001" and notice["uid"] == "1"
-            assert split.claim_notice(notice["id"])
-            split.finish_notice(notice["id"], "failed")
-    assert any("付费套餐不占此预算" in n["text"] for n in notices)
-    assert any(n["kind"] == "trial-site/2026-10/100" for n in notices)
+    state = split.snapshot("nim/1001", "1", now=NOW)
+    site = split.status()["site"]
+    assert site["trial_cost_micro"] == site["trial_limit_micro"] == 20 * MICRO
+    assert site["paid_cost_micro"] == 0
+    with split.store.connect() as db:
+        assert not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='ai_quota_notices'"
+        ).fetchone()
+        original = "\n".join(db.iterdump())
+    for name in ("queue_notices", "claim_notice", "finish_notice"):
+        assert not hasattr(split, name)
+    assert "notices" not in split.status()
+    assert split.snapshot("nim/1001", "1", now=NOW) == state
+    assert split.status()["site"] == site
+    with split.store.connect() as db:
+        assert "\n".join(db.iterdump()) == original
     reopened = AIPlans(split.store)
-    assert not reopened.queue_notices(
-        "nim/1001", "1", "99", reason="trial_budget", now=NOW
-    )
+    for name in ("queue_notices", "claim_notice", "finish_notice"):
+        assert not hasattr(reopened, name)
+    assert "notices" not in reopened.status()
+    assert reopened.snapshot("nim/1001", "1", now=NOW) == state
+    with pytest.raises(OpenError, match="trial_budget"):
+        charge(reopened, "free-denied", uid="", principal="nim/another", now=NOW)
     grant(reopened)
-    assert not any(
-        n["kind"].startswith("trial-site/")
-        for n in reopened.queue_notices("nim/1001", "1", "99", now=NOW)
-    )
+    charge(reopened, "paid", now=NOW + 6)
+    paid = reopened.snapshot("nim/1001", "1", now=NOW + 6)
+    site = reopened.status()["site"]
+    assert paid["tier"] == "plus" and paid["used"] == 2
+    assert site["trial_cost_micro"] == 20 * MICRO
+    assert 0 < site["paid_cost_micro"] == paid["cost_micro"] < MICRO
+    assert site["limit_micro"] == 20 * MICRO + 93_800_000
     assert "免费试用全站每月共20元" in reopened.describe()
+    with reopened.store.connect() as db:
+        assert not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='ai_quota_notices'"
+        ).fetchone()
+        assert [
+            tuple(row)
+            for row in db.execute(
+                "SELECT request,budget_kind FROM ai_charges ORDER BY request"
+            )
+        ] == [("free", "trial"), ("paid", "paid")]
 
 
 @pytest.mark.asyncio

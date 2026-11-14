@@ -1,12 +1,13 @@
 """Validated group directory with explicit permission evidence."""
 
+import asyncio
 import time
 
 from .wire import ProtocolError
 
 
 async def muted_member_ids(
-    adapter, group: str, *, authorize=None, expected_member=None
+    adapter, group: str, *, authorize=None, expected_member=None, expected_members=None
 ) -> set[str]:
     """Read the current native mute list without inferring historical state.
 
@@ -15,6 +16,7 @@ async def muted_member_ids(
         group: Positive business group identity.
         authorize: Synchronous account and management guard.
         expected_member: Optional business/transport identity pair fixed by preview.
+        expected_members: Optional identities bound to one read-only group snapshot.
 
     Returns:
         Unique business identities currently muted by the platform.
@@ -46,6 +48,13 @@ async def muted_member_ids(
         != 1
     ):
         raise ProtocolError("mute_list_identity")
+    if expected_members is not None:
+        identities = {
+            str(row.get("userId")): str(row.get("nimId", ""))
+            for row in roster.get("groupMemberInfo", [])
+        }
+        if any(identities.get(uid) != peer for uid, peer in expected_members.items()):
+            raise ProtocolError("mute_list_identity")
     data = await nim.get_team_muted_members(str(team))
     if authorize is not None:
         authorize()
@@ -169,6 +178,7 @@ async def group_directory(client, account: str) -> dict:
         ProtocolError: If the group directory cannot be decoded or authenticated.
     """
     data = await client.request("/v1/group/get-group-list", {"v": "0"})
+    role_deadline = time.monotonic() + 8
     if not isinstance(data, dict) or any(
         not isinstance(data.get(k), list) for k in ("owner", "member")
     ):
@@ -215,8 +225,15 @@ async def group_directory(client, account: str) -> dict:
     for identity, group in groups.items():
         if group["role"] != "unknown" or group["role_reason"] == "role_conflict":
             continue
+        remaining = role_deadline - time.monotonic()
+        if remaining <= 0:
+            group["role_reason"] = "role_resolution_deferred"
+            continue
         try:
-            page = await member_directory(client, identity, require_mapping=False)
+            page = await asyncio.wait_for(
+                member_directory(client, identity, require_mapping=False),
+                timeout=remaining,
+            )
             for member in page["groupMemberInfo"]:
                 if not isinstance(member, dict) or str(member.get("userId")) != account:
                     continue
@@ -268,6 +285,8 @@ async def group_directory(client, account: str) -> dict:
                     "member_record" if group["role"] != "unknown" else "unavailable"
                 )
                 break
+        except TimeoutError:
+            group["role_reason"] = "member_request_timeout"
         except ProtocolError as exc:
             group["role_reason"] = "member_request_failed"
             if str(exc) in {

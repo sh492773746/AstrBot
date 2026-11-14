@@ -1,54 +1,24 @@
 # Native Wangshangliao Adapter
 
-Updated October 20, 2026. Start with the [beginner guide](wangshangliao-start.md).
+## Groups And WebUI Only
+
+This source batch removes all private-chat menus/group selection, friend
+automation/welcomes, personal knowledge, dedicated support, private AI/admin
+guidance, finance chat and image intake. Retain historical conversations,
+knowledge, ledgers and audits. Verified native group mention/reply list controls,
+group rules and WebUI rules, images, activities and Invitation Settlement remain.
+Ordinary group administrators gain no global Dashboard access; existing
+authorized operators maintain images and finance.
+See the [old-to-new mapping](wangshangliao-start.md#current-entrances-groups-and-webui)
+and [architecture/permissions](wangshangliao-architecture-permissions.md).
+This batch is not deployed; mute-first and raid changes await loading and live
+acceptance. Raid defense defaults off.
+
+Adapter reference previously calibrated October 20, 2026. Start with the [beginner guide](wangshangliao-start.md).
 The [documentation index](../../wangshangliao.md) links the complete Chinese command,
 operations and acceptance references.
 
-See the [migration runbook](wangshangliao-migration.md) for the adapter/plugin
-configuration split, entry-point mapping, backup and rollout checks.
-See [current architecture and permissions](wangshangliao-architecture-permissions.md)
-for integrated public mode. `open_service.py` owns inviter activation, group grants
-and read-only AI. All chat AI tools are retired; group AI defaults off and requires
-per-group opt-in. Native @, autonomous participation and idle topics all use the
-account/group's group profile, never the private consultation persona. They share
-a group persona, not members' mention histories. Group output is plain text without
-`【群聊AI】` or `【客服咨询】` prefixes; private read-only AI is unchanged.
-With the user's authorization, these mention-routing, per-member history and
-prefix-removal changes were loaded by a full `astrbot.service` restart on
-October 20, 2026 at 09:47:09 UTC (17:47:09 Beijing), not a plugin reload.
-New management labels are deployed. Group `1516387` now has group-AI version5
-with `enabled/mentions/autonomous/idle` all `false`. The earlier 15:47:56 Beijing
-autonomous-reply evidence is historical, not current enablement or new-version real-group acceptance.
-Ordinary chat becomes model input
-only with explicit autonomous opt-in: at most12 messages, held in memory for120s,
-without archiving bystander messages or the candidate batch as AI dialogue.
-Actual consultations and delivered group replies use AstrBot's native conversation
-manager. Private `/chat` enters consultation; both modes share the
-hard-budget gate. Dashboard may grant daily increases to current managers only.
-
 ### Native Conversations, Statistics And Traces
-
-Actual AI exchanges appear under **Data & Logs → Conversations**, filterable by
-robot ID and private/group message type. Private consultation, group @ replies
-and autonomous chat have separate native origins and link model statistics to
-their conversation IDs. Mentions use the new key
-`platform:GroupMessage:account/group/wsl-ai/account/group/mention/verifiedUid/peer`,
-loading only that verified sender's bounded configured history. Members, groups,
-accounts and private chats never share it; old group-consultation history is neither
-migrated nor reused. Autonomous/idle origins retain `/wsl-ai/account/group`,
-and autonomous candidate buffers are unchanged. Traces contain metadata, not prompts or credentials.
-Only the actual question/selected target and delivered answer are recorded:
-no system prompts, retrieved knowledge, tools, finance inputs, fixed commands,
-or entire bystander batches. A silent decision records model usage, not a fake reply.
-Private histories keep the configured number of turns (one exchange if context
-is disabled); native group records are bounded to at most 20 exchanges. Mention
-model context is further limited by the group profile; zero excludes prior exchanges.
-The native dashboard owns viewing, deletion and export. A pre-write check skips
-outdated snapshots when it detects deleted, switched or edited records.
-`/exit`, expiry and settlement entry end active consultation. The next `/chat`
-starts a new native conversation and never reloads the exited context. Existing
-dashboard records remain until deleted there. Old plugin temporary histories
-are not imported and no model request is made just to populate an empty page.
 
 AstrBot owns configurations, personas, provider credentials, Chinese retrieval
 tokenization, technical logs, conversations, statistics and traces. Domain code
@@ -57,36 +27,14 @@ financial transactions and authorization/receipts for fixed mute schedules;
 these must not become arbitrary native agent jobs. Recording failures emit a
 sanitized AstrBot warning without retrying model requests or replies.
 
-The independent [invitation cashback cashier](wangshangliao-cashback.md) registers
-manual payments separately from points and lotteries, and starts disabled.
-Existing dashboard and chat entry points remain unchanged.
-Group invitation queries concern activity statistics; private `我的邀请` reads
-the verified sender's cash records without exposing them to AI. When points rewards are not enabled, the reply
-shows `每人奖励：管理员未设置奖励` instead of a separate status line.
-
 ## Management Navigation
 
 The dashboard uses two levels: a category followed by a feature tab. Both rows
 scroll horizontally on narrow screens instead of forming a tall grid.
 
-| Category | Feature Tabs |
-| --- | --- |
-| Groups | Activation & Rules, Group Grants, Friend Requests |
-| AI | Customer Service, Admin Guidance, Group AI, Plans & Quotas, Model & Budget |
-| Activities & Finance | Activities, Invitation Settlement, Settlement Grants |
-| Runtime & Logs | Service Controls, Schedules, Audit, Operation Logs, Management Audit |
-| Help | Commands, Chat examples, Architecture, Permissions |
-
-Old-to-new mapping: rules previously inside **Group Management / Open Service**
-remain under **Groups → Activation & Rules**. Private AI, group AI, plans and
-budget settings move to the corresponding **AI** feature tabs. Financial grants
-move to **Activities & Finance → Settlement Grants**; the service pause switch and
-site call limit move to **Runtime & Logs → Service Controls**. Other former tabs
-are grouped as listed. Legacy Groups & Runtime and Moderation remain under Groups.
-
 Each category remembers its last feature during the current page session.
 Switching tabs never submits changes. Rule and AI drafts survive navigation until
-an explicit save, refresh or group change. Plans and financial-grant panels mount
+an explicit save, refresh or group change. Plan panels mount
 on first visit and retain their inputs on return. Account/group authorization,
 chat commands, the separate cashier, formal-group switches and existing ledger
 data are unchanged.
@@ -141,14 +89,13 @@ not live acceptance.
 
 ## Login And Identity
 
-Create/select a bot, complete password/SMS login and device verification,
-and save within the ten-minute login transaction. Public group activation uses
-group control, not login-page selection as an authorization shortcut. Authentication, saved configuration and
-an online NIM connection are separate states. Empty enabled groups disable group handling,
-not necessarily private chat. Disable-and-save retains recovery credentials; logout removes
-them but not ledgers. Re-login creates temporary authentication first; successful
-save replaces the old connection for the same account. A different account needs
-a new instance. Stop old automation before migration.
+| Status | Interpretation |
+| --- | --- |
+| Authenticated but not saved | Save, then verify the messaging connection separately |
+| Runtime status unavailable | Unverified, not stopped or zero groups |
+| Group list or member permissions unavailable | Check business authentication and native authority; never substitute stale membership |
+| Business paused or zero enabled groups | Inspect separate runtime gates and eligible group scope; zero groups alone does not imply pause |
+| Historical errors | Retained historical records, not proof of a current outage; never raw provider responses |
 
 With official 3.7.3 authentication, enter the secondary security code only in the
 authenticated Dashboard field when the provider requests it. It is never saved
@@ -185,20 +132,6 @@ or group counts stay unavailable rather than becoming "stopped" or zero.
 The error-details entry labels historical records explicitly: records can remain
 after recovery and do not establish a current outage. Unknown errors use fixed
 messages, never raw provider responses.
-
-| State or notice | Meaning and next step |
-| --- | --- |
-| Authenticated; save login | Authentication only; save to connect instead of signing in again |
-| Account online | Messaging is connected; group features still need separate authorization |
-| Connecting or reconnecting | Recovery is attempted at intervals; not evidence of bad credentials or a ban; group actions wait |
-| Platform rate limit | Respect the provider wait; avoid repeated login or refresh attempts |
-| Messaging stopped | No active connection; disabling keeps the login; enable and save as needed, without deleting the instance |
-| Session expired | Sign in again; ordinary network interruptions are not labelled session expiry |
-| Security verification, lock or unbound phone | Follow the specific official-app instructions; enter codes only in the Dashboard, never chat |
-| Sign-in conflict or duplicate instance | Check other devices and duplicate instances before signing in again |
-| Group list or member permissions unavailable | Not proof of logout; refresh and verify; related sensitive group actions pause without deleting settings |
-| Business paused or zero enabled groups | No automated group processing; login, private messaging and historical ledger remain separate |
-| Connection or business status unavailable | No verified state yet; do not infer failed login, a ban or empty configuration |
 
 Business pause follows the instance's runtime gate, not an empty operating-group
 list or an offline connection. Operating counts exclude inactive, absent, paused,
@@ -271,12 +204,6 @@ Live traffic still includes envelopes without authentication fields. They remain
 rejected and cannot reach moderation, AI or settlement. Full compatibility is
 not claimed; further support requires trustworthy format evidence.
 
-Friend approval reconciliation reads current applications and resolves uncertain
-attempts before a version-checked resume. Failed reads or unresolved attempts keep
-the hold, without resubmitting approval. Login recovery does not migrate cashback
-collection, grant financial authority, enable production groups or confirm a
-provider hard budget.
-
 Instance IDs, business UIDs, display accounts, business group IDs, display group numbers and
 NIM IDs differ. Administrators and native `At.qq` use business UIDs; APIs/grants use business
 group IDs. Nicknames and typed mentions do not identify targets. Incomplete/inconsistent
@@ -287,8 +214,10 @@ marked "Not enabled" and unavailable for actions. Group-name refreshes are cache
 up to 30 seconds. Select and save groups under Groups & Runtime before processing;
 joining alone grants no moderation, proactive sending or cashback authority.
 
-The legacy default keyword file contains 36 instance-wide rules. Newly activated
-public groups start with their own empty keyword list, not that production list.
+The default keyword file contains 47 rules for legacy instance settings and the
+versioned first-activation template. Public groups use their own persisted lists;
+updating the file never overwrites existing custom or explicitly cleared lists,
+or enables an inactive group.
 Broad words, short numbers and domain suffixes require advertising context;
 domain suffixes must match an actual hostname. Reports, quotations, ordinary numbers
 and lone links do not directly trigger sanctions. Explicitly cleared lists stay empty.
@@ -373,91 +302,7 @@ command/reply cleanup, author recalls, other-member recalls and unverified sourc
 distinct. A manual recall from the official app under the bot account is not automatically
 reported as an automated sanction. Notifications do not replace phone-screen verification.
 
-```text
-BOT_INSTANCE:GroupMessage:BOT_BUSINESS_UID/GROUP_BUSINESS_ID
-BOT_INSTANCE:FriendMessage:BOT_BUSINESS_UID/private/PEER_BUSINESS_UID/BASE64URL_NIM_ID
-```
-
-Choose known authenticated conversations, never fabricate UMO. Local known peers are not
-a complete cloud directory. Current group AI is a separate, off-by-default
-per-group option, never a generic framework route. Autonomous opt-in adds only
-bounded, short-lived recent group context, not persistent observation history.
-Fixed commands match the entire message without `/`, `群管` or a mention.
-Group text quotes now bind to exact authenticated inbox evidence; recalled or
-changed references fail closed. Private quote decoration still degrades to text.
-Native quote rendering remains subject to controlled phone verification. Media transport
-is outside current capability.
-
-## Public Commands And AI
-
-Group and private chats share fixed commands with an optional `管理 ` prefix.
-Group commands bind the current group; private `群列表` and `选择群 1` select
-only groups explicitly granted to the caller under the receiving bot account.
-Send `菜单` for numbered navigation, `0` to go back and `取消` to exit.
-Menus grant no authority. See the [command tree](wangshangliao-command-tree.md)
-and [current permissions](wangshangliao-architecture-permissions.md).
-
-Only private `/chat` enters read-only consultation; `/exit` ends it immediately.
-Native group @, autonomous replies and idle topics resolve the group profile under
-the per-group gate. `mentions` remains independent of `autonomous`; ordinary
-messages require separate autonomous opt-in. All management and own-invitation
-model tools are retired, and the old configurator only refuses execution.
-Public mode disables semantic model review and blocks public models until
-supplier hard-budget enforcement is verified. Historical multi-route/tool
-descriptions are not current setup instructions.
-
-The former **Private Consultation** tab is now **Customer Service**. The independent
-**Admin Guidance** profile enables verified scoped routing after its first save.
-Group managers, cashiers and financial administrators receive only their own
-scopes' guidance; models retain no operational tools. See
-[administrator routing](wangshangliao-start.md#independent-administrator-guidance).
-Native group @, autonomous replies and idle topics still use **Group AI**.
-Four numeric controls are now low/medium/high selectors, with an inheritance option
-and unchanged legacy custom values. See the
-[profile preset table](wangshangliao-architecture-permissions.md#model-and-persona-sources).
-
-Private `我的邀请` lists enabled cashback group names and numbered sender-only
-records without UIDs or other users' data. Business grants bind platform,
-account and group. `admins_id` provides verified AI-count exemptions, not public
-group authority. Dashboard login, chat grants, native roles, action grants and
-financial identity remain separate.
-
-## Dashboard Friend Requests
-
-Navigation change: **Friend Cleanup** is removed. Automatic acceptance now lives under
-the AstrBot Wangshangliao plugin management page → **Friend Requests**.
-All friend deletion UI, API routes, execution code and the SDK deletion wrapper are removed.
-Old pages and direct requests cannot delete friends. Historical audits, conversations,
-invitation records and group memberships are retained.
-**Automatically Accept Friend Requests** is stored separately for
-each bot account and enabled by default. An explicit disabled setting survives reloads.
-Only authenticated incoming requests in the provider's pending state are eligible;
-receiving a private message does not create a friendship.
-Each scan accepts at most one request, with at least three seconds between its list,
-acceptance and verification requests. Acceptance actions have a persistent 30-second cooldown.
-Offline or paused business service stops processing. Rejection or an uncertain result
-halts acceptance without automatic retries; toggling the setting does not clear that hold.
-Acceptance grants no administrator permissions. Neither chat users nor AI tools can
-change this setting or operate friendships. Pacing cannot guarantee avoidance of provider
-restrictions; verify real incoming requests against both logs and the mobile client.
-
-![Friend request settings](../../zh/platform/images/wangshangliao-friend-approval.png)
-
 ## Member Card Normalization
-
-In the bot's moderation capabilities, choose a group, grant ordinary member card
-renaming, set the optional group card suffix, enable automatic normalization and save.
-The plugin page provides the same per-group suffix. `moderation.card_suffix` maps group
-IDs to text, defaults to empty and allows up to 128 UTF-8 bytes without line breaks or
-control characters. The resulting card uses the first two complete Unicode graphemes
-of the current group card (account name when unset), followed by the suffix. A one-character
-name is preserved; only an empty name uses a persistent generated fallback.
-Repeated scans do not append the suffix again. Changing a suffix invalidates older batch
-previews and reprocesses previously handled members for that group. Explicit single-member
-custom cards do not receive this suffix. Owners, administrators and connected bots remain
-protected. Error `moderation_permission` means saved bot/group grants or upstream administrator
-permissions are missing, not a server crash. Natural-language suffix settings still require
-an authenticated private preview and separate confirmation.
 
 Saved `ai_routes.groups` maps business group IDs directly to provider-ID **strings**.
 `customer_provider_id` is the page/API input name, not a nested saved-group object.
@@ -493,28 +338,6 @@ credentials. Messages persist before ACK; control, fixed commands and ordinary
 messages use separate slots, bounded backlogs and same-session ordering.
 Current capacities are listed in [maintenance](../../wangshangliao-maintenance.md).
 
-Group commands and inputs in the sender's own active menu are scheduled for recall
-twelve seconds after receipt. Every accepted command-reply segment expires after twelve
-seconds, including menus, activation, ranking, lottery signup and status replies.
-Legacy keep-reply flags no longer exempt group commands. Original commands require native
-group-management permission, the `recall` grant and exact authenticated inbox routing.
-Platform rejection is recorded, never reported as success. Cleanup does not count as a
-violation or undo an already submitted command.
-
-The self-recall worker wakes for committed jobs and their nearest deadlines,
-with a 30-second empty-queue fallback instead of half-second database polling.
-New commits wake it immediately; account, group and permission checks still apply
-at execution, and unknown outcomes are never replayed. Routine incoming recall
-observations use AstrBot DEBUG logs. Action receipts, warnings and errors retain
-their levels; disabled debug records do not compute identity hashes.
-Ordinary conversation, numbers outside the sender's menu, private messages, ordinary AI,
-announcement bodies and proactive activity notices are unaffected. Moderation warnings
-have separate receipt-backed twelve-second recall in the loaded fix above;
-this deployment sent no real warning and does not establish real-group effect acceptance.
-Jobs persist; over-five-minute overdue jobs expire;
-uncertain attempts are not retried. Twelve seconds is the scheduling deadline, not a hard
-real-time guarantee during disconnection, backlog or external platform delays.
-
 AI output becomes plain text, preserving links/native mentions and disabling text-to-image
 for those results. Paired `think/thinking/thought/analysis` blocks, leading unclosed tags and
 orphan closing tags are filtered. This does not cover every streaming path/unlabeled reasoning
@@ -522,75 +345,6 @@ and may leave an empty answer. Limited credential/contact masking is not DLP or 
 sanitization.
 
 ## Testing And Troubleshooting
-
-Managed bots, including disabled instances, are excluded by default. Configure a window on
-the **receiving bot**, with the sender as source. Saving scope does not start the window.
-Explicitly activate it; at most300 seconds/ten inbound events, in-memory, invalid after
-restart/stop/account replacement. Reverse traffic remains excluded. Private AI, private/group
-commands and group rules are separate; group rules use `WSL_TEST_` in a specified group.
-Windows grant no authority and do not replace ordinary external-account acceptance.
-
-When all three controlled accounts are already online, use
-`check_wsl_three_live.py` without opening another NIM connection. The runner checks
-the current native roster and does not change native roles by default; assign Dahu
-as administrator in the official App first. Explicit `--manage-test-role` permits
-temporary grant/restore under the same persistent daily limit. Cached roles cannot
-replace native verification, and counters must not be reset to resume writes.
-The dashboard-only
-`test_probe` action sends one command or test-marker message from the fixed test
-account to group1459282. It requires the receiver's active window, the exact
-three-member roster and at least three seconds between messages. Unknown outcomes
-are never replayed. No arbitrary group, method or URL is accepted; the sender's
-normal group business remains disabled. Restore temporary native roles afterwards;
-chat finance continues to use the explicitly labeled separate test ledger.
-Within that same window, the inactive test tenant may retain at most twenty native
-text replies from the fixed receiver in1459282 as ignored-message evidence. These
-observations preserve the sender and native mentions without entering commands,
-models or group-management execution.
-They retain upstream timestamps and the test-send correlation, reject pre-probe
-history, and use a separate transaction that rechecks authority after database
-waits and immediately before commit. Revocation or cancellation rolls back only
-that witness, without affecting ordinary ingress, outbox receipts or other writes.
-Acceptance additionally
-requires matching the exact native outbox receipt for the operation.
-The dashboard-only `test_guides` action replays exactly the two reviewed guides
-to1459282 within that original window, consuming two outbound test slots and
-retaining the three-second native send interval. It accepts only a bounded test
-operation ID, never an image path, URL or different group. Window replacement,
-pause, departure or authorization-version changes stop pending sends.
-`check_wsl_three_guides_live.py --apply` correlates independent native image ingress,
-outbox receipts and original/thumbnail digests. It neither resets first-welcome
-markers nor counts replay as first-friend acceptance or official-phone display proof.
-Managed-account rule protection is bypassed only for an exact message already
-admitted as `group_rules` by the original live window in1459282.
-Closure, expiry, identity or policy changes invalidate this narrow authority;
-it grants no manual member-operation permission.
-Random per-window evidence generations isolate flood accumulation and recalled
-messages. Database and send waits retain the original guard; closing or replacing
-the window cannot authorize old sanctions under a new window.
-Completed flood-batch mute receipts are also isolated per test window. Further
-messages within the same window add recalls without another mute; ordinary
-production burst coalescing is unchanged.
-Since all three accounts are managed bots, lottery evidence covers managed-entrant
-refusal, an empty draw and native delivery only. It neither disables participation
-protection nor proves ordinary member enrollment or winner delivery.
-The explicit `--phase lottery-member` alternative admits the fixed test entrant
-only in the original live window after verifying the exact owner/robot-admin/member
-roster. Dashboard-only `test_lottery` may start, draw or cancel that window's one
-marked test activity; it does not modify saved reward settings or pay prizes.
-Entrant messages use actual ingress, while owner start/draw are labeled
-`dashboard-test`, not claimed as native owner-chat evidence. Closure, replacement,
-revocation or pause stops pending publication; unknown outcomes are not replayed.
-`check_wsl_three_card_live.py` is a separately confirmed isolated card test:
-the same fixed roster, at most one rename and one restoration, private test storage,
-no production card-job writes and no additional NIM connection. Production
-managed-target protection remains intact; this is not chat-entry acceptance.
-
-For silence check receiving direction, saved replies, native mentions, `ignored_bot`, window
-and effective profile. For private denial distinguish fixed commands from consultation.
-For blank pages check generated assets, browser errors and login proxies; do not loosen iframe
-sandbox. Missing activity/schedule routes require matching running backend/plugin/page versions.
-For unknown actions/backlog inspect durable results, do not delete databases or replay actions.
 
 The current formatting regressions pass. If native-mention spacing or ranking line breaks
 still differ, inspect the actual native mentions and message parts; offline results do not

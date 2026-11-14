@@ -147,7 +147,7 @@ class CommunityLogs:
             "community_case_closed": "举报处理",
             "community_violation": "违规记录新增",
             "community_revoke": "警告撤销",
-            "ad_killer_policy": "广告杀手规则变更",
+            "ad_killer_policy": "广告执行规则变更",
             "ad_killer_false_positive": "误判标记",
             "join_verify_policy": "入群验证配置变更",
             "join_verify_release": "入群验证放行",
@@ -208,7 +208,11 @@ class CommunityLogs:
                 if not current["enabled"] or current["channel"] != row["destination"]:
                     raise Rejected("destination_changed")
         except Exception as exc:
-            blocked = isinstance(exc, (Rejected, Forbidden, BadRequest))
+            from .group_authority import VerificationUnavailable
+
+            blocked = isinstance(
+                exc, (Rejected, Forbidden, BadRequest)
+            ) and not isinstance(exc, VerificationUnavailable)
             self.store.db.execute(
                 "UPDATE cm_delivery SET status=?,next=?,attempts=attempts+1,error=? WHERE id=?",
                 (

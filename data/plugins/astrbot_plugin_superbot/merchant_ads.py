@@ -49,6 +49,15 @@ def migrate(store):
         CREATE INDEX IF NOT EXISTS merchant_event_address ON merchant_events(address,status,stamp);
         CREATE TABLE IF NOT EXISTS payment_claims(
             tx TEXT PRIMARY KEY,business TEXT NOT NULL,op TEXT NOT NULL,at REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS merchant_test_deliveries(
+            id TEXT PRIMARY KEY,actor TEXT NOT NULL,chat TEXT NOT NULL,created REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS merchant_revisions(
+            id TEXT PRIMARY KEY,ad TEXT NOT NULL,uid TEXT NOT NULL,body TEXT NOT NULL,
+            contact TEXT NOT NULL,order_version INTEGER NOT NULL,status TEXT NOT NULL,
+            created REAL NOT NULL,reviewer TEXT NOT NULL DEFAULT '',operation TEXT NOT NULL DEFAULT '');
+        CREATE UNIQUE INDEX IF NOT EXISTS merchant_revision_pending
+            ON merchant_revisions(ad) WHERE status IN ('pending','applying');
+        CREATE INDEX IF NOT EXISTS merchant_revision_order ON merchant_revisions(ad,created);
     """)
 
     if "backfill" not in {
@@ -76,6 +85,16 @@ def authorized(store, order, db=None):
     invoice = db.execute(
         "SELECT * FROM merchant_invoices WHERE id=?", (order["id"],)
     ).fetchone()
+    test_actor = db.execute(
+        "SELECT actor FROM merchant_test_deliveries WHERE id=? AND chat=?",
+        (order["id"], package["target"]),
+    ).fetchone()
+    test = (
+        order["payment_source"] == "test"
+        and test_enabled(store, package["target"], db)
+        and test_actor
+        and store.is_superadmin(test_actor["actor"], db)
+    )
     return bool(
         owner
         and owner["tenant"] == order["tenant"] != PLATFORM
@@ -83,15 +102,35 @@ def authorized(store, order, db=None):
         and local_config(store, package["target"], "ads_enabled", False, db)
         and order["approved"]
         and order["paid"]
-        and order["approved_by"] in {owner["owner"], store.owner}
-        and invoice
-        and invoice["tenant"] == order["tenant"]
-        and invoice["status"] == "paid"
-        and invoice["tx"]
-        and db.execute(
-            "SELECT 1 FROM payment_claims WHERE tx=? AND business='merchant' AND op=?",
-            (invoice["tx"], order["id"]),
-        ).fetchone()
+        and (
+            order["approved_by"] == owner["owner"]
+            or db.execute(
+                "SELECT 1 FROM audit WHERE actor=? AND "
+                "((action='merchant_invoice' AND json_extract(data,'$.id')=?) OR "
+                "(action='merchant_revision_apply' AND json_extract(data,'$.ad')=?)) LIMIT 1",
+                (order["approved_by"], order["id"], order["id"]),
+            ).fetchone()
+        )
+        and (
+            test
+            or (
+                invoice
+                and invoice["tenant"] == order["tenant"]
+                and invoice["status"] == "paid"
+                and invoice["tx"]
+                and db.execute(
+                    "SELECT 1 FROM payment_claims WHERE tx=? AND business='merchant' AND op=?",
+                    (invoice["tx"], order["id"]),
+                ).fetchone()
+            )
+        )
+    )
+
+
+def test_enabled(store, chat, db=None):
+    """Return whether the platform's temporary group test switch is active."""
+    return (
+        store.get("merchant_delivery_tests", {}, db).get(str(chat), 0) > store.clock()
     )
 
 
@@ -103,6 +142,77 @@ class MerchantAds:
         migrate(self.store)
         self.scan_lock = asyncio.Lock()
 
+    def test_switch(self, uid, chat, enabled):
+        """Enable payment-free delivery for one group for at most one hour."""
+        if not self.store.is_superadmin(uid) or type(enabled) is not bool:
+            raise Rejected("测试投递仅超管可设置")
+        with self.store.tx() as db:
+            owner = binding(self.store, chat, db)
+            if not owner or owner["tenant"] == PLATFORM or owner["owner"] != str(uid):
+                raise Rejected("请选择独立经营群")
+            config = self.store.get("merchant_delivery_tests", {}, db)
+            config[str(chat)] = self.store.clock() + 3600 if enabled else 0
+            self.store.put(db, "merchant_delivery_tests", config)
+            self.store.audit(
+                db, uid, "merchant_test_switch", {"chat": str(chat), "enabled": enabled}
+            )
+
+    def test_publish(self, uid, key, expected):
+        """Queue a clearly labelled test order without creating a payment claim."""
+        if not self.store.is_superadmin(uid):
+            raise Rejected("测试投递仅超管可执行")
+        with self.store.tx() as db:
+            row = self.order(uid, key, owner=True, db=db)
+            package = json.loads(row["package"])
+            chat = package["target"]
+            if binding(self.store, chat, db)["owner"] != str(uid):
+                raise Rejected("仅本群经营群主且具备总控权限可测试投递")
+            if not test_enabled(self.store, chat, db):
+                raise Rejected("本群测试开关未开启或已到期")
+            if db.execute(
+                "SELECT 1 FROM merchant_test_deliveries WHERE id=?", (key,)
+            ).fetchone():
+                return
+            if row["version"] != expected or row["status"] != "merchant_review":
+                raise Rejected("订单已变化；已有付款单不能绕过付款")
+            current = db.execute(
+                "SELECT config FROM merchant_packages WHERE id=?", (row["package_key"],)
+            ).fetchone()
+            if (
+                not current
+                or not json.loads(current[0])["enabled"]
+                or not local_config(self.store, chat, "ads_enabled", False, db)
+                or not self.store.get("modules", {}, db).get("ads")
+                or not db.execute(
+                    "SELECT 1 FROM mod_groups WHERE chat=? AND enabled=1", (chat,)
+                ).fetchone()
+            ):
+                raise Rejected("本群广告功能或广告位已关闭")
+            occupied = db.execute(
+                "SELECT COUNT(*) FROM ads a LEFT JOIN merchant_invoices i ON i.id=a.id "
+                "WHERE json_extract(a.package,'$.target')=? AND "
+                "((a.status IN ('active','published','sending','sent','pinning','review','pending') "
+                "AND a.approved=1 AND a.paid=1 AND (a.expires IS NULL OR a.expires>?)) "
+                "OR (i.status='pending' AND i.expires>?))",
+                (chat, self.store.clock(), self.store.clock()),
+            ).fetchone()[0]
+            if occupied >= min(package["slots"], json.loads(current[0])["slots"]):
+                raise Rejected("广告位没有空位，不能测试投递")
+            db.execute(
+                "INSERT INTO merchant_test_deliveries VALUES(?,?,?,?)",
+                (key, str(uid), chat, self.store.clock()),
+            )
+            db.execute(
+                "UPDATE ads SET body=?,approved=1,approved_by=?,paid=1,paid_by=?,payment_source='test',status='pending' WHERE id=?",
+                ("【测试广告·未付款】\n" + row["body"], str(uid), str(uid), key),
+            )
+            self.store.audit(
+                db,
+                uid,
+                "merchant_test_delivery",
+                {"id": key, "chat": chat, "real_payment": False},
+            )
+
     def order(self, uid, key, *, owner=False, db=None):
         db = db or self.store.db
         row = db.execute(
@@ -111,18 +221,10 @@ class MerchantAds:
         if not row:
             raise Rejected("订单不存在")
         chat = json.loads(row["package"])["target"]
-        business = db.execute(
-            "SELECT owner FROM tenants WHERE id=?", (row["tenant"],)
-        ).fetchone()
-        if not business or (
-            str(uid) not in {self.store.owner, business["owner"]}
-            and (owner or row["uid"] != str(uid))
-        ):
-            raise Rejected("没有此经营主体订单的权限")
-        if owner:
+        if owner or row["uid"] != str(uid):
             current = binding(self.store, chat, db)
             if not current or current["tenant"] != row["tenant"]:
-                raise Rejected("群归属已变化，历史订单须由平台核查")
+                raise Rejected("群归属已变化，历史订单须由本BOT核查")
             self.store.require(uid, "ads", db, chat=chat)
         return row
 
@@ -136,13 +238,178 @@ class MerchantAds:
             .fetchone()
         )
 
+    def revision(self, uid, key, body, contact, expected, op):
+        """Save a paid-order amendment without changing approved content.
+
+        Args:
+            uid: Advertiser identity.
+            key: Original order identity.
+            body: Proposed copy.
+            contact: Proposed contact.
+            expected: Current order version.
+            op: Idempotent submission identity.
+        """
+        if not 1 <= len(body) <= 2200 or not 1 <= len(contact) <= 200:
+            raise Rejected("正文1—2200字，联系方式1—200字。")
+        with self.store.tx() as db:
+            row = self.order(uid, key, db=db)
+            if str(uid) != row["uid"]:
+                raise Rejected("仅广告提交人可申请修改。")
+            if row["payment_source"] == "test" and not body.startswith(
+                "【测试广告·未付款】"
+            ):
+                body = "【测试广告·未付款】\n" + body
+                if len(body) > 2200:
+                    raise Rejected("正文加测试标识后超过2200字，请缩短。")
+            existing = db.execute(
+                "SELECT * FROM merchant_revisions WHERE id=?", (op,)
+            ).fetchone()
+            if existing:
+                if (
+                    existing["ad"],
+                    existing["uid"],
+                    existing["body"],
+                    existing["contact"],
+                ) != (key, str(uid), body, contact):
+                    raise Rejected("修改操作身份冲突。")
+                return op
+            if (
+                not row["paid"]
+                or row["status"] not in {"pending", "active", "published"}
+                or row["version"] != expected
+            ):
+                raise Rejected("订单未付款、状态已变化或正在处理，请刷新订单。")
+            if row["expires"] and row["expires"] <= self.store.clock():
+                raise Rejected("广告已到期，不能修改。")
+            if db.execute(
+                "SELECT 1 FROM merchant_revisions WHERE ad=? AND status IN ('pending','applying')",
+                (key,),
+            ).fetchone():
+                raise Rejected("已有修改待审核或投递，请先处理；原广告保持不变。")
+            db.execute(
+                "INSERT INTO merchant_revisions(id,ad,uid,body,contact,order_version,status,created) VALUES(?,?,?,?,?,?,'pending',?)",
+                (op, key, str(uid), body, contact, expected, self.store.clock()),
+            )
+            self.store.audit(db, uid, "merchant_revision_submit", {"id": op, "ad": key})
+        return op
+
+    async def review_revision(self, uid, key, revision, approve):
+        """Review an amendment using the existing serialized publication journal.
+
+        Args:
+            uid: Scoped reviewer.
+            key: Original order identity.
+            revision: Immutable amendment identity.
+            approve: Whether to apply or reject the amendment.
+        """
+        from .ad_board import claim, execute, render
+
+        destination = self.store.db.execute(
+            "SELECT package FROM ads WHERE id=? AND tenant<>'platform'", (key,)
+        ).fetchone()
+        if not destination:
+            raise Rejected("订单不存在。")
+        chat = json.loads(destination["package"])["target"]
+        async with self.store.ad_locks.setdefault(chat, asyncio.Lock()):
+            await self.runtime.tenants.verify(
+                uid,
+                chat,
+                "ads",
+                "can_pin_messages"
+                if json.loads(destination["package"])["kind"] == "pinned"
+                else None,
+            )
+            row = self.order(uid, key, owner=True)
+            draft = self.store.db.execute(
+                "SELECT * FROM merchant_revisions WHERE id=? AND ad=?", (revision, key)
+            ).fetchone()
+            if not draft or draft["status"] != "pending":
+                raise Rejected("修改已处理，请刷新订单。")
+            if not approve:
+                with self.store.tx() as db:
+                    db.execute(
+                        "UPDATE merchant_revisions SET status='rejected',reviewer=? WHERE id=?",
+                        (str(uid), revision),
+                    )
+                    self.store.audit(
+                        db, uid, "merchant_revision_reject", {"id": revision, "ad": key}
+                    )
+                return
+            if (
+                row["version"] != draft["order_version"]
+                or not row["paid"]
+                or row["status"] not in {"pending", "active", "published"}
+            ):
+                raise Rejected("订单发生变化，请驳回此草稿后重新提交。")
+            if row["expires"] and row["expires"] <= self.store.clock():
+                raise Rejected("广告已到期，请驳回此草稿。")
+            if row["status"] == "pending":
+                with self.store.tx() as db:
+                    db.execute(
+                        "UPDATE ads SET body=?,contact=?,approved=1,approved_by=? WHERE id=?",
+                        (draft["body"], draft["contact"], str(uid), key),
+                    )
+                    db.execute(
+                        "UPDATE merchant_revisions SET status='applied',reviewer=? WHERE id=?",
+                        (str(uid), revision),
+                    )
+                    self.store.audit(
+                        db, uid, "merchant_revision_apply", {"id": revision, "ad": key}
+                    )
+                return
+            if not row["message"]:
+                raise Rejected("缺少已发布消息ID，请先核查。")
+            board = self.store.db.execute(
+                "SELECT * FROM ad_boards WHERE chat=? AND message=?",
+                (chat, row["message"]),
+            ).fetchone()
+            if board and board["state"] != "idle":
+                raise Rejected("广告栏正在处理或待核查。")
+            text = f"【广告】\n{draft['body']}"
+            if board:
+                rows = self.store.db.execute(
+                    "SELECT * FROM ads WHERE status='active' AND message=? AND json_extract(package,'$.target')=?",
+                    (row["message"], chat),
+                ).fetchall()
+                text = render(
+                    [
+                        {**dict(r), "body": draft["body"]}
+                        if r["id"] == key
+                        else dict(r)
+                        for r in rows
+                    ]
+                )
+            if len(text.encode("utf-16-le")) // 2 > 3900:
+                raise Rejected("修改后广告栏篇幅超限，请缩短正文。")
+            payload = {
+                "before": board["body"] if board else f"【广告】\n{row['body']}",
+                "after": text,
+                "pin": bool(board),
+                "revision": revision,
+                "reviewer": str(uid),
+                "changes": [
+                    {
+                        "id": key,
+                        "version": row["version"],
+                        "status": row["status"],
+                        "new": False,
+                        "body": draft["body"],
+                        "contact": draft["contact"],
+                    }
+                ],
+            }
+            op = claim(
+                self.store, chat, "board" if board else "edit", payload, row["message"]
+            )
+            await execute(self.runtime.ads, self.runtime.bot, op)
+
     def set_address(self, uid, chat, address, expected):
         address_hex(address)
         with self.store.tx() as db:
             self.store.require(uid, "ads", db, chat=chat)
             owner = binding(self.store, chat, db)
             if not owner or owner["tenant"] == PLATFORM:
-                raise Rejected("平台广告请使用原有收款设置")
+                raise Rejected("本BOT广告请使用原有收款设置")
             current = self.address(chat, db)
             if (current["version"] if current else 0) != expected:
                 raise Rejected("收款地址已变化，请重新预览确认")
@@ -153,7 +420,7 @@ class MerchantAds:
                     (address, owner["tenant"]),
                 ).fetchone()
             ):
-                raise Rejected("此地址已用于其他经营主体，请平台核查，不能直接共用。")
+                raise Rejected("此地址已用于其他经营主体，请本BOT核查，不能直接共用。")
             db.execute(
                 "INSERT INTO merchant_addresses(chat,version,tenant,address,created) VALUES(?,?,?,?,?)",
                 (str(chat), expected + 1, owner["tenant"], address, self.store.clock()),
@@ -194,7 +461,7 @@ class MerchantAds:
             self.store.require(uid, "ads", db, chat=chat)
             owner = binding(self.store, chat, db)
             if not owner or owner["tenant"] == PLATFORM:
-                raise Rejected("请使用平台广告位管理")
+                raise Rejected("请使用本BOT广告位管理")
             row = db.execute(
                 "SELECT * FROM merchant_packages WHERE id=?", (key,)
             ).fetchone()
@@ -248,6 +515,13 @@ class MerchantAds:
                 raise Rejected("广告位已变化，请重新选择")
             config = json.loads(package["config"])
             owner = binding(self.store, package["chat"], db)
+            if not self.address(package["chat"], db) and not (
+                self.store.is_superadmin(uid, db)
+                and owner
+                and owner["owner"] == str(uid)
+                and test_enabled(self.store, package["chat"], db)
+            ):
+                raise Rejected("该群未配置收款地址，不能提交普通广告订单")
             group = db.execute(
                 "SELECT enabled FROM mod_groups WHERE chat=?", (package["chat"],)
             ).fetchone()
@@ -268,7 +542,7 @@ class MerchantAds:
                 **config,
                 "currency": "USDT",
                 "target": package["chat"],
-                "payment": "审核通过后直付群主，平台不托管",
+                "payment": "审核通过后直付群主，本BOT不托管",
                 "_merchant": package["tenant"],
                 "_order": op,
             }
@@ -398,7 +672,7 @@ class MerchantAds:
                 (
                     "merchant-invoice/" + key,
                     row["uid"],
-                    f"广告审核已通过 · 群 {chat}\n订单 {key}\n请打开「广告投递 → 我的直付广告」核对金额、地址及有效期。过期请勿付款。",
+                    f"广告审核已通过 · 群 {chat}\n订单 {key}\n请通过本条通知的订单按钮核对金额、地址及有效期。过期请勿付款。",
                 ),
             )
             self.store.audit(

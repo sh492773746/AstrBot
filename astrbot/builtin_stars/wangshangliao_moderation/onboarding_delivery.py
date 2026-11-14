@@ -10,19 +10,16 @@ from astrbot.core.platform.sources.wangshangliao import wire
 from astrbot.core.platform.sources.wangshangliao.database import account_guard
 
 
-async def send_onboarding_text(
-    adapter, target, peer, key, text, authorize, *, private=True
-):
-    """Send one bounded welcome or activation reply on independently verified routing.
+async def send_onboarding_text(adapter, target, peer, key, text, authorize):
+    """Send one bounded group activation reply on independently verified routing.
 
     Args:
         adapter: Current native transport owned by the plugin.
-        target: Business UID or group ID from signed directory evidence.
-        peer: Independently verified NIM peer or team, never inferred from target.
-        key: Durable operation key for this friend application or incoming command.
+        target: Group ID from signed directory evidence.
+        peer: Independently verified NIM team, never inferred from target.
+        key: Durable operation key for the incoming group activation command.
         text: Plugin-owned onboarding text, not model output.
         authorize: Frozen membership, account and configuration check.
-        private: Whether this is a verified friend welcome.
 
     Returns:
         Native receipt status; ambiguous deliveries are never automatically replayed.
@@ -52,8 +49,6 @@ async def send_onboarding_text(
             or adapter.connection_state != "online"
             or not adapter.config.get("enable", True)
             or not adapter.config.get("_business_active")
-            or private
-            and not adapter.config.get("reply_private", True)
             or not isinstance(target, str)
             or not target.isascii()
             or not target.isdecimal()
@@ -61,7 +56,7 @@ async def send_onboarding_text(
             or not isinstance(peer, str)
             or not peer.isascii()
             or not peer.isdecimal()
-            or not 0 < int(peer) < (1 << 32 if private else 1 << 63)
+            or not 0 < int(peer) < 1 << 63
             or not text
             or len(text.encode()) > 4096
         ):
@@ -79,7 +74,7 @@ async def send_onboarding_text(
             if getattr(adapter, "_onboarding_sent_at", 0) != previous:
                 continue
             nonce, state = await ledger.reserve(
-                key, json.dumps([account, target, peer, private, text])
+                key, json.dumps([account, target, peer, False, text])
             )
             if state != "new":
                 return "unknown" if state == "sending" else state
@@ -91,7 +86,7 @@ async def send_onboarding_text(
                     target={"id": int(target)},
                     created_at=int(time.time() * 1000),
                     device=1,
-                    session=1 if private else 2,
+                    session=2,
                     version=2,
                     format=0,
                     client_id=client_id,
@@ -106,7 +101,7 @@ async def send_onboarding_text(
                 )
                 properties = wire.properties(
                     [
-                        (0, b"0" if private else b"1"),
+                        (0, b"1"),
                         (1, peer.encode()),
                         (8, b"100"),
                         (10, attachment.encode()),
@@ -118,11 +113,7 @@ async def send_onboarding_text(
                 raise
             adapter._onboarding_sent_at = time.monotonic()
             try:
-                code, body = await nim.request(
-                    7 if private else 8,
-                    1 if private else 2,
-                    properties,
-                )
+                code, body = await nim.request(8, 2, properties)
                 if code != 200:
                     await ledger.finish(key, "rejected")
                     return "rejected"

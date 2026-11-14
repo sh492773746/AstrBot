@@ -46,6 +46,21 @@ class Ads:
             "UPDATE ad_boards SET state='busy' WHERE chat IN (SELECT chat FROM ad_operations WHERE status='retry')"
         )
 
+    def require_target(self, actor, package, db=None):
+        """Require live local authority for registered group advertisements.
+
+        Args:
+            actor: Current operator.
+            package: Immutable advertisement destination snapshot.
+            db: Optional active transaction.
+        """
+        connection = db or self.store.db
+        target = str(package["target"])
+        group = connection.execute(
+            "SELECT 1 FROM tenant_groups WHERE chat=?", (target,)
+        ).fetchone()
+        self.store.require(actor, "ads", connection, chat=target if group else None)
+
     def configure(self, actor, key, package):
         try:
             price = Decimal(str(package.get("price", "")))
@@ -84,12 +99,16 @@ class Ads:
             raise Rejected("广告位无效，请按表单填写；币种代码2—12位，价格最多两位小数")
         package = {**package, "target": str(package["target"]), "price": str(price)}
         with self.store.tx() as db:
-            self.store.require(actor, "ads", db)
+            self.require_target(actor, package, db)
             from .tenants import platform_group
 
             if not platform_group(self.store, package["target"], db):
-                raise Rejected("独立经营群请使用本群广告位管理，不能配置为平台广告位。")
+                raise Rejected(
+                    "独立经营群请使用本群广告位管理，不能配置为本BOT广告位。"
+                )
             packages = self.store.get("packages", {}, db)
+            if key in packages:
+                self.require_target(actor, packages[key], db)
             if key not in packages and len(packages) >= 30:
                 raise Rejected("最多配置30个广告位")
             packages[key] = package
@@ -193,13 +212,13 @@ class Ads:
         self, actor, key, action, reason="", expected=None, expected_version=None
     ):
         with self.store.tx() as db:
-            self.store.require(actor, "ads", db)
             row = db.execute("SELECT * FROM ads WHERE id=?", (key,)).fetchone()
             if not row:
                 raise Rejected("订单不存在")
+            self.require_target(actor, json.loads(row["package"]), db)
             if row["tenant"] != "platform":
                 raise Rejected(
-                    "独立收款订单请使用群主订单入口，不能人工改为平台已付款。"
+                    "独立收款订单请使用群主订单入口，不能人工改为本BOT已付款。"
                 )
             version(row, expected_version)
             if expected is not None and row["body"] != expected:
@@ -309,10 +328,10 @@ class Ads:
 
     def edit(self, actor, key, body, expected, expected_version=None):
         with self.store.tx() as db:
-            self.store.require(actor, "ads", db)
             row = db.execute("SELECT * FROM ads WHERE id=?", (key,)).fetchone()
             if not row:
                 raise Rejected("订单不存在")
+            self.require_target(actor, json.loads(row["package"]), db)
             if row["tenant"] != "platform":
                 raise Rejected("独立收款订单不允许旧编辑入口修改，请重新提交审核。")
             version(row, expected_version)
@@ -343,8 +362,10 @@ class Ads:
                 str(actor) != row["uid"] and not self.store.allowed(actor, "ads", db)
             ):
                 raise Rejected("无权取消此订单")
+            if str(actor) != row["uid"]:
+                self.require_target(actor, json.loads(row["package"]), db)
             if row["tenant"] != "platform":
-                raise Rejected("请从直付订单申请取消或退款，不能使用平台取消按钮。")
+                raise Rejected("请从直付订单申请取消或退款，不能使用本BOT取消按钮。")
             if row["status"] == "cancelled":
                 return
             version(row, expected_version)
@@ -399,10 +420,10 @@ class Ads:
 
         from .ad_board import claim, execute, render
 
-        self.store.require(actor, "ads")
         row = self.store.db.execute("SELECT * FROM ads WHERE id=?", (key,)).fetchone()
         if not row:
             raise Rejected("订单不存在")
+        self.require_target(actor, json.loads(row["package"]))
         if row["tenant"] != "platform":
             raise Rejected("独立经营订单请在本群广告管理核查")
         chat = json.loads(row["package"])["target"]
@@ -703,6 +724,23 @@ class Ads:
             if not changed:
                 continue
             try:
+                group = self.store.db.execute(
+                    "SELECT enabled FROM mod_groups WHERE chat=?", (package["target"],)
+                ).fetchone()
+                current = self.store.db.execute(
+                    "SELECT status FROM ads WHERE id=?", (row["id"],)
+                ).fetchone()
+                if (
+                    (group and not group["enabled"])
+                    or not current
+                    or current["status"] != state
+                ):
+                    self.store.db.execute(
+                        "UPDATE ads SET status='review',error='群已停用，需人工核查' "
+                        "WHERE id=? AND status=?",
+                        (row["id"], state),
+                    )
+                    continue
                 if expiring:
                     await bot.unpin_chat_message(
                         chat_id=package["target"], message_id=row["message"]
@@ -715,7 +753,7 @@ class Ads:
                     text = f"【广告】\n{row['body']}"
                     sent = await bot.send_message(chat_id=package["target"], text=text)
                     self.store.db.execute(
-                        "UPDATE ads SET status=?,message=? WHERE id=?",
+                        "UPDATE ads SET status=?,message=? WHERE id=? AND status='sending'",
                         (
                             "sent" if package["kind"] == "pinned" else "published",
                             sent.message_id,

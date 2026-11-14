@@ -1,5 +1,19 @@
 # Isolated Membership Acceptance
 
+## Current Retirement Checks: Not Deployed
+
+Private menus/group selection, friend approval/welcomes, personal knowledge,
+support, private AI/admin guidance, finance chat and image intake are removed
+from this source batch. Verify that private ingress creates no business writes,
+model calls, replies or saved attachments; retain historical stores/unknown
+receipts. Welcome/private-image success is no longer an active acceptance target.
+Retain verified native group mention/reply lists, rules/activities, and existing
+authorized operators' WebUI images and Invitation Settlement. Ordinary group
+admins gain no global Dashboard login. See [the mapping](wangshangliao-start.md).
+This batch is not deployed; mute-first/raid loading and complete live acceptance
+remain pending, with raid defense off by default. Dated results below describe
+their original rounds, not deployment of this retirement.
+
 Synchronized October 20, 2026 (Beijing time). Tool capabilities, dated observations
 and outstanding acceptance are separate. Later checks do not rewrite the original
 October 15, 16 or 19 evidence.
@@ -50,15 +64,15 @@ The following is the **contract checklist, not a claim that every item passed li
 image/phone evidence remains separately dated:
 
 - Same-robot/group native management verification and single native reply/mention; no immediate punishment on add, either kicking or muting; reject fake quotations, names, raw UIDs and multiple targets.
-- Private group selection, name search, selection and personal confirmation; dashboard read/search/preview/commit, with no writes during read/preview; disambiguation, wrong-group, revoked-access and stale-token rejection.
+- Historical private group-selection checks are retired; retain Dashboard read/search/preview/commit without writes during read/preview, and disambiguation, wrong-group, revoked-access and stale-token rejection.
 - Every trusted actual rejoin, including the first, directly mutes and retains the member without kicking. Duplicate notices, additions, restarts and ordinary messages never punish or renew mutes. Historical three-kick counts no longer select phases; original evidence stays intact.
 - Default duration 29 days/41,760 minutes, configurable per bot/group to 1..41760 whole minutes; test bounds, invalid values and minute/hour/day conversion with `黑名单禁言时长 N分钟` / `黑名单禁言时长 N小时` / `黑名单禁言时长 N天`.
-- Select a group first in DMs, check the duration preview, then personally send a new `确认黑名单 token`. Dashboard **Group Management → Rules → Blacklist Settings** (`群管理 → 规则 → 黑名单设置`) also requires preview confirmation; cancellation, revocation, group/revision changes and expiry reject old tokens.
+- Use the current target group for duration preview and personal confirmation, or Dashboard **Group Management → Rules → Blacklist Settings**; cancellation, revocation, group/revision changes and expiry reject old tokens. The old DM selector is retired.
 - Duration edits affect only new actual rejoins after confirmation, never reset existing mutes, punish current members retrospectively, replay historical notices or create daily renewals. Unknown receipts pause without retry. Owner/admin/bot protection remains except an exactly authorized isolated fixture.
 - Whitelist never overrides blacklist; removal does not unmute and unmute does not remove; ordinary automatic kicking prohibited and ordinary 24-hour mute cap unchanged; no AI execution/confirmation.
 - Private robot/group-scoped image deduplication without public hosting; one keyword image before text; up to three images per scheduled plan, one rotating image each time; no replay after unknown/partial delivery.
 - Three independent plans at minute 00/20/40, each every 60 minutes; applying edits drafts only, with preview, personal save and explicit enablement; missing permission, wrong group, failed upload and timeout recovery.
-- Form-only keyword images, existing private `广告图片 PLAN_INDEX` for scheduled images only; integration/phone evidence is separate from generated tutorials/PDFs.
+- WebUI-only keyword and scheduled images; private image intake is retired. Integration/phone evidence is separate from generated tutorials/PDFs.
 
 [Rules and AI ownership](wangshangliao-rules-ai.md) provides workflows and concrete
 recovery steps. The first two online reads were protective409 refusals because the
@@ -203,7 +217,7 @@ in this screenshot are redacted; it is not evidence of real invitation acceptanc
 
 ![Group lifecycle status](../../zh/platform/images/wangshangliao-lifecycle.png)
 
-## Activation Replies And Friend Menus
+## Group Activation Replies
 
 A group owner or native administrator invites the bot, then the inviter sends
 `开通` in that group. Unopened groups receive the outcome of this specific command
@@ -211,17 +225,8 @@ without prior private chat or a proactive-send grant. Once the bot has left, it
 cannot receive commands there; an owner or administrator must invite it again.
 Plain-language replies do not relax identity, invitation or suspension checks.
 
-After a first confirmed friend acceptance, the bot privately sends its text menu
-and the generated menu image containing the supplied Da Hai logo. Automatic and
-mobile manual acceptance are supported, with a persistent marker keyed by account
-and real transport sender. Existing friends are baselined without bulk welcomes.
-Re-addition, restart and first unmatched private messages share the same marker.
-Unknown text delivery neither sends an image nor retries; `菜单` remains available.
-Approvals remain single-action with a 30-second minimum interval; welcome messages
-remain at least three seconds apart. Welcome observation never resumes paused
-approvals, and friend deletion remains absent from dashboard, chat and AI.
-
-![Da Hai command menu](/images/wangshangliao/brand-command-menu.jpg)
+Old friend approvals, first-use menus and welcomes are retired. Verify that they
+do not scan, approve, send or replay historical pending work.
 
 ## Isolated Automatic Advertising Progression
 
@@ -698,10 +703,10 @@ test harness.
 
 Offline tests do not prove real invitation behavior. An existing-group reset or
 rejoin and the scoped native-role checks do not establish first activation in a
-genuinely fresh group. Native welcome-image receipts do not prove first-friend
-delivery or phone rendering. The user confirmed automatic-recall display on
+genuinely fresh group. Old welcome-image receipts remain historical; friend
+welcomes are no longer an active acceptance target. The user confirmed automatic-recall display on
 October 15; this does not accept every other phone scenario.
-Supplier exhaustion refusal, real Access-authenticated registration/reversal,
+Supplier exhaustion refusal, current WebUI-authenticated registration/reversal,
 fault recovery and sustained load under production resource quotas still need
 separate evidence. On October 17 Beijing time, the user cancelled the old 10%
 relative query-P95 growth release blocker; report absolute P95 instead, preserving

@@ -8,15 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from astrbot.builtin_stars.wangshangliao_moderation import group_ai
-from astrbot.builtin_stars.wangshangliao_moderation.conversation_profiles import (
-    DEFAULT as PROFILE_DEFAULT,
-)
 from astrbot.builtin_stars.wangshangliao_moderation.group_ai import DEFAULT, in_hours
 from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import OpenCall, OpenRPC
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import (
@@ -342,55 +339,83 @@ async def test_group_quota_is_atomic_shared_and_keeps_unknown_calls(rpc_scope):
 
 
 @pytest.mark.asyncio
-async def test_group_and_private_requests_share_one_atomic_public_cap(rpc_scope):
+async def test_groups_with_independent_payers_share_one_atomic_public_cap(rpc_scope):
     value, _, _ = rpc_scope
     from tests.test_wangshangliao_ai_plans import setup_billing
 
     setup_billing(value)
-    row = value.store.tenant("99", "5")
-    value.group_ai.configure(
+    row = value.store.tenant("99", "6")
+    confirmation = value.store.preview_control(
+        "99", "6", row["version"], "test", row["rules"], ["2"], None
+    )
+    value.store.change(
         "99",
-        "5",
-        0,
+        "6",
         row["version"],
-        {**DEFAULT, "enabled": True},
-        "root",
-        guard=lambda: None,
+        "test",
+        managers=["2"],
         control=True,
+        confirmation=confirmation,
+    )
+    groups = []
+    for group, uid, principal in (("5", "1", "nim/1001"), ("6", "2", "nim/1002")):
+        row = value.store.tenant("99", group)
+        value.group_ai.configure(
+            "99",
+            group,
+            0,
+            row["version"],
+            {**DEFAULT, "enabled": True},
+            "root",
+            guard=lambda: None,
+            control=True,
+        )
+        value.plans.bind(
+            "99",
+            group,
+            uid,
+            principal,
+            0,
+            row["version"],
+            0,
+            uid,
+            guard=lambda: None,
+        )
+        groups.append((row, value.plans.group_pool("99", group)))
+    assert (
+        value.plans.snapshot("nim/1001", "1")["pool"]
+        != (value.plans.snapshot("nim/1002", "2")["pool"])
     )
     await value.group_ai.refresh()
-    saved = value.group_ai.configs[("99", "5")]
     value.store.configure(value.store.settings()["version"], False, 20, 1, "test")
     now = time.time() + 100
-    value.plans.bind(
-        "99", "5", "1", "nim/1001", 0, row["version"], 0, "1", guard=lambda: None
-    )
-    payer = value.plans.group_pool("99", "5")
     quote = value.plans.quote(
         value.resolve_model({"provider_id": "existing/model"}),
         {"max_completion_tokens": 512},
     )
 
     def request(index):
+        row, payer = groups[index % 2]
         try:
-            if index % 2:
-                value.group_ai.reserve(
-                    saved,
-                    row,
-                    str(index),
-                    quote=quote,
-                    payer=payer,
-                    guard=lambda: None,
-                    now=now,
-                )
-            else:
-                value.store.reserve(str(index), str(index), now=now)
+            value.group_ai.reserve(
+                value.group_ai.configs[("99", row["group_id"])],
+                row,
+                str(index),
+                quote=quote,
+                payer=payer,
+                guard=lambda: None,
+                now=now,
+            )
             return True
-        except OpenError:
+        except OpenError as exc:
+            assert str(exc) in {"global_quota", "chat_cooldown"}
             return False
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         assert sum(pool.map(request, range(20))) == 1
+    assert value.store.usage()["used"] == 1
+    with value.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM ai_charges").fetchone()[0] == 1
 
 
 @pytest.mark.asyncio
@@ -572,10 +597,9 @@ async def test_incomplete_group_output_is_not_delivered_or_saved(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("private", [False, True])
 @pytest.mark.parametrize("known_unsent", [False, True])
 async def test_connection_failure_refunds_only_provably_unsent_calls(
-    rpc_scope, monkeypatch, private, known_unsent
+    rpc_scope, monkeypatch, known_unsent
 ):
     value, adapter, _ = rpc_scope
     row = await model_scope(value, adapter)
@@ -585,36 +609,9 @@ async def test_connection_failure_refunds_only_provably_unsent_calls(
         else group_ai.aiohttp.ServerDisconnectedError("offline-unknown")
     )
     fake_http(monkeypatch, error=error)
-    if private:
-        value.profiles.save(
-            "consultation", "99", "", 0, PROFILE_DEFAULT, "dashboard/test"
-        )
-        monkeypatch.setattr(
-            "astrbot.builtin_stars.wangshangliao_moderation.open_service.account_guard",
-            lambda *args: lambda: None,
-        )
-        extras = {}
-        event = SimpleNamespace(
-            actor_identity=ActorIdentity("99", "1", "1001", "1"),
-            platform=adapter,
-            message_str="offline question",
-            message_obj=SimpleNamespace(message_id="connection-fixture"),
-            get_sender_id=lambda: "1",
-            get_group_id=lambda: "",
-            is_private_chat=lambda: True,
-            unified_msg_origin="rpc-offline:FriendMessage:99/private/1001",
-            get_extra=extras.get,
-            set_extra=lambda key, val: extras.update({key: val}),
-            send=AsyncMock(),
-            plain_result=lambda text: text,
-        )
-        await value.chat(event)
-    else:
-        value.group_ai.launch(
-            adapter, row, "mention/connection-fixture/2/1002", "hello"
-        )
-        await asyncio.gather(*value.group_ai.tasks.values())
-        adapter.send_text.assert_not_awaited()
+    value.group_ai.launch(adapter, row, "mention/connection-fixture/2/1002", "hello")
+    await asyncio.gather(*value.group_ai.tasks.values())
+    adapter.send_text.assert_not_awaited()
     assert value.store.usage()["used"] == (0 if known_unsent else 1)
     with value.store.connect() as db:
         charge = db.execute("SELECT state,charged_micro FROM ai_charges").fetchone()
@@ -981,6 +978,10 @@ async def test_unconfirmed_budget_never_calls_model_and_restart_does_not_replay_
     )
     await value.group_ai.refresh()
     requests = fake_http(monkeypatch)
+    retrieve = Mock(
+        side_effect=AssertionError("closed budget must not retrieve knowledge")
+    )
+    monkeypatch.setattr(value.knowledge.store, "retrieve", retrieve)
     value.group_ai.tick()
     value.group_ai.launch(
         adapter, value.group_ai.configs[("99", "5")], "mention/m/2/1002"
@@ -989,6 +990,7 @@ async def test_unconfirmed_budget_never_calls_model_and_restart_does_not_replay_
     value.group_ai.ready = lambda *a, **kw: True
     value.group_ai.tick()
     assert not value.group_ai.tasks
+    retrieve.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1041,14 +1043,13 @@ async def test_cancelling_before_worker_starts_releases_concurrency_slot(rpc_sco
 @pytest.mark.parametrize(
     "peer,old_verified", [("1001", ""), ("9999", ""), ("9999", "1")]
 )
-async def test_private_chat_reverifies_but_retired_override_does_not_bypass_trial(
+async def test_retired_private_event_has_no_model_or_billing_entry_despite_old_override(
     rpc_scope, monkeypatch, peer, old_verified
 ):
     value, adapter, _ = rpc_scope
     row = value.store.tenant("99", "5")
     override(value.store, row, limit=30)
     await model_scope(value, adapter)
-    value.profiles.save("consultation", "99", "", 0, PROFILE_DEFAULT, "dashboard/test")
     now = time.time() - 600
     for index in range(20):
         value.store.reserve(f"nim/{peer}", str(index), now=now + index * 6)
@@ -1063,16 +1064,27 @@ async def test_private_chat_reverifies_but_retired_override_does_not_bypass_tria
         unified_msg_origin=f"rpc-offline:FriendMessage:99/private/{peer}",
         get_extra=lambda key: None,
         send=AsyncMock(),
+        set_extra=Mock(),
+        stop_event=Mock(),
         plain_result=lambda text: text,
     )
-    if peer == "1001":
-        await value.chat(event)
-        assert event.actor_identity.verified_uid == "1"
-        assert not requests and event.send.await_count == 1
-    else:
-        await value.chat(event)
-        assert not event.actor_identity.verified_uid
-        assert not requests
+    blocked = Mock(side_effect=AssertionError("retired private event must not do IO"))
+    with monkeypatch.context() as patch:
+        patch.setattr(value.store, "connect", blocked)
+        patch.setattr(value.plans, "reserve", blocked)
+        patch.setattr(value.group_ai, "observe", blocked)
+        patch.setattr(value.knowledge.store, "retrieve", blocked)
+        await value.on_event(event)
+    blocked.assert_not_called()
+    assert not hasattr(value, "chat") and not hasattr(value, "_chat")
+    assert event.actor_identity.verified_uid == old_verified
+    assert not requests
+    event.send.assert_not_awaited()
+    event.set_extra.assert_called_once_with("_component_claimed", True)
+    event.stop_event.assert_called_once_with()
+    assert value.store.usage()["used"] == 20
+    with value.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM ai_charges").fetchone()[0] == 0
 
 
 @pytest.mark.asyncio

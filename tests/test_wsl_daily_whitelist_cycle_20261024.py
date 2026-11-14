@@ -1,4 +1,4 @@
-"""Current flood thresholds, durable cycles and automatic daily exemptions."""
+"""Current flood thresholds, durable cycles and activity-retained exemptions."""
 
 import asyncio
 import sqlite3
@@ -210,14 +210,15 @@ async def history(adapter, uid, stamp, count=101):
 
 
 @pytest.mark.asyncio
-async def test_top_thirty_exact_scope_binding_and_daily_expiry(daily):
+async def test_top_twenty_exact_scope_binding_and_inactivity_expiry(daily):
     adapter, ranking, runtime, root, clock = daily
+    last_activity = clock[0] - 86400 - 100
     for uid in range(10, 43):
-        await history(adapter, str(uid), clock[0] - 86400 - 100)
+        await history(adapter, str(uid), last_activity)
     await runtime.step()
     entries = automatic_whitelist.read_automatic("daily", "1", "5")
-    assert len(entries) == 30
-    assert set(entries) == {str(uid) for uid in range(10, 40)}
+    assert len(entries) == 20
+    assert set(entries) == {str(uid) for uid in range(10, 30)}
     assert is_exempt("daily", "1", "5", "10", "910")
     assert not is_exempt("daily", "2", "5", "10", "910")
     assert not is_exempt("daily", "1", "6", "10", "910")
@@ -226,12 +227,25 @@ async def test_top_thirty_exact_scope_binding_and_daily_expiry(daily):
     _version, displayed = read_exemptions(
         "daily", "1", "5", include_names=True, include_automatic=True
     )
+    # Preserve the legacy source identifier, not its former ranking limit.
     assert displayed["10"]["source"] == "daily_top30"
     clock[0] += 91
     assert not is_exempt("daily", "1", "5", "10", "910")
     await runtime.step()
     assert is_exempt("daily", "1", "5", "10", "910")
     clock[0] = datetime(2026, 10, 25, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
+    assert not is_exempt("daily", "1", "5", "10", "910")
+    await runtime.step()
+    assert automatic_whitelist.read_automatic("daily", "1", "5") == entries
+    expires = last_activity + automatic_whitelist.INACTIVITY_SECONDS
+    clock[0] = expires - 1
+    await runtime.step()
+    assert automatic_whitelist.read_automatic("daily", "1", "5") == entries
+    with sqlite3.connect(root / "automatic_exemptions.sqlite3") as db:
+        assert db.execute(
+            "SELECT DISTINCT last_activity,valid_until FROM automatic_exemptions"
+        ).fetchall() == [(last_activity, expires)]
+    clock[0] = expires
     assert not is_exempt("daily", "1", "5", "10", "910")
     await runtime.step()
     assert not automatic_whitelist.read_automatic("daily", "1", "5")
@@ -323,7 +337,7 @@ async def test_reauthorization_rejects_stale_mapping_and_cancelled_runtime(daily
     adapter, ranking, runtime, root, clock = daily
     await history(adapter, "10", clock[0] - 86400 - 100)
     date, end, ranked = await ranking.snapshot(
-        adapter, "5", settled=True, previous_day=True
+        adapter, "5", settled=True, previous_day=True, include_activity=True
     )
     mapping = dict(adapter.members["5"])
     adapter.members["5"]["10"] = "changed"
@@ -356,7 +370,7 @@ async def test_paused_or_unmanaged_group_never_receives_automatic_grants(daily):
 
 
 @pytest.mark.asyncio
-async def test_only_yesterdays_top_thirty_with_more_than_one_hundred_messages(daily):
+async def test_only_yesterdays_top_twenty_with_more_than_one_hundred_messages(daily):
     adapter, ranking, runtime, root, clock = daily
     yesterday = clock[0] - 86400 - 100
     for uid, count in (("10", 100), ("11", 101), ("12", 1)):
@@ -369,31 +383,41 @@ async def test_only_yesterdays_top_thirty_with_more_than_one_hundred_messages(da
     assert entries["11"]["count"] == 101
     # Public rankings remain today's counts, not the exemption source day.
     text = await ranking.read(adapter, "5", "10")
-    assert "Member 12 - 200 条" in text
-    assert "Member 10 - 150 条" in text
+    assert "1:Member 12（有效发言200条）" in text
+    assert "2:Member 10（有效发言150条）" in text
     assert "Member 11" not in text
 
 
 @pytest.mark.asyncio
-async def test_rank_thirty_one_is_not_promoted_when_top_member_is_blocked(daily):
+@pytest.mark.parametrize("blocked_by", ["removal", "blacklist", "identity"])
+async def test_rank_twenty_one_is_not_promoted_when_top_member_is_blocked(
+    daily, blocked_by
+):
     adapter, ranking, runtime, root, clock = daily
-    for uid in range(10, 41):
+    for uid in range(10, 31):
         await history(adapter, str(uid), clock[0] - 86400 - 100)
-    set_exemption(
-        "daily",
-        "1",
-        "5",
-        "10",
-        "910",
-        enabled=False,
-        actor="server/test",
-        reason="explicit removal",
-        guard=lambda: None,
-    )
+    if blocked_by == "removal":
+        set_exemption(
+            "daily",
+            "1",
+            "5",
+            "10",
+            "910",
+            enabled=False,
+            actor="server/test",
+            reason="explicit removal",
+            guard=lambda: None,
+        )
+    elif blocked_by == "blacklist":
+        with sqlite3.connect(root / "member_blacklist.sqlite3") as db:
+            db.execute("CREATE TABLE blacklist_entries(account,group_id,member,status)")
+            db.execute("INSERT INTO blacklist_entries VALUES('1','5','10','active')")
+    else:
+        adapter.members["5"].pop("10")
     await runtime.step()
     entries = automatic_whitelist.read_automatic("daily", "1", "5")
-    assert set(entries) == {str(uid) for uid in range(11, 40)}
-    assert "40" not in entries
+    assert set(entries) == {str(uid) for uid in range(11, 30)}
+    assert "30" not in entries
 
 
 @pytest.mark.asyncio
@@ -447,13 +471,17 @@ async def test_beijing_midnight_changes_source_day_and_rejects_old_publication(d
     await runtime.step()
     assert set(automatic_whitelist.read_automatic("daily", "1", "5")) == {"10"}
     date, end, ranked = await ranking.snapshot(
-        adapter, "5", settled=True, previous_day=True
+        adapter, "5", settled=True, previous_day=True, include_activity=True
     )
     clock[0] = midnight
-    assert not automatic_whitelist.read_automatic("daily", "1", "5")
+    assert set(automatic_whitelist.read_automatic("daily", "1", "5")) == {"10"}
     with pytest.raises(ProtocolError):
         runtime.publish(
             adapter, "5", "1", dict(adapter.members["5"]), date, end, ranked
         )
     await runtime.step()
-    assert set(automatic_whitelist.read_automatic("daily", "1", "5")) == {"11"}
+    assert set(automatic_whitelist.read_automatic("daily", "1", "5")) == {"10", "11"}
+    with sqlite3.connect(root / "automatic_exemptions.sqlite3") as db:
+        assert dict(
+            db.execute("SELECT member,ranking_day FROM automatic_exemptions")
+        ) == {"10": "2026-10-23", "11": "2026-10-24"}

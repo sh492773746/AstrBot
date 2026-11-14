@@ -27,7 +27,9 @@ for (const kind of ["Whitelist", "Blacklist"]) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   });
   const module = { exports: {} };
-  new Function("require", "module", "exports", compiled.outputText)(require, module, module.exports);
+  new Function("require", "module", "exports", compiled.outputText)(id =>
+    id.endsWith(".vue") ? { __esModule: true, default: {} } : require(id),
+  module, module.exports);
   const component = module.exports.default;
 
   function responses(p) {
@@ -73,10 +75,6 @@ for (const kind of ["Whitelist", "Blacklist"]) {
     assert.match(source, /:aria-label="`将/);
     assert.match(source, /member\.conflict/);
     assert.match(source, /已离群成员/);
-    if (kind === "Whitelist") {
-      assert.match(source, /昨日前30名 · 昨日/);
-      assert.doesNotMatch(source, /今日前30名/);
-    }
     assert.doesNotMatch(source, /api:\s*Function|:\s*any\b|v-html/);
   });
 

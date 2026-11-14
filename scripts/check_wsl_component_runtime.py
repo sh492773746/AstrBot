@@ -19,16 +19,13 @@ from astrbot.builtin_stars.wangshangliao_moderation.component_governance import 
 from astrbot.builtin_stars.wangshangliao_moderation.rule_replies import (
     RuleConfiguration,
 )
-from astrbot.builtin_stars.wangshangliao_moderation.service_settings import (
-    SupportConfiguration,
-)
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "/api/v1/plugins/extensions/wangshangliao_moderation/"
 
 
 async def check(output):
-    """Inspect runtime, rules and support without sending native or model requests."""
+    """Inspect group runtime and rules without sending native or model requests."""
     config_path = ROOT / "data/cmd_config.json"
     config = json.loads(config_path.read_text(encoding="utf-8-sig"))
     digest = hashlib.sha256(config_path.read_bytes()).hexdigest()
@@ -111,7 +108,7 @@ async def check(output):
                 return {
                     "entries": [
                         {
-                            "capability": "wsl.private_ai",
+                            "capability": "wsl.group_ai",
                             "scope": ["provider", "offline-fixture"],
                             "reference": "offline",
                             "state": "open",
@@ -127,7 +124,6 @@ async def check(output):
             if action == "page_schema":
                 model = {
                     "business_rules": RuleConfiguration,
-                    "support_settings": SupportConfiguration,
                 }[payload["name"]]
                 return {
                     "schema_version": 1,
@@ -136,12 +132,6 @@ async def check(output):
                     "capability": "fixture",
                     "fields": model.model_json_schema(),
                 }
-            if action == "support_settings":
-                assert payload["operation"] == "read"
-                return {"version": 0, "config": SupportConfiguration().model_dump()}
-            if action == "support_editor":
-                assert payload["operation"] == "read"
-                return {"editors": []}
             if action == "business_rules":
                 assert payload["operation"] == "read"
                 return {"version": 0, "config": RuleConfiguration().model_dump()}
@@ -183,25 +173,6 @@ async def check(output):
                 )
                 report["screens"].append(f"runtime-{width}.png")
                 await page.get_by_role("button", name="取消", exact=True).click()
-                await page.get_by_role("tab", name="AI服务", exact=True).click()
-                await page.get_by_role("tab", name="客服咨询", exact=True).click()
-                await page.get_by_label("业务话术", exact=True).wait_for()
-                assert (
-                    await page.get_by_label("回复长度（字）", exact=True).get_attribute(
-                        "max"
-                    )
-                    == "2000"
-                )
-                assert (
-                    await page.get_by_label("业务话术", exact=True).get_attribute(
-                        "maxlength"
-                    )
-                    == "4000"
-                )
-                await page.screenshot(
-                    path=str(output / f"support-{width}.png"), full_page=True
-                )
-                report["screens"].append(f"support-{width}.png")
                 await page.get_by_role("tab", name="群管理", exact=True).click()
                 await page.get_by_role("tab", name="开通与规则", exact=True).click()
                 await page.get_by_label("群聊", exact=True).select_option(
@@ -297,7 +268,6 @@ async def check(output):
                 "astrbot/builtin_stars/wangshangliao_moderation/" + name + ".py"
                 for name in (
                     "component_governance",
-                    "private_batches",
                     "command_capabilities",
                     "syntax",
                     "open_service",
@@ -305,7 +275,6 @@ async def check(output):
                     "group_ai",
                     "pc28",
                     "rule_replies",
-                    "service_settings",
                     "schedules",
                     "activities",
                     "dashboard",
@@ -321,7 +290,7 @@ async def check(output):
             json.dumps(report, ensure_ascii=False, indent=2)
         )
         print(
-            "PASS staged desktop/mobile runtime and support; no native sends or model calls."
+            "PASS staged desktop/mobile group runtime and rules; no native sends or model calls."
         )
         print("Native test-group authority:", report["test_groups"])
 

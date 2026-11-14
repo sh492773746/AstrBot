@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import json
-import re
 import secrets
 import sqlite3
 import time
@@ -17,7 +16,14 @@ from astrbot.core.platform.sources.wangshangliao.blacklist import (
     BlacklistStore,
     protected_target,
 )
-from astrbot.core.platform.sources.wangshangliao.database import account_guard
+from astrbot.core.platform.sources.wangshangliao.database import (
+    AsyncDatabase,
+    account_guard,
+)
+from astrbot.core.platform.sources.wangshangliao.diagnostics import (
+    ERROR_LABELS,
+    failure_evidence,
+)
 from astrbot.core.platform.sources.wangshangliao.directory import muted_member_ids
 from astrbot.core.platform.sources.wangshangliao.event import is_managed_account
 from astrbot.core.platform.sources.wangshangliao.invitations import (
@@ -37,7 +43,6 @@ COMMANDS = {
     "移除黑名单",
     "选择黑名单",
     "确认黑名单",
-    "黑名单禁言时长",
 }
 
 
@@ -84,6 +89,7 @@ class MemberBlacklist:
         self.chat_search = {}
         self.tasks = {}
         self.last_poll = {}
+        self.prefix_scans = {}
 
     def notice_scope(self, adapter, tenant):
         """Capture the receiving authority without persisting private identities."""
@@ -138,7 +144,7 @@ class MemberBlacklist:
             ]
             matching = [row for row in spans if str(row.get("uid")) == peer]
             text = str(payload.get("text", "")).encode("utf-16-le")
-            if len(selected) != 1 or len(matching) != 1:
+            if len(matching) != 1:
                 raise OpenError("blacklist_target")
             span = matching[0]
             start, end = span.get("start"), span.get("end")
@@ -155,6 +161,10 @@ class MemberBlacklist:
                 raise OpenError("blacklist_target") from None
             if label != "@" + span["nick"]:
                 raise OpenError("blacklist_target")
+            if not selected:
+                raise OpenError("blacklist_member_unavailable")
+            if len(selected) != 1:
+                raise OpenError("blacklist_identity_changed")
             target = (selected[0], peer)
         reply = payload.get("reply")
         if reply is not None:
@@ -190,13 +200,16 @@ class MemberBlacklist:
             if (
                 not isinstance(uid, str)
                 or not isinstance(peer, str)
-                or str(members.get(uid, {}).get("nimId", "")) != peer
                 or reply["client"]
                 and route.get("client") != reply["client"]
-                or target is not None
-                and target != (uid, peer)
             ):
                 raise OpenError("blacklist_quote")
+            if uid not in members:
+                raise OpenError("blacklist_member_unavailable")
+            if str(members[uid].get("nimId", "")) != peer:
+                raise OpenError("blacklist_identity_changed")
+            if target is not None and target != (uid, peer):
+                raise OpenError("blacklist_target_conflict")
             target = (uid, peer)
         if target is None:
             raise OpenError("blacklist_target")
@@ -242,6 +255,8 @@ class MemberBlacklist:
         Raises:
             OpenError: On missing permission, stale selection or unsafe target.
         """
+        if event is not None and event.is_private_chat():
+            raise OpenError("private_messages_retired")
         service, account = self.service, str(adapter.account)
         tenant = dict(service.tenants.get((account, group), {}))
         if (
@@ -328,7 +343,11 @@ class MemberBlacklist:
         by_uid = {str(row.get("member", row.get("id"))): row for row in entries}
         visible = [
             {
-                **row,
+                **{
+                    key: value
+                    for key, value in row.items()
+                    if key != "enforcement_result"
+                },
                 "id": uid,
                 "name": member_name(members[uid]) if uid in members else row["name"],
                 "phase": "mute",
@@ -345,6 +364,65 @@ class MemberBlacklist:
             for row in visible:
                 if row["id"] in exemption_ids:
                     row["conflict"] = True
+                try:
+                    receipt = json.loads(
+                        by_uid[row["id"]].get("enforcement_result") or "{}"
+                    )
+                except (ValueError, TypeError):
+                    receipt = {}
+                if isinstance(receipt, dict):
+                    if receipt.get("error") in ERROR_LABELS:
+                        row["error"] = receipt["error"]
+                    code = receipt.get("provider_code")
+                    if type(code) is int and -(1 << 31) <= code < 1 << 31:
+                        row["provider_code"] = code
+                    if receipt.get("error_phase") in {"submission", "readback"}:
+                        row["error_phase"] = receipt["error_phase"]
+            # Dashboard reads reconcile present state, never the old mutation receipt.
+            unresolved = [row for row in visible if row["status"] == "unknown"]
+            if event is None and unresolved:
+                identities = {
+                    row["id"]: row["peer"]
+                    for row in unresolved
+                    if row["id"] in members
+                    and str(members[row["id"]].get("nimId")) == row["peer"]
+                }
+                muted, check_error = None, ""
+                if identities:
+                    try:
+                        muted = await asyncio.wait_for(
+                            muted_member_ids(
+                                adapter,
+                                group,
+                                authorize=guard,
+                                expected_members=identities,
+                            ),
+                            timeout=8,
+                        )
+                    except (ProtocolError, OSError, TimeoutError) as exc:
+                        check_error = failure_evidence(exc)["error"]
+                guard()
+                for row in unresolved:
+                    membership = (
+                        "absent"
+                        if row["id"] not in members
+                        else "present"
+                        if row["id"] in identities
+                        else "identity_changed"
+                    )
+                    row["current_state"] = {
+                        "membership": membership,
+                        "mute": (
+                            "unavailable"
+                            if membership != "present" or muted is None
+                            else "muted"
+                            if row["id"] in muted
+                            else "not_muted"
+                        ),
+                        "checked_at": time.time(),
+                    }
+                    if check_error:
+                        row["current_state"]["error"] = check_error
             return {
                 "version": version,
                 "mute_minutes": settings["mute_minutes"],
@@ -684,6 +762,7 @@ class MemberBlacklist:
         except (OpenError, ProtocolError, OSError, TimeoutError) as exc:
             if result.get("status") not in {"accepted", "verified"}:
                 result = {
+                    **failure_evidence(exc),
                     "status": "rejected"
                     if not attempted or getattr(exc, "submitted", None) is False
                     else "unknown",
@@ -759,6 +838,7 @@ class MemberBlacklist:
             result = dict(receipt) if isinstance(receipt, dict) else result
         except (OpenError, ProtocolError, OSError, TimeoutError) as exc:
             result = {
+                **failure_evidence(exc),
                 "status": "rejected"
                 if getattr(exc, "submitted", None) is False
                 else "unknown",
@@ -769,7 +849,7 @@ class MemberBlacklist:
         return {**result, "status": status}
 
     async def command(self, event, command):
-        """Provide direct group commands and a short private member workflow.
+        """Provide authenticated group commands without private selections.
 
         Args:
             event: Original authenticated native conversation.
@@ -778,28 +858,21 @@ class MemberBlacklist:
         Returns:
             Literal persisted-state feedback or corrective instructions.
         """
+        if event.is_private_chat():
+            return ""
         action, _, argument = command.partition(" ")
+        if action not in COMMANDS or (
+            action == "确认黑名单"
+            and self.pending.get(argument, {}).get("mode") == "settings"
+        ):
+            return ""
         session = self.service.navigation.key(event)
         group = event.get_group_id() or self.service.navigation.stamp(event)[3]
         if not group:
             return "请先发送「群列表」「选择群 序号」，再管理该群黑名单。"
         options, operation = {}, "read"
         payload = event.get_extra("wangshangliao_payload") or {}
-        if action == "黑名单禁言时长":
-            match = re.fullmatch(r"([0-9]{1,5})\s*(分钟|小时|天)", argument)
-            minutes = (
-                int(match[1]) * {"分钟": 1, "小时": 60, "天": 1440}[match[2]]
-                if match
-                else 0
-            )
-            if not 1 <= minutes <= 41760:
-                return (
-                    "请发送「黑名单禁言时长 N分钟／小时／天」，"
-                    "换算后须为1—41760整分钟，默认41760分钟（29天）。"
-                    "仅影响之后的群内拉黑和真实重入，不追罚旧名单或重设已有禁言；普通禁言24小时上限不变。"
-                )
-            operation, options = "settings_preview", {"minutes": minutes}
-        elif not event.is_private_chat() and action in {"黑名单", "移除黑名单"}:
+        if not event.is_private_chat() and action in {"黑名单", "移除黑名单"}:
             operation = "direct"
             options["mode"] = "add" if action == "黑名单" else "remove"
             if (
@@ -856,20 +929,13 @@ class MemberBlacklist:
                 + ("\n".join(lines) or "暂无匹配成员。")
                 + (
                     f"\n仅当前机器人和本群有效；群内真实@或回复成员消息发送「黑名单」，加入后立即禁言{result['mute_minutes']}分钟。每次可信真实重新入群也按本群时长禁言，不踢人。"
-                    "\n可「黑名单禁言时长 N分钟／小时／天」预览后本人确认，范围1—41760整分钟，默认41760分钟（29天）。"
+                    "\n时长沿用本群已保存设置；已有相应后台权限的负责人可在WebUI黑名单设置中预览并确认修改。"
                     "\n修改时长不追罚旧名单或重设已有禁言，仅影响之后的群内拉黑和真实重入；普通禁言24小时上限不变。"
                     "\n群内真实@或回复发送「解除黑名单」（兼容「移除黑名单」），移出名单并解禁；结果分别反馈。"
-                    "私信或后台移除仍只移出名单，单独解禁不会移除黑名单。私信选群后可「添加黑名单 名称」。"
+                    "后台移除仍只移出名单；机器人命令或后台解禁核验后同时移出本群黑名单。私信管理已移除。"
                     if operation == "read"
                     else "\n发送「选择黑名单 序号」，核对后确认。"
                 )
-            )
-        if operation == "settings_preview":
-            return (
-                f"预览：本群黑名单重入禁言时长改为{result['mute_minutes']}分钟\n"
-                "群内真实@或回复发送「黑名单」立即禁言；每次可信真实重新入群也禁言，不踢人。\n"
-                "仅影响之后的群内拉黑和真实重入，不追罚旧名单或重设已有禁言；普通禁言24小时上限不变。\n"
-                f"请在本对话发新消息：确认黑名单 {result['token']}\n十分钟有效。"
             )
         if operation == "preview":
             return (
@@ -877,11 +943,6 @@ class MemberBlacklist:
                 f"{result['member']['name']} · UID {result['member']['id']}\n"
                 f"加入不立即处罚；每次可信真实重新入群禁言{result['mute_minutes']}分钟，不踢人。移除不自动解禁。\n"
                 f"请在本对话发新消息：确认黑名单 {result['token']}\n十分钟有效。"
-            )
-        if result["mode"] == "settings":
-            return (
-                f"已保存本群黑名单重入禁言时长：{result['mute_minutes']}分钟。"
-                "仅影响之后的群内拉黑和真实重入，不追罚旧名单或重设已有禁言；普通禁言24小时上限不变。"
             )
         if result["mode"] == "add" and operation == "direct":
             status = result["enforcement"]["status"]
@@ -891,6 +952,22 @@ class MemberBlacklist:
                 "rejected": "本次禁言被拒绝，未成功；请检查机器人管理权限和处罚记录。",
                 "duplicate_or_unresolved": "该命令已处理或已有待核对处罚，本次未重复提交；请查看处罚记录。",
             }.get(status, "禁言结果待核对，未自动重试；请查看处罚记录。")
+            reason = {
+                "blacklist_member_unavailable": "完整成员目录中已无此人，可能已经退群，本次无法完成禁言。",
+                "blacklist_target_changed": "目标身份、群角色或执行权限已变化。",
+                "blacklist_changed": "目标、名单或授权已变化。",
+                "transport_timeout": "请求超时，不能据此认定成员已退群或禁言失败。",
+                "transport": "连接异常，不能据此认定成员已退群或禁言失败。",
+                "business_rejected": "平台响应异常，不能据此认定成员已退群。",
+                "member_mute_rejected": "平台明确拒绝本次禁言；请核对当前在群及禁言状态，不能仅凭错误码认定已退群。",
+                "rate_limited": "平台限制请求频率。",
+                "reauth_required": "机器人账号认证已失效。",
+            }.get(result["enforcement"].get("error"))
+            if reason:
+                outcome += reason
+            code = result["enforcement"].get("provider_code")
+            if type(code) is int and -(1 << 31) <= code < 1 << 31:
+                outcome += f"平台代码：{code}。"
             return (
                 f"已将{result['member']}拉入黑名单。\n{outcome}"
                 "以后真实重新入群也按本群时长禁言，不踢人。"
@@ -957,8 +1034,11 @@ class MemberBlacklist:
             scope=self.notice_scope(adapter, tenant),
         )
         self.service.membership_wakeup.set()
+        self.last_poll.pop((str(adapter.account), group), None)
+        self.prefix_scans.pop((str(adapter.account), group), None)
+        self.tick(urgent=(str(adapter.account), group))
 
-    def tick(self):
+    def tick(self, *, urgent=None):
         """Start bounded workers without blocking discovery or message handling."""
         for key, task in list(self.tasks.items()):
             if task.done():
@@ -969,29 +1049,55 @@ class MemberBlacklist:
             return
         for adapter in self.service.adapters():
             account = str(adapter.account)
-            if (
-                account in self.tasks
-                or adapter.connection_state != "online"
-                or time.monotonic() - self.last_poll.get(account, -3) < 3
-            ):
+            if adapter.connection_state != "online":
                 continue
-            self.last_poll[account] = time.monotonic()
-            self.tasks[account] = asyncio.create_task(self.process(adapter))
+            tenants = sorted(
+                self.service.tenants.values(),
+                key=lambda row: (
+                    (account, row["group_id"]) != urgent,
+                    self.last_poll.get((account, row["group_id"]), -3),
+                ),
+            )
+            for tenant in tenants:
+                group = tenant["group_id"]
+                key = (account, group)
+                if (
+                    tenant["account"] != account
+                    or not tenant["present"]
+                    or not tenant["active"]
+                    or tenant["paused"]
+                    or key in self.tasks
+                    or len(self.tasks) >= 4
+                    or time.monotonic() - self.last_poll.get(key, -3) < 3
+                ):
+                    continue
+                self.last_poll[key] = time.monotonic()
+                self.tasks[key] = asyncio.create_task(
+                    self.process(adapter, group=group)
+                )
 
-    async def process(self, adapter, *, notice=None):
+    async def process(self, adapter, *, notice=None, group=None, preflight=None):
         """Corroborate each real admission, then submit at most one durable intent.
 
         Args:
             adapter: Current authenticated receiving account.
+            notice: Optional already persisted notification.
+            group: Optional worker scope; other groups never wait on its network IO.
+            preflight: Batch-local initial evidence; final authorization stays fresh.
         """
         service, account = self.service, str(adapter.account)
         frozen = account_guard(adapter)
         try:
             store = await asyncio.to_thread(BlacklistStore, adapter.config["id"])
             if notice is None:
-                notices = await asyncio.to_thread(store.pending, account)
+                notices = await asyncio.to_thread(store.pending, account, group=group)
+                preflight = {}
                 for item in notices[:20]:
-                    await self.process(adapter, notice=item)
+                    await self.process(adapter, notice=item, preflight=preflight)
+                if group is not None:
+                    from .prefix_blacklist import enforce_prefixes
+
+                    await enforce_prefixes(self, adapter, group)
                 return
             notices = [notice]
             for notice in notices[:20]:
@@ -1000,6 +1106,10 @@ class MemberBlacklist:
                 if (
                     not tenant
                     or notice.get("scope") != self.notice_scope(adapter, tenant)
+                    or not tenant["present"]
+                    or not tenant["active"]
+                    or tenant.get("native_role")
+                    not in {"GROUP_ROLE_OWNER", "GROUP_ROLE_ADMIN"}
                     or service.settings["paused"]
                     or tenant.get("paused")
                 ):
@@ -1012,6 +1122,8 @@ class MemberBlacklist:
                     )
                     continue
                 version, entries = await asyncio.to_thread(store.read, account, group)
+                peers = set(notice["peers"])
+                entries = [entry for entry in entries if entry["peer"] in peers]
                 if not entries:
                     await asyncio.to_thread(
                         store.finish_notice,
@@ -1021,10 +1133,26 @@ class MemberBlacklist:
                         "ignored",
                     )
                     continue
-                members = await service.roster(adapter, group)
-                frozen()
-                await adapter.get_moderation_members(group)
-                frozen()
+                cached = (preflight or {}).get(group)
+                if cached and time.monotonic() - cached[0] < 3:
+                    if cached[1] is None:
+                        raise OpenError("blacklist_evidence_unavailable")
+                    members, events = cached[1:]
+                else:
+                    if preflight is not None:
+                        preflight[group] = (time.monotonic(), None, None)
+                    members = await service.roster(adapter, group)
+                    frozen()
+                    if not callable(getattr(adapter, "refresh_member_mapping", None)):
+                        await adapter.get_moderation_members(group)
+                        frozen()
+                    events = latest_membership_events(
+                        await adapter.business.request("/v1/group/get-apply-logs", {}),
+                        group,
+                    )
+                    frozen()
+                    if preflight is not None:
+                        preflight[group] = (time.monotonic(), members, events)
                 base = service.write_guard(
                     adapter, group=group, tenant=tenant, members=members, control=True
                 )
@@ -1039,27 +1167,15 @@ class MemberBlacklist:
                         raise OpenError("blacklist_changed")
 
                 guard()
-                events = latest_membership_events(
-                    await adapter.business.request("/v1/group/get-apply-logs", {}),
-                    group,
-                )
-                guard()
-                peers = set(notice["peers"])
+                waiting = []
+                outcomes = set()
                 for entry in entries:
                     uid = str(entry.get("member", entry.get("id")))
                     row, evidence = members.get(uid, {}), events.get(uid)
                     if (
-                        entry["peer"] not in peers
-                        or not evidence
-                        or evidence["ambiguous"]
-                        or evidence["row"].get("state") != "MEMBER_STATE_GOOD"
-                        or evidence["row"].get("groupApplyType")
-                        not in {"INVITATION", "APPLY"}
-                        or str(evidence["row"]["applicant"].get("nimId", ""))
-                        != entry["peer"]
-                        or row.get("groupRole") != "GROUP_ROLE_MEMBER"
-                        or str(row.get("nimId", "")) != entry["peer"]
-                        or uid == account
+                        uid == account
+                        or row.get("groupRole")
+                        in {"GROUP_ROLE_OWNER", "GROUP_ROLE_ADMIN"}
                         or protected_target(
                             adapter,
                             group,
@@ -1067,8 +1183,33 @@ class MemberBlacklist:
                             entry["peer"],
                             fixture=getattr(service, "_blacklist_fixture", None),
                         )
-                        or abs(evidence["timestamp"] - notice["event_at"]) > 120
                     ):
+                        outcomes.add("protected")
+                        continue
+                    reason = (
+                        "member_missing"
+                        if not row
+                        else "identity_pending"
+                        if row.get("groupRole") != "GROUP_ROLE_MEMBER"
+                        or str(row.get("nimId", "")) != entry["peer"]
+                        else "event_missing"
+                        if not evidence
+                        else "event_ambiguous"
+                        if evidence["ambiguous"]
+                        else "event_pending"
+                        if evidence["row"].get("state") != "MEMBER_STATE_GOOD"
+                        or evidence["row"].get("groupApplyType")
+                        not in {"INVITATION", "APPLY"}
+                        or str(evidence["row"]["applicant"].get("nimId", ""))
+                        != entry["peer"]
+                        else "event_stale"
+                        if abs(evidence["timestamp"] - notice["event_at"]) > 120
+                        else "notice_expired"
+                        if time.time() - notice["event_at"] > 120
+                        else ""
+                    )
+                    if reason:
+                        waiting.append(reason)
                         continue
                     join_id = str(evidence["row"]["applyId"])
 
@@ -1147,7 +1288,9 @@ class MemberBlacklist:
                             raise OpenError("blacklist_join_changed")
                         submission_guard()
 
-                    await authorize()
+                    # The initial complete directory/log read already proves this
+                    # round. Native execution repeats fresh authorization before IO.
+                    submission_guard()
                     intent = await asyncio.to_thread(
                         store.reserve,
                         account,
@@ -1159,6 +1302,34 @@ class MemberBlacklist:
                         guard=guard,
                     )
                     if intent is None:
+                        async with AsyncDatabase(
+                            lambda: sqlite3.connect(
+                                store.path.resolve().as_uri() + "?mode=ro",
+                                uri=True,
+                            ),
+                            guard=guard,
+                        ) as db:
+                            settled = await db.fetchone(
+                                "SELECT i.finished,MAX(a.recorded),i.status "
+                                "FROM blacklist_intents i LEFT JOIN blacklist_audit a "
+                                "ON a.account=i.account AND a.group_id=i.group_id "
+                                "AND a.kind='done' "
+                                "AND json_extract(a.payload,'$.intent')=i.id "
+                                "WHERE i.account=? AND i.group_id=? AND i.member=? "
+                                "AND i.join_id=? GROUP BY i.id",
+                                (account, group, uid, join_id),
+                            )
+                        # A later real notice cannot be consumed by an earlier
+                        # completed round while the platform log is still stale.
+                        if (
+                            not settled
+                            or not settled[0]
+                            or settled[1] is None
+                            or notice["event_at"] > settled[1]
+                        ):
+                            waiting.append("round_unconfirmed")
+                        else:
+                            outcomes.add(settled[2])
                         continue
                     result = {"status": "unknown"}
                     inspect_native = False
@@ -1180,7 +1351,11 @@ class MemberBlacklist:
                         )
                     except BaseException as exc:
                         if getattr(exc, "submitted", None) is False:
-                            result = {"status": "rejected", "submitted": False}
+                            result = {
+                                **failure_evidence(exc),
+                                "status": "rejected",
+                                "submitted": False,
+                            }
                         else:
                             inspect_native = True
                         raise
@@ -1226,15 +1401,47 @@ class MemberBlacklist:
                                         }
                                 except (sqlite3.Error, OSError):
                                     pass
-                            store.done(intent, receipt)
+                            return store.done(intent, receipt)
 
-                        await asyncio.shield(asyncio.to_thread(finish_intent))
+                        completed_status = await asyncio.shield(
+                            asyncio.to_thread(finish_intent)
+                        )
+                    outcomes.add(completed_status or "unknown")
+                if waiting:
+                    expired = time.time() - notice["event_at"] > 120
+                    adapter.diagnostics.emit(
+                        "member_blacklist",
+                        "needs_review" if expired else "awaiting_evidence",
+                        notice["message"],
+                        group=group,
+                        failed=True,
+                        error=waiting[0],
+                        action=waiting[0],
+                        aggregate=True,
+                    )
+                    if not expired:
+                        continue
+                    state = "review_" + waiting[0]
+                elif "unknown" in outcomes:
+                    state = "review_action_unknown"
+                elif "rejected" in outcomes:
+                    state = "review_action_rejected"
+                else:
+                    state = "protected" if outcomes == {"protected"} else "processed"
                 await asyncio.to_thread(
-                    store.finish_notice, account, group, notice["message"], "processed"
+                    store.finish_notice, account, group, notice["message"], state
                 )
         except asyncio.CancelledError:
             raise
-        except (OpenError, ProtocolError, OSError) as exc:
+        except (OpenError, ProtocolError, OSError, sqlite3.Error) as exc:
+            if notice is not None and time.time() - notice["event_at"] > 120:
+                await asyncio.to_thread(
+                    store.finish_notice,
+                    account,
+                    notice["group"],
+                    notice["message"],
+                    "review_authorization_unavailable",
+                )
             adapter.diagnostics.emit(
                 "member_blacklist",
                 "paused",
@@ -1252,3 +1459,4 @@ class MemberBlacklist:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        self.prefix_scans.clear()

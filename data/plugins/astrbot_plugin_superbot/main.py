@@ -7,6 +7,7 @@ from collections import deque
 from pathlib import Path
 
 from filelock import FileLock
+from filelock import Timeout as FileLockTimeout
 from telegram import (
     BotCommand,
     BotCommandScopeAllChatAdministrators,
@@ -15,10 +16,12 @@ from telegram import (
     BotCommandScopeChat,
     BotCommandScopeChatAdministrators,
     BotCommandScopeDefault,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     MenuButtonCommands,
     Update,
 )
-from telegram.error import ChatMigrated
+from telegram.error import ChatMigrated, RetryAfter, TimedOut
 from telegram.ext import ApplicationHandlerStop, TypeHandler
 
 from astrbot.api import AstrBotConfig
@@ -49,22 +52,9 @@ GROUP = -80
 HOOK = "astrbot_plugin_superbot"
 MENU = {
     "我的群": "tenant_home",
-    "我的": "account",
-    "签到积分": "points",
-    "群聊解禁": "unmute_entry",
-    "广告投递": "ads",
-    "加拿大28": "game",
-    "玩法大全": "game",
-    "🎮 玩法大全": "game",
+    "本BOT总控": "bot_control",
     "客服": "support",
     "帮助": "help",
-    "📢 广告发布": "ads",
-    "🎲 模拟28": "game",
-    "🎁 积分获取": "points",
-    "👤 个人中心": "account",
-    "💬 聊天帮助": "help",
-    "⚙️ 管理": "admin",
-    "👥 群管理": "mod_home",
 }
 
 GROUP_SHORTCUTS = {
@@ -94,15 +84,33 @@ class Main(Star):
         self.chat_sessions = {}
         self.command_menu_application = None
         self.group_command_versions = {}
+        self.group_command_checked = {}
+        self.group_command_retry = {}
         self.group_command_check = 0
         self.active_updates = set()
         self.stopping = False
+        from .message_policy import DEFAULT_RETENTION
+
+        self.retention_policy = DEFAULT_RETENTION
 
     @property
     def bot(self):
         return self.application.bot
 
     async def initialize(self):
+        """Release tasks and resources if any startup phase fails."""
+        try:
+            await self._initialize()
+        except BaseException:
+            try:
+                await self.terminate()
+            except Exception:
+                self.logger.exception(
+                    "Superbot failed-startup cleanup did not complete"
+                )
+            raise
+
+    async def _initialize(self):
         """Stay inert until a dedicated platform and verified owner are configured."""
         if not self.config.get("enabled"):
             self.logger.info("Superbot installed, disabled and unbound")
@@ -110,7 +118,7 @@ class Main(Star):
         platform_id = self.config.get("platform_id", "").strip()
         owner = str(self.config.get("owner_uid", "")).strip()
         if not platform_id:
-            raise Rejected("请绑定新建的专用 Telegram 平台")
+            raise Rejected("请绑定新建的专用 Telegram 本BOT")
         root = (
             Path(get_astrbot_plugin_data_path())
             / HOOK
@@ -118,9 +126,20 @@ class Main(Star):
         )
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.instance_lock = FileLock(root / "runtime.lock")
-        self.instance_lock.acquire(timeout=0)
+        try:
+            self.instance_lock.acquire(timeout=0)
+        except FileLockTimeout:
+            from .runtime_lifecycle import recover_failed_startup
+
+            await recover_failed_startup(self)
+            self.instance_lock.acquire(timeout=0)
         try:
             self.store = Store(root / "superbot.sqlite3", owner)
+            from .message_policy import RetentionPolicy
+
+            self.retention_policy = RetentionPolicy.from_mapping(
+                self.store.get("retention_policy", {})
+            )
             from .group_points import migrate as migrate_group_points
 
             migrate_group_points(self.store, self.store.get("points_legacy_group"))
@@ -169,6 +188,9 @@ class Main(Star):
             )
         )
         self.ad_killer = AdKiller(self)
+        from .semantic_review import SemanticReview
+
+        self.semantic_review = SemanticReview(self)
         from .ad_fingerprint import Fingerprints
 
         self.fingerprints = Fingerprints(self)
@@ -182,6 +204,9 @@ class Main(Star):
         from .group_keyboard import GroupKeyboard
 
         self.group_keyboard = GroupKeyboard(self)
+        from .game_registry import GameRegistry
+
+        self.game_registry = GameRegistry()
         from .wheel import Wheel
 
         self.wheel = Wheel(self)
@@ -204,6 +229,12 @@ class Main(Star):
         )
         self.community_logs = CommunityLogs(self)
         self.group_game = GroupGame(self)
+        from .activities import Activities
+
+        self.activities = Activities(self)
+        self.tasks.append(
+            asyncio.create_task(self.activities.loop(), name="superbot-activities")
+        )
         self.report_ai = ReportAI(self)
         self.tasks.append(
             asyncio.create_task(self.report_ai_loop(), name="superbot-report-ai")
@@ -238,6 +269,11 @@ class Main(Star):
         )
         self.tasks.append(
             asyncio.create_task(self.community_loop(), name="superbot-community")
+        )
+        self.tasks.append(
+            asyncio.create_task(
+                self.group_keyboard_loop(), name="superbot-group-keyboard"
+            )
         )
         self.tasks.append(
             asyncio.create_task(
@@ -322,10 +358,27 @@ class Main(Star):
             try:
                 await self.community_logs.tick()
                 self.community.cleanup()
+                if getattr(self, "semantic_review", None) and (
+                    self.store.clock() - getattr(self, "_semantic_cleanup_at", 0)
+                    >= 3600
+                ):
+                    complete = self.semantic_review.cleanup()
+                    self._semantic_cleanup_at = self.store.clock() if complete else 0
                 self.failure.pop("community", None)
             except Exception as exc:
                 self.report("community", exc)
             await asyncio.sleep(5)
+
+    async def group_keyboard_loop(self):
+        """Repair group reply keyboards after transient Telegram failures."""
+        while True:
+            try:
+                if self.application and self.application.running:
+                    await self.group_keyboard.sync()
+                    self.failure.pop("group_keyboard", None)
+            except Exception as exc:
+                self.report("group_keyboard", exc)
+            await asyncio.sleep(15)
 
     async def avatar_progress_loop(self):
         """Keep progress independent of slow image provider calls."""
@@ -476,7 +529,6 @@ class Main(Star):
                     commands = [
                         BotCommand("start", "打开功能菜单"),
                         BotCommand("help", "使用帮助"),
-                        BotCommand("games", "玩法大全（仅群内参与）"),
                     ]
                     for language in ("", "zh", "en"):
                         for scope in (
@@ -498,6 +550,7 @@ class Main(Star):
                     )
                     self.command_menu_application = self.application
                     self.group_command_versions.clear()
+                    self.group_command_checked.clear()
                     self.group_command_check = 0
                 if (
                     self.application
@@ -515,53 +568,91 @@ class Main(Star):
         """Publish only enabled public commands in each registered group."""
         from .availability import refresh, snapshot
 
-        for group in self.store.db.execute(
+        groups = self.store.db.execute(
             "SELECT chat,enabled FROM mod_groups ORDER BY chat"
-        ).fetchall():
-            await refresh(self, group["chat"])
-            available = snapshot(self, group["chat"])
-            games = any(
-                available[key]
-                for key in ("wheel", "slots", "mines", "k3", "activate", "duel")
-            )
-            commands = [
-                BotCommand(command, label)
-                for command, (label, _, module) in GROUP_SHORTCUTS.items()
-                if (games if module == "game" else available.get(module, False))
-            ]
-            if group["enabled"]:
-                commands.append(BotCommand("help", "本群使用帮助"))
-            if group["enabled"] and available["avatar"]:
-                commands.append(BotCommand("avatar", "制作专属头像"))
-            if group["enabled"] and self.store.get("modules", {}).get("moderation"):
-                commands += [
-                    BotCommand(command, label)
-                    for key, command, label in (
-                        ("reports", "report", "回复消息举报"),
-                        ("rules", "rules", "查看本群群规"),
-                        ("notes", "notes", "查看常用说明"),
-                    )
-                    if available.get(key, False)
-                ]
-            signature = tuple(command.command for command in commands)
-            if self.group_command_versions.get(group["chat"]) == signature:
-                continue
-            try:
-                for language in ("", "zh", "en"):
-                    for scope in (
-                        BotCommandScopeChat(int(group["chat"])),
-                        BotCommandScopeChatAdministrators(int(group["chat"])),
-                    ):
-                        await self.bot.set_my_commands(
-                            commands, scope=scope, language_code=language
+        ).fetchall()
+        limit = asyncio.Semaphore(2)
+
+        async def sync_one(group):
+            chat = group["chat"]
+            now = time.monotonic()
+            if self.group_command_retry.get(chat, 0) > now:
+                return
+            if self.group_command_checked.get(chat, 0) > now - 300:
+                return
+            async with limit:
+                await refresh(self, chat)
+                available = snapshot(self, chat)
+                # Keep slash commands concise; legacy handlers remain compatible.
+                commands = []
+                if group["enabled"]:
+                    commands.extend(
+                        (
+                            BotCommand("help", "本群使用帮助"),
+                            BotCommand("my", "本群个人入口（仅本人可见）"),
+                            BotCommand("service", "客服与本群业务联系"),
                         )
-                self.group_command_versions[group["chat"]] = signature
-            except ChatMigrated:
-                # Do not repeatedly publish commands to a retired basic-group ID.
-                # The migrated group is independently discovered and authorized.
-                self.group_command_versions[group["chat"]] = signature
-            except Exception as exc:
-                self.report("group_commands", exc)
+                    )
+                    if available["points"]:
+                        commands.extend(
+                            (
+                                BotCommand("points", "查询本群积分"),
+                                BotCommand("checkin", "本群签到"),
+                            )
+                        )
+                    if available["activate"] or available["k3"]:
+                        commands.extend(
+                            (
+                                BotCommand("history", "当前玩法最近开奖"),
+                                BotCommand("flow", "本群近期流水"),
+                                BotCommand("profit", "本群今日与昨日输赢"),
+                            )
+                        )
+                    if (
+                        getattr(self, "activities", None)
+                        and self.activities.config(chat)["enabled"]
+                    ):
+                        from .command_router import CATALOG
+
+                        commands.extend(
+                            BotCommand(command, CATALOG[command])
+                            for command in ("points_rank", "stats", "lottery")
+                        )
+                    if available["avatar"]:
+                        commands.append(BotCommand("avatar", "制作专属头像"))
+                    if self.store.get("modules", {}).get(
+                        "moderation"
+                    ) and available.get("reports"):
+                        commands.append(BotCommand("report", "回复消息举报"))
+                signature = tuple(
+                    (command.command, command.description) for command in commands
+                )
+                if self.group_command_versions.get(chat) == signature:
+                    self.group_command_checked[chat] = time.monotonic()
+                    return
+                try:
+                    for language in ("", "zh", "en"):
+                        for scope in (
+                            BotCommandScopeChat(int(chat)),
+                            BotCommandScopeChatAdministrators(int(chat)),
+                        ):
+                            await self.bot.set_my_commands(
+                                commands, scope=scope, language_code=language
+                            )
+                    self.group_command_versions[chat] = signature
+                    self.group_command_checked[chat] = time.monotonic()
+                except ChatMigrated:
+                    self.group_command_versions[chat] = signature
+                    self.group_command_checked[chat] = time.monotonic()
+                except RetryAfter as exc:
+                    delay = exc.retry_after
+                    if hasattr(delay, "total_seconds"):
+                        delay = delay.total_seconds()
+                    self.group_command_retry[chat] = time.monotonic() + float(delay) + 1
+                except Exception as exc:
+                    self.report("group_commands", exc)
+
+        await asyncio.gather(*(sync_one(group) for group in groups))
 
     def report(self, module, exc):
         label = type(exc).__name__
@@ -570,6 +661,49 @@ class Main(Star):
         if last[0] != label or now - last[1] > 60:
             self.logger.warning("Superbot module=%s error=%s", module, label)
             self.failure[module] = (label, now)
+
+    @staticmethod
+    def callback_failure_message(payload, exc):
+        """Avoid implying a business write when a read-only page timed out."""
+        action = str((payload or {}).get("action", ""))
+        write_actions = {
+            "grant_accept",
+            "ad_submit",
+            "ad_renew_submit",
+            "bet_submit",
+            "chase_submit",
+            "chase_cancel",
+            "module_save",
+            "wheel_save",
+            "slots_save",
+            "mines_save",
+            "games_group_enable",
+            "ad_decide",
+            "save_form",
+            "room_save",
+            "channel_save",
+            "mod_confirm",
+            "mod_ak_save",
+            "mod_ak_false",
+            "mod_ak_recovery_confirm",
+            "mod_jv_save",
+            "mod_jv_release",
+            "deposit_create",
+            "ad_wallet_pay",
+            "ad_cancel_confirm",
+            "ad_capacity_save",
+            "ad_recover_confirm",
+            "ad_recover_rollback",
+            "tenant_gift_save",
+            "tenant_switch_save",
+            "tenant_rewards_save",
+            "schedule_save",
+        } | community_ui.WRITE_ACTIONS
+        if action in write_actions:
+            return "操作响应超时，尚未确认是否提交。请稍后到订单或流水核查，确认前不要重复提交。"
+        if isinstance(exc, (asyncio.TimeoutError, TimedOut)):
+            return "页面响应超时，请稍后重试；本次未确认提交。"
+        return "页面暂时无法打开，请稍后重试；本次未确认提交。"
 
     async def worker(self, module):
         while True:
@@ -608,6 +742,26 @@ class Main(Star):
                             ).rowcount
                         if claimed:
                             try:
+                                options = {}
+                                if row["id"].startswith("merchant-invoice/"):
+                                    order_id = row["id"].split("/", 1)[1]
+                                    options["reply_markup"] = InlineKeyboardMarkup(
+                                        [
+                                            [
+                                                InlineKeyboardButton(
+                                                    "查看订单",
+                                                    callback_data=self.store.callback(
+                                                        row["chat"],
+                                                        row["chat"],
+                                                        {
+                                                            "action": "tenant_order",
+                                                            "id": order_id,
+                                                        },
+                                                    ),
+                                                )
+                                            ]
+                                        ]
+                                    )
                                 if row["format"] == "HTML":
                                     from .rich_text import send_html
 
@@ -615,12 +769,14 @@ class Main(Star):
                                         self.bot.send_message,
                                         row["text"],
                                         chat_id=row["chat"],
+                                        **options,
                                     )
                                 else:
                                     await self.bot.send_message(
                                         chat_id=row["chat"],
                                         text=row["text"],
                                         parse_mode=None,
+                                        **options,
                                     )
                                 status = "sent"
                             except Exception:
@@ -641,6 +797,9 @@ class Main(Star):
 
     async def receive(self, update, context):
         """Track in-flight handlers so unloading never closes their database."""
+        from .group_authority import clear_proof
+
+        clear_proof()
         if self.stopping:
             raise ApplicationHandlerStop
         finished = asyncio.get_running_loop().create_future()
@@ -648,6 +807,7 @@ class Main(Star):
         try:
             return await self.receive_update(update, context)
         finally:
+            clear_proof()
             self.active_updates.discard(finished)
             if not finished.done():
                 finished.set_result(None)
@@ -669,9 +829,6 @@ class Main(Star):
         ):
             if hasattr(self, "navigation_permissions"):
                 self.navigation_permissions.pop(str(chat.id), None)
-            from .permission_notice import notify
-
-            await notify(self, chat, membership_update.new_chat_member)
         if self.store and chat and chat.type == "channel":
             membership = getattr(update, "my_chat_member", None)
             self.store.db.execute(
@@ -686,21 +843,93 @@ class Main(Star):
                 self.store.db.execute(
                     "UPDATE ad_channels SET enabled=0 WHERE chat=?", (str(chat.id),)
                 )
+            if membership_update:
+                from .permission_notice import notify
+
+                await notify(self, chat, membership_update.new_chat_member)
             return
         if self.store and chat and chat.type in {"group", "supergroup"}:
             membership = getattr(update, "my_chat_member", None)
-            if membership or getattr(update, "message", None):
+            if membership:
+                old_status = getattr(
+                    getattr(membership, "old_chat_member", None), "status", None
+                )
+                new_status = getattr(
+                    getattr(membership, "new_chat_member", None), "status", None
+                )
+                actor = getattr(getattr(membership, "from_user", None), "id", None)
+                self.logger.info(
+                    "Superbot membership event chat=%s type=%s old=%s status=%s actor=%s",
+                    chat.id,
+                    chat.type,
+                    old_status,
+                    new_status,
+                    actor,
+                )
+                if new_status in {"administrator", "creator"} and (
+                    old_status not in {"administrator", "creator"}
+                    or not self.store.db.execute(
+                        "SELECT 1 FROM mod_groups WHERE chat=?", (str(chat.id),)
+                    ).fetchone()
+                ):
+                    if old_status in {"left", "kicked"} and getattr(
+                        self, "semantic_review", None
+                    ):
+                        self.semantic_review.retire(str(chat.id))
+                    # Becoming an administrator is the explicit group consent
+                    # signal.  No private bind token is required for normal use.
+                    from .tenants import binding
+
+                    if not binding(self.store, str(chat.id)):
+                        administrators = await self.bot.get_chat_administrators(chat.id)
+                        creator = next(
+                            (
+                                m.user.id
+                                for m in administrators
+                                if m.status == "creator"
+                            ),
+                            None,
+                        )
+                        if creator is None:
+                            raise Rejected("无法核验真实群主，暂不登记经营归属。")
+                        actor = creator
+                    self.store.register_group(
+                        chat.id,
+                        chat.title or str(chat.id),
+                        actor,
+                        fresh=old_status in {"left", "kicked"},
+                    )
+                    if getattr(self, "activities", None):
+                        self.activities.register(chat.id)
+                elif new_status in {"member"}:
+                    if getattr(self, "semantic_review", None):
+                        self.semantic_review.pause(str(chat.id), "bot_not_admin")
+                    self.store.db.execute(
+                        "INSERT INTO mod_groups(chat,title,enabled) VALUES(?,?,0) "
+                        "ON CONFLICT(chat) DO UPDATE SET title=excluded.title",
+                        (str(chat.id), chat.title or str(chat.id)),
+                    )
+                if new_status in {"left", "kicked"}:
+                    if getattr(self, "semantic_review", None):
+                        self.semantic_review.pause(str(chat.id), "bot_left")
+                        self.semantic_review.retire(str(chat.id))
+                    self.store.suspend_group(chat.id)
+            elif getattr(update, "message", None):
                 self.store.db.execute(
-                    "INSERT INTO mod_groups(chat,title) VALUES(?,?) ON CONFLICT(chat) DO UPDATE SET title=excluded.title",
+                    "INSERT INTO mod_groups(chat,title,enabled) VALUES(?,?,0) "
+                    "ON CONFLICT(chat) DO UPDATE SET title=excluded.title",
                     (str(chat.id), chat.title or str(chat.id)),
                 )
-                if membership:
-                    self.logger.info(
-                        "Superbot membership event chat=%s type=%s status=%s",
-                        chat.id,
-                        chat.type,
-                        membership.new_chat_member.status,
-                    )
+            if membership_update:
+                from .permission_notice import notify
+
+                await notify(
+                    self,
+                    chat,
+                    membership_update.new_chat_member,
+                    old_status=old_status,
+                    event=update.update_id,
+                )
             message = getattr(update, "message", None)
             if message and not getattr(message, "sender_chat", None):
                 self.moderation.remember(chat.id, getattr(message, "from_user", None))
@@ -725,6 +954,8 @@ class Main(Star):
                     self.moderation.remember(chat.id, getattr(reply, "from_user", None))
             migrated = getattr(message, "migrate_to_chat_id", None) if message else None
             if migrated:
+                if getattr(self, "semantic_review", None):
+                    self.semantic_review.pause(str(chat.id), "group_migrated")
                 self.store.db.execute(
                     "INSERT OR IGNORE INTO mod_groups(chat,title) VALUES(?,?)",
                     (str(migrated), chat.title or str(migrated)),
@@ -735,13 +966,11 @@ class Main(Star):
                 )
                 self.moderation.pause(str(chat.id), "group_migrated")
                 self.ad_killer.pause(str(chat.id), "group_migrated")
-            if membership and membership.new_chat_member.status in {"left", "kicked"}:
-                self.store.db.execute(
-                    "UPDATE mod_groups SET enabled=0,version=version+1 WHERE chat=?",
-                    (str(chat.id),),
-                )
-                self.moderation.pause(str(chat.id), "bot_left")
-                self.ad_killer.pause(str(chat.id), "bot_left")
+        if self.store and getattr(self, "semantic_review", None):
+            try:
+                self.semantic_review.capture(update)
+            except Exception as exc:
+                self.report("semantic_capture", exc)
         if (
             not self.store
             or not update.effective_user
@@ -798,7 +1027,21 @@ class Main(Star):
                 )
             keyboard = self.ui.keyboard(uid)
             signature = str(keyboard.to_dict())
-            if self.keyboard_versions.get(uid) != signature:
+            opening = (
+                (
+                    (
+                        getattr(getattr(update, "message", None), "text", None) or ""
+                    ).split(maxsplit=1)
+                    or [""]
+                )[0]
+                .split("@", 1)[0]
+                .lower()
+            )
+            if self.keyboard_versions.get(uid) != signature and opening not in {
+                "/start",
+                "/superbot",
+                "/cancel",
+            }:
                 await self.bot.send_message(
                     chat_id=update.effective_chat.id,
                     text="菜单已更新。",
@@ -810,6 +1053,23 @@ class Main(Star):
         query = update.callback_query
         message = update.message
         if query:
+            if str(query.data).startswith(("ga:", "gq:")) and getattr(
+                self, "activities", None
+            ):
+                from .activity_ui import public_action
+
+                try:
+                    answer = await public_action(self, update)
+                    await query.answer(answer[:180], show_alert=True)
+                except Rejected as exc:
+                    await query.answer(str(exc)[:180], show_alert=True)
+                except Exception as exc:
+                    self.report("activity_callback", exc)
+                    await query.answer(
+                        "本次显示未完成，请查看活动面板；不会重新抽奖。",
+                        show_alert=True,
+                    )
+                raise ApplicationHandlerStop
             if str(query.data).startswith("mn:") and hasattr(self, "mines"):
                 try:
                     answer = await self.mines.action(update)
@@ -866,7 +1126,7 @@ class Main(Star):
                         uid, None if private else chat.id
                     ):
                         raise Rejected(
-                            "本经营主体未获付费制图授权，请联系平台；不会调用生图接口。"
+                            "本群制图已关闭、暂停或达到总控显式限额；不会调用生图接口。"
                         )
                     payload = self.store.resolve(
                         query.data[3:], uid, str(update.effective_chat.id)
@@ -977,7 +1237,7 @@ class Main(Star):
                 self.report("callback", exc)
                 await self.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text="操作结果请到订单或流水核查；不要反复提交。",
+                    text=self.callback_failure_message(payload, exc),
                 )
             raise ApplicationHandlerStop
         if not message and getattr(update, "edited_message", None):
@@ -1004,13 +1264,28 @@ class Main(Star):
         text = (message.text or "").strip()
         chat_key = (str(update.effective_chat.id), uid)
         command = text.split(" ", 1)[0].split("@")[0]
-        if (
-            text.startswith("/")
-            and "@" in text.split(" ", 1)[0]
-            and text.split(" ", 1)[0].split("@", 1)[1].lower()
-            != self.bot.username.lower()
-        ):
-            raise ApplicationHandlerStop
+        if not private:
+            from .command_router import ownership
+            from .tenants import local_config
+
+            routed = ownership(
+                message,
+                self.bot.username,
+                self.bot.id,
+                strict=local_config(self.store, chat.id, "command_mode", "compat")
+                == "strict",
+            )
+            if not routed.accepted:
+                if await self.ad_killer.inspect(update):
+                    raise ApplicationHandlerStop
+                if getattr(
+                    self, "fingerprints", None
+                ) and await self.fingerprints.inspect(update):
+                    raise ApplicationHandlerStop
+                if routed.reason == "strict_bare_command":
+                    raise ApplicationHandlerStop
+                return
+            command = routed.command or command
         if command == "/bindgroup" and getattr(self, "tenants", None):
             try:
                 if (
@@ -1024,7 +1299,8 @@ class Main(Star):
                     raise Rejected("请先私聊打开我的群，获取完整绑定命令。")
                 await self.tenants.bind(uid, str(chat.id), parts[1])
                 result = (
-                    "✅ 本群绑定成功。功能默认关闭，请私聊「我的群」配置并确认启用。"
+                    "✅ 本群绑定成功。普通新群请直接把机器人设为管理员，"
+                    "会自动接入并启用默认功能。"
                 )
             except Rejected as exc:
                 result = str(exc)
@@ -1054,7 +1330,9 @@ class Main(Star):
                 ):
                     avatar_handled = False
                     if command == "/avatar":
-                        raise Rejected("本经营主体未获付费制图授权，请联系平台。")
+                        raise Rejected(
+                            "本群制图已关闭、暂停或达到总控显式限额，请联系管理员。"
+                        )
                 else:
                     avatar_handled = await self.avatar.message(update, command)
             except Rejected as exc:
@@ -1096,7 +1374,7 @@ class Main(Star):
                 ):
                     await self.bot.send_message(
                         chat_id=chat.id,
-                        text="本经营主体未开通付费AI客服。请使用「帮助」查看静态说明；广告收款与退款联系对应群主。",
+                        text="本群AI客服已关闭、暂停或达到总控显式限额。请使用「帮助」查看静态说明；广告收款与退款联系对应群主。",
                     )
                     raise ApplicationHandlerStop
                 if len(self.chat_sessions) >= 2000:
@@ -1178,36 +1456,35 @@ class Main(Star):
             if getattr(self, "fingerprints", None):
                 if await self.fingerprints.inspect(update):
                     raise ApplicationHandlerStop
+            if getattr(self, "activities", None):
+                from .activity_ui import public_message
+
+                if await public_message(self, update):
+                    raise ApplicationHandlerStop
             if hasattr(self, "group_game"):
                 try:
+                    # Group /help must use the same folded, group-scoped help
+                    # as the visible keyboard button.
+                    group_command = text.split(" ", 1)[0].split("@")[0].lower()
+                    if (
+                        group_command == "/help"
+                        and getattr(self, "group_keyboard", None)
+                        and await self.group_keyboard.help(update)
+                    ):
+                        raise ApplicationHandlerStop
                     if getattr(
                         self, "group_keyboard", None
                     ) and await self.group_keyboard.message(update):
                         raise ApplicationHandlerStop
-                    if text.strip() in {
-                        "扫雷",
-                        "扫雷接龙",
-                        "💣 扫雷接龙",
-                    } and hasattr(self, "mines"):
-                        await self.mines.open(update)
-                        raise ApplicationHandlerStop
-                    if text.strip() in {
-                        "老虎机",
-                        "老虎机PvP",
-                        "🎰老虎机PvP",
-                        "🎰 老虎機PvP",
-                    } and hasattr(self, "slots"):
-                        await self.slots.open(update)
-                        raise ApplicationHandlerStop
-                    if (
-                        text.strip() in {"转盘", "积分转盘"} or command == "/wheel"
-                    ) and hasattr(self, "wheel"):
+                    game = getattr(self, "game_registry", None)
+                    spec = game.match(text, command) if game else None
+                    if spec and hasattr(self, spec.attribute):
                         if (
                             not message.from_user.is_bot
                             and not message.sender_chat
                             and not getattr(message, "forward_origin", None)
                         ):
-                            await self.wheel.open(update)
+                            await getattr(self, spec.attribute).open(update)
                         raise ApplicationHandlerStop
                     if await self.group_game.message(update, command, text):
                         raise ApplicationHandlerStop
@@ -1219,16 +1496,8 @@ class Main(Star):
             ):
                 await community_ui.group_command(self, update, command)
                 raise ApplicationHandlerStop
-            if text in MENU or text.split(" ", 1)[0].split("@")[0] in (
-                "/start",
-                "/superbot",
-                "/help",
-            ):
-                await self.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"请私聊 @{self.bot.username} 使用完整菜单。",
-                )
-                raise ApplicationHandlerStop
+            if getattr(self, "activities", None):
+                self.activities.observe(update)
             if (
                 self.store.get("modules", {}).get("points")
                 and not message.sender_chat
@@ -1249,7 +1518,9 @@ class Main(Star):
             self.limits = {
                 key: value for key, value in self.limits.items() if now - value < 60
             }
-        business = bool(dialog or text in MENU or text.startswith("/"))
+        business = bool(
+            dialog or text in MENU or text == "广告投递" or text.startswith("/")
+        )
         if not business:
             if not chat_enabled:
                 if time.monotonic() - self.limits.get("chat_hint:" + uid, 0) > 30:
@@ -1264,7 +1535,19 @@ class Main(Star):
         try:
             command = text.split(" ", 1)[0].split("@")[0]
             argument = text.split(" ", 1)[1].strip() if " " in text else ""
-            if command == "/start" and argument.startswith("quick_"):
+            if command == "/start" and argument.startswith("manage_"):
+                target = argument[len("manage_") :]
+                if (
+                    not target.startswith("-")
+                    or not target[1:].isascii()
+                    or not target[1:].isdigit()
+                    or len(target) > 20
+                ):
+                    raise Rejected("群管理入口无效。")
+                await self.ui.action(
+                    update, {"action": "activity_group", "chat": target}
+                )
+            elif command == "/start" and argument.startswith("quick_"):
                 shortcut = argument[6:]
                 if shortcut in {"game", "bet"}:
                     shortcut = "play"
@@ -1298,6 +1581,9 @@ class Main(Star):
                 )
             elif command in ("/start", "/superbot", "/cancel"):
                 await self.ui.home(update)
+            elif text == "广告投递":
+                self.store.clear_dialog(uid)
+                await self.ui.action(update, {"action": "tenant_ad_search"})
             elif command == "/uid":
                 await self.ui.render(
                     update, f"你的 Telegram 数字 UID：{uid}。此命令不授予权限。"
@@ -1333,7 +1619,8 @@ class Main(Star):
         except Exception as exc:
             self.report("input", exc)
             await self.bot.send_message(
-                chat_id=uid, text="处理失败，请到订单或流水核查结果。"
+                chat_id=uid,
+                text="设置未保存，请返回「我的群」重新打开设置；如仍失败，请查看「异常记录」。",
             )
         raise ApplicationHandlerStop
 
@@ -1342,6 +1629,23 @@ class Main(Star):
         if not self.store or event.get_platform_id() != self.config.get("platform_id"):
             return
         req.func_tool = None
+        raw = getattr(getattr(event, "message_obj", None), "raw_message", None)
+        message = getattr(raw, "effective_message", None)
+        if isinstance(raw, Update) and message is not None and event.get_group_id():
+            from .command_router import ownership
+            from .tenants import local_config
+
+            if not ownership(
+                message,
+                self.bot.username,
+                self.bot.id,
+                strict=local_config(
+                    self.store, str(event.get_group_id()), "command_mode", "compat"
+                )
+                == "strict",
+            ).accepted:
+                event.stop_event()
+                return
         uid = str(event.get_sender_id())
         if getattr(self, "tenants", None) and not self.tenants.resource_allowed(
             uid, event.get_group_id() or None, "chat"
@@ -1379,7 +1683,6 @@ class Main(Star):
         modules = self.store.get("modules", {})
         facts = []
         for scope, label in (
-            ("ads", "广告投递"),
             ("points", "签到积分"),
             ("game", "玩法中心／加拿大28"),
             ("moderation", "群管理服务"),
@@ -1411,7 +1714,6 @@ class Main(Star):
         else:
             facts.append("签到和聊天奖励目前未开放。")
         facts.append(
-            "使用入口：广告投递→发布广告/我的广告；签到积分→每日签到/积分记录；我的→广告余额及积分。"
             "群内发送积分、积分查询或/points可查本人积分，不需要激活下注；"
             "引用原消息回复，发送成功后约10秒撤回，保留5秒查询冷却。"
         )
@@ -1435,12 +1737,9 @@ class Main(Star):
             "客服仅在私聊开启30分钟，不代办业务或执行管理动作；过快操作限流后不会排队补执行。"
         )
         facts.append(
-            "广告充值："
-            + (
-                "已配置开启，实际能否创建充值单以「我的」菜单为准。"
-                if self.config.get("usdt_enabled")
-                else "未开启。"
-            )
+            "广告投递：先选择目标群，广告位、收款配置和开放状态以该群当前投递入口核验为准；"
+            "不能根据全局状态断言任一群可投递。"
+            "个人资金钱包、充值及余额支付已停用；广告按所选群的直付订单付款，历史记录保留。"
         )
         req.system_prompt += (
             "\n当前公开功能快照（优先于旧对话及知识库，不代表个人订单或余额查询）：\n"
@@ -1467,17 +1766,30 @@ class Main(Star):
             task.cancel()
         if self.tasks:
             await asyncio.gather(*self.tasks, return_exceptions=True)
+            self.tasks.clear()
         pending = set(self.active_updates)
         if pending:
             # Wait for our handlers, not the long-lived Telegram transport task.
             await asyncio.shield(asyncio.gather(*pending, return_exceptions=True))
-        if self.keno:
-            await self.keno.close()
-        if getattr(self, "avatar", None):
-            await self.avatar.client.aclose()
-        if getattr(self, "payments", None):
-            await self.payments.close()
-        if self.store:
-            self.store.close()
-        if self.instance_lock:
-            self.instance_lock.release()
+        self.platform = None
+        self.application = None
+        clients = [
+            (self.keno, "close"),
+            (getattr(getattr(self, "avatar", None), "client", None), "aclose"),
+            (getattr(self, "payments", None), "close"),
+        ]
+        for client, method in clients:
+            if client is not None:
+                try:
+                    await getattr(client, method)()
+                except Exception as exc:
+                    self.logger.warning(
+                        "Superbot client cleanup failed: %s", type(exc).__name__
+                    )
+        try:
+            if self.store:
+                self.store.close()
+                self.store = None
+        finally:
+            if self.instance_lock:
+                self.instance_lock.release()

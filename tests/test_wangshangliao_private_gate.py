@@ -15,6 +15,7 @@ from astrbot.core.platform.platform_metadata import PlatformMetadata
 from astrbot.core.platform.sources.wangshangliao.event import WangshangliaoEvent
 from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from astrbot.core.platform.sources.wangshangliao.test_window import TestWindow as Window
+from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 from astrbot.core.star.filter.command import CommandFilter
 
 pytestmark = pytest.mark.usefixtures("wsl_command_classifier")
@@ -22,21 +23,21 @@ pytestmark = pytest.mark.usefixtures("wsl_command_classifier")
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "text,admin,private,expected",
+    "text,admin,private",
     [
-        ("/sid", False, True, 1),
-        ("/help", False, True, 1),
-        ("/unknown", False, True, 1),
-        ("!alias arg", False, True, 1),
-        ("!plugin\targ", False, True, 1),
-        ("plugin arg", False, True, 1),
-        ("hello", False, True, 0),
-        ("/help", True, True, 0),
-        ("/help", False, False, 0),
+        ("/sid", False, True),
+        ("/help", False, True),
+        ("/unknown", False, True),
+        ("!alias arg", False, True),
+        ("!plugin\targ", False, True),
+        ("plugin arg", False, True),
+        ("hello", False, True),
+        ("/help", True, True),
+        ("/help", False, False),
     ],
 )
 async def test_gate_before_plugins_with_replies_disabled(
-    monkeypatch, text, admin, private, expected
+    monkeypatch, text, admin, private
 ):
     monkeypatch.setattr(
         "astrbot.core.platform.astr_message_event.AstrMessageEvent.send", AsyncMock()
@@ -71,12 +72,12 @@ async def test_gate_before_plugins_with_replies_disabled(
     )
     await stage.process(event)
     await stage.process(event)
-    assert platform.send_reply_text.await_count == expected
-    if expected:
-        assert platform.send_reply_text.await_args.args[2] == "无权限"
+    platform.send_reply_text.assert_not_awaited()
+    if private:
         assert event.is_stopped()
-    else:
-        assert not event.is_at_or_wake_command
+        assert not event.eligible
+        assert not event.get_extra("wsl_command_result")
+    assert not event.is_at_or_wake_command
 
 
 @pytest.mark.asyncio
@@ -96,18 +97,18 @@ async def test_other_platform_unchanged(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "scope,window_state,expected",
+    "scope,window_state",
     [
-        ("private_commands", "active", 1),
-        ("private_commands", "expired", 0),
-        ("private_commands", "absent", 0),
-        ("private_commands", "unadmitted", 0),
-        ("private_ai", "active", 0),
-        (None, "active", 0),
+        ("private_commands", "active"),
+        ("private_commands", "expired"),
+        ("private_commands", "absent"),
+        ("private_commands", "unadmitted"),
+        ("private_ai", "active"),
+        (None, "active"),
     ],
 )
-async def test_managed_sender_denial_is_bounded_to_admitted_command(
-    monkeypatch, scope, window_state, expected
+async def test_managed_sender_private_gate_is_inert_for_legacy_scopes(
+    monkeypatch, scope, window_state
 ):
     monkeypatch.setattr(
         "astrbot.core.platform.astr_message_event.AstrMessageEvent.send", AsyncMock()
@@ -131,22 +132,25 @@ async def test_managed_sender_denial_is_bounded_to_admitted_command(
     platform = SimpleNamespace(
         account="1",
         nim_account="901",
-        enabled_groups=set(),
+        enabled_groups={"5"},
         stopping=asyncio.Event(),
         config={"reply_private": False},
         meta=lambda: PlatformMetadata("wangshangliao", "test", id="test"),
         send_reply_text=AsyncMock(),
     )
     sender = SimpleNamespace(account="2", nim_account="902", stopping=asyncio.Event())
-    window = Window(platform, sender, [], ["private_commands"], [], 300, 1)
+    if scope:
+        with pytest.raises(ProtocolError, match="^test_window_arguments$"):
+            Window(platform, sender, ["5"], [scope], [], 300, 1)
+    window = Window(platform, sender, ["5"], ["group_commands"], [], 300, 1)
     if window_state != "unadmitted":
         assert (
             window.admit(
-                "private/2/OTAy",
+                "5",
                 "message",
                 {"sender": "2", "transport_peer": "902", "text": msg.message_str},
             )
-            == "private_commands"
+            == "group_commands"
         )
     if window_state == "expired":
         window.expires = 0
@@ -159,12 +163,7 @@ async def test_managed_sender_denial_is_bounded_to_admitted_command(
     await stage.process(event)
     assert event.is_stopped()
     assert not event.is_admin()
-    assert platform.send_reply_text.await_count == expected
-    if expected:
-        call = platform.send_reply_text.await_args
-        assert call.args[2] == "无权限"
-        assert call.kwargs["test_mid"] == "message"
-        await call.kwargs["authorize"]()
-        assert window.replies == {
-            ("private/2/OTAy", "message"): "1/private/2/OTAy/message/0"
-        }
+    platform.send_reply_text.assert_not_awaited()
+    assert not event.eligible
+    assert not window.replies
+    assert not event.get_extra("wsl_command_result")

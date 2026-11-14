@@ -10,12 +10,10 @@ const props = defineProps<{
   t: (zh: string, en: string) => string;
 }>();
 const groups = ref<Array<{ id: string; name: string }>>([]);
-const privateTargets = ref<Array<{ value: string; name: string; uid: string }>>([]);
 const targets = computed(() => [
   ...props.form.enabled_groups.map((id: string) => ({
     value: id, name: groups.value.find(g => g.id === id)?.name || props.bot.group_names?.[id] || id,
   })),
-  ...privateTargets.value.map(item => ({ value: item.value, name: `${item.name} · UID ${item.uid}` })),
 ]);
 const loading = ref(false);
 const error = ref("");
@@ -33,12 +31,10 @@ async function directory() {
   loading.value = true;
   error.value = "";
   groups.value = [];
-  privateTargets.value = [];
   try {
     const data = await props.bridge.apiGet("groups", { bot_id: props.bot.id });
     if (current === sequence) {
       groups.value = data.groups || [];
-      privateTargets.value = data.private_targets || [];
     }
   } catch (err) {
     if (current === sequence) error.value = err instanceof Error ? err.message : String(err);
@@ -143,7 +139,7 @@ onBeforeUnmount(() => { sequence++; taskSequence++; });
     <label v-for="target in targets" :key="target.value" class="switch-row">
       <span>{{ target.name }}</span><input v-model="form.proactive_send.targets" type="checkbox" :value="target.value" />
     </label>
-    <label v-for="value in form.proactive_send.targets.filter((value: string) => !targets.some(t => t.value === value))" :key="value" class="switch-row">
+    <label v-for="value in form.proactive_send.targets.filter((value: string) => !value.startsWith('private/') && !targets.some(t => t.value === value))" :key="value" class="switch-row">
       <span>{{ t("已保存目标（名称未核验）", "Saved destination (name unverified)") }} · {{ value }}</span>
       <input v-model="form.proactive_send.targets" type="checkbox" :value="value" />
     </label>
@@ -174,8 +170,8 @@ onBeforeUnmount(() => { sequence++; taskSequence++; });
       <label>{{ t("有效秒数", "Seconds") }}<input v-model.number="form.developer_test.seconds" type="number" min="1" max="300" /></label>
       <label>{{ t("入站次数", "Inbound budget") }}<input v-model.number="form.developer_test.budget" type="number" min="1" max="10" /></label>
     </div>
-    <label v-for="scope in ['private_commands', 'private_ai', 'group_commands', 'group_ai', 'group_rules']" :key="scope" class="switch-row">
-      <span>{{ ({ private_commands: t("私聊命令", "Private commands"), private_ai: t("私聊 AI", "Private AI"), group_commands: t("群内命令", "Group commands"), group_ai: t("群内 AI", "Group AI"), group_rules: t("违规规则", "Violation rules") } as Record<string, string>)[scope] }}</span><input v-model="form.developer_test.scopes" type="checkbox" :value="scope" />
+    <label v-for="scope in ['group_commands', 'group_ai', 'group_rules']" :key="scope" class="switch-row">
+      <span>{{ ({ group_commands: t("群内命令", "Group commands"), group_ai: t("群内 AI", "Group AI"), group_rules: t("违规规则", "Violation rules") } as Record<string, string>)[scope] }}</span><input v-model="form.developer_test.scopes" type="checkbox" :value="scope" />
     </label>
     <label>{{ t("测试群", "Test groups") }}<select v-model="form.developer_test.groups" multiple><option v-for="id in form.enabled_groups" :key="id" :value="id">{{ bot.group_names?.[id] || id }}</option></select></label>
     <label>{{ t("测试关键词（WSL_TEST_ 开头，每行一个）", "Test keywords (WSL_TEST_ prefix, one per line)") }}<textarea :value="form.developer_test.keywords.join('\n')" rows="3" @input="form.developer_test.keywords = ($event.target as HTMLTextAreaElement).value.split('\n').map(v => v.trim()).filter(Boolean)" /></label>

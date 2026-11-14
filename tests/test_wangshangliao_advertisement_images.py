@@ -10,7 +10,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from PIL import Image
@@ -581,12 +581,33 @@ def test_departure_removes_only_this_groups_images_and_rotation(rules):
 
 
 @pytest.mark.asyncio
-async def test_private_rule_query_explains_missing_group_without_calling_ai(rpc_scope):
-    service, adapter, _ = rpc_scope
+async def test_private_rule_query_rejects_retirement_without_ai_or_rule_writes(
+    rpc_scope, monkeypatch
+):
+    service, adapter, rows = rpc_scope
+    service.store.remember_roster(
+        str(adapter.account), {row["userId"]: row for row in rows}
+    )
     event = chat_event(adapter)
     event.get_group_id = lambda: ""
-    with pytest.raises(OpenError, match="business_group_required"):
+    with service.store.connect() as db:
+        before = tuple(db.iterdump())
+    blocked = Mock(
+        side_effect=AssertionError("retired query must not read rules or AI")
+    )
+    monkeypatch.setattr(service.rule_replies, "read", blocked)
+    monkeypatch.setattr(service.rule_replies.media, "upload", blocked)
+    monkeypatch.setattr(service.context, "get_all_providers", blocked)
+    monkeypatch.setattr(service.context, "get_provider_by_id", blocked)
+    requests_before = adapter.business.request.await_count
+    with pytest.raises(OpenError, match="^private_messages_retired$"):
         await service.rule_replies.command(event, "定时广告")
+    blocked.assert_not_called()
+    assert adapter.business.request.await_count == requests_before
+    event.send.assert_not_awaited()
+    assert not hasattr(service, "support")
+    with service.store.connect() as db:
+        assert tuple(db.iterdump()) == before
 
 
 @pytest.mark.parametrize(

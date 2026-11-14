@@ -17,6 +17,7 @@ from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
     BUSINESS_FIELDS,
     PolicySnapshot,
     runtime,
+    strip_private_settings,
 )
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
@@ -25,7 +26,10 @@ def business_revision(config: dict) -> str:
     """Fingerprint business settings, independently of transport settings."""
     if config.get("_business_revision"):
         return str(config["_business_revision"])
-    values = {key: config[key] for key in BUSINESS_FIELDS if key in config}
+    values = {
+        key: copy.deepcopy(config[key]) for key in BUSINESS_FIELDS if key in config
+    }
+    strip_private_settings(values)
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
@@ -54,8 +58,6 @@ def validate_settings(values: dict) -> None:
         or len(set(groups)) != len(groups)
     ):
         raise ValueError("enabled_groups_invalid")
-    if type(values.get("reply_private", True)) is not bool:
-        raise ValueError("reply_private_invalid")
     replies = values.get("reply_groups", {})
     if not isinstance(replies, dict) or any(
         not isinstance(g, str)
@@ -69,9 +71,7 @@ def validate_settings(values: dict) -> None:
     routes = values.get("ai_routes", {})
     if (
         not isinstance(routes, dict)
-        or set(routes) - {"admin_provider_id", "groups"}
-        or not isinstance(routes.get("admin_provider_id", ""), str)
-        or len(routes.get("admin_provider_id", "")) > 256
+        or set(routes) - {"groups"}
         or not isinstance(routes.get("groups", {}), dict)
         or len(routes.get("groups", {})) > 100
         or any(
@@ -97,7 +97,7 @@ def validate_settings(values: dict) -> None:
         or not isinstance(proactive.get("targets", []), list)
         or len(proactive.get("targets", [])) > 1000
         or any(
-            not isinstance(t, str) or not t or len(t) > 2048
+            not isinstance(t, str) or not t or len(t) > 2048 or t.startswith("private/")
             for t in proactive.get("targets", [])
         )
     ):
@@ -116,8 +116,6 @@ def validate_settings(values: dict) -> None:
             not isinstance(s, str)
             or s
             not in {
-                "private_commands",
-                "private_ai",
                 "group_commands",
                 "group_ai",
                 "group_rules",
@@ -179,6 +177,8 @@ class BusinessSettings:
             payload: Trusted new envelope to enrich.
             received_at: Local ingress timestamp.
         """
+        if group.startswith("private/"):
+            return
         from astrbot.core.platform.sources.wangshangliao.event import is_managed_account
 
         from .syntax import recognize_command
@@ -193,14 +193,6 @@ class BusinessSettings:
         payload["_dispatch_class"] = (
             "command" if recognize_command(str(payload.get("text", ""))) else "message"
         )
-        if group.startswith("private/"):
-            from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
-                runtime,
-            )
-
-            finance = getattr(runtime.open_service, "finance_chat", None)
-            if finance is not None:
-                finance.observe(account, group, payload)
         from astrbot.core.platform.sources.wangshangliao.group_scope import (
             group_config,
             group_revision,
@@ -250,13 +242,26 @@ class BusinessSettings:
             in config.get("_open_managers", {}).get(group, [])
         ):
             return
+        from .content_rules import content_category
+
         if (
             policy.get("advertising_enabled") is not False
-            and not policy.get("semantic", {}).get("enabled")
+            and (
+                not policy.get("semantic", {}).get("enabled")
+                or content_category(payload, policy)
+                in {"blacklist_keyword", "consecutive_digits"}
+            )
             or policy.get("video_whitelist_only") is True
             and payload.get("kind") == "video"
+            or policy.get("recall_forward") is True
+            and payload.get("kind") == "forward"
+            or payload.get("kind") == "image"
+            and payload.get("image")
+            and (
+                policy.get("image_qr_recall") is True
+                or policy.get("image_digits_recall") is True
+            )
         ) and payload["_dispatch_class"] != "command":
-            from .content_rules import content_category
             from .policy import is_fresh_message
 
             category = content_category(
@@ -268,6 +273,16 @@ class BusinessSettings:
                     .get("custom_rules", []),
                 },
             )
+            if (
+                not category
+                and payload.get("kind") == "image"
+                and payload.get("image")
+                and (
+                    policy.get("image_qr_recall") is True
+                    or policy.get("image_digits_recall") is True
+                )
+            ):
+                category = "image_inspection"
             if category and is_fresh_message(payload, received_at):
                 payload["_ingress_content"] = {
                     "category": category,
@@ -278,6 +293,30 @@ class BusinessSettings:
                     "sender": sender,
                     "message": str(message),
                 }
+        if policy.get("raid_defense_enabled"):
+            from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
+                runtime,
+            )
+
+            raid = getattr(runtime.open_service, "raid_defense", None)
+            receiver = (
+                next(
+                    (
+                        bot
+                        for bot in runtime.open_service.adapters()
+                        if str(bot.account) == account
+                    ),
+                    None,
+                )
+                if raid is not None
+                else None
+            )
+            if receiver is not None:
+                decision = raid.observe(
+                    receiver, group, str(message), payload, received_at
+                )
+                if decision:
+                    payload["_ingress_raid"] = decision
         if policy.get("flood_enabled") is False:
             return
         payload["_ingress_flood"] = {
@@ -381,7 +420,9 @@ class BusinessSettings:
             if row and row["account"] != account:
                 raise ValueError("business_account_binding_conflict")
             if row:
-                validate_settings(json.loads(row["payload"]))
+                values = json.loads(row["payload"])
+                strip_private_settings(values)
+                validate_settings(values)
             if not row:
                 if not BUSINESS_FIELDS.intersection(config):
                     raise ValueError("business_policy_missing")
@@ -389,7 +430,7 @@ class BusinessSettings:
                     k: copy.deepcopy(config[k]) for k in BUSINESS_FIELDS if k in config
                 }
                 values.setdefault("enabled_groups", [])
-                values.setdefault("reply_private", True)
+                strip_private_settings(values)
                 values.setdefault("reply_groups", {})
                 values.setdefault("ai_routes", {})
                 values.setdefault("proactive_send", {"enabled": False, "targets": []})
@@ -481,6 +522,7 @@ class BusinessSettings:
         previous = copy.deepcopy(platforms)
         for bot in platforms:
             if bot.get("type") == "wangshangliao" and runtime.snapshot(bot):
+                strip_private_settings(bot)
                 for key in BUSINESS_FIELDS:
                     bot.pop(key, None)
         try:
@@ -562,6 +604,8 @@ class BusinessSettings:
         instance, account = str(config["id"]), str(config["account_id"])
         values = {k: copy.deepcopy(config[k]) for k in BUSINESS_FIELDS if k in config}
         try:
+            if "reply_private" in config:
+                raise ValueError("business_settings_fields")
             validate_settings(values)
             async with self.lock:
                 if not self.active or runtime.service is not self:

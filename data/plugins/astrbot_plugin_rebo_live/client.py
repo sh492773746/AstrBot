@@ -6,10 +6,15 @@ import hashlib
 import json
 import time
 import uuid
+from urllib.parse import urlsplit
 
 import aiohttp
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from pyhpke import AEADId, CipherSuite, KDFId, KEMId
 
 BASE = "https://api.partdvo.com/api/v2/"
 
@@ -21,7 +26,17 @@ class RemoteError(Exception):
         self.code = code
         self.business_code = business_code
         self.endpoint = endpoint
-        super().__init__(f"服务返回错误码：{code}")
+        detail = f" / 业务码{business_code}" if business_code is not None else ""
+        stage = f"（{endpoint}）" if endpoint else ""
+        super().__init__(f"服务返回错误码：{code}{detail}{stage}")
+
+    @property
+    def review_reason(self):
+        """Return an allowlisted reason without exposing upstream payloads."""
+        return {
+            2010392001: "内容触发平台敏感词校验",
+            2010122004: "当前账号暂不可发言",
+        }.get(self.business_code, "平台未提供可展示的具体审核原因")
 
 
 class Client:
@@ -29,9 +44,17 @@ class Client:
         self.session = session
         self.device = device
         self.tokens = tokens
+        self.hpke_key = None
+        self.hpke_until = 0
+        self.hpke_lock = asyncio.Lock()
+        self.hpke_suite = CipherSuite.new(
+            KEMId.DHKEM_X25519_HKDF_SHA256,
+            KDFId.HKDF_SHA256,
+            AEADId.AES256_GCM,
+        )
 
     async def request(self, path, data=None, authenticated=True):
-        """Call a known service endpoint without logging its payload.
+        """Call the service using its v1 HPKE envelope without automatic retries.
 
         Args:
             path: Relative API path.
@@ -44,21 +67,124 @@ class Client:
         Raises:
             RemoteError: HTTP or application failure.
         """
-        headers = {"X-Device-ID": self.device, "X-Request-ID": uuid.uuid4().hex}
+        headers = {
+            "X-Device-ID": self.device,
+            "X-Device": "pc",
+            "X-Request-ID": uuid.uuid4().hex,
+            "Accept": "application/json",
+        }
         if authenticated:
             headers["Authorization"] = "Bearer " + self.tokens.get("access_token", "")
+        endpoint = path.split("?", 1)[0]
+        # Only the HPKE bootstrap key is fetched in plaintext, as in the
+        # official client. Never downgrade credentials or tokens to plaintext.
+        async with self.hpke_lock:
+            if self.hpke_key is None or time.monotonic() >= self.hpke_until:
+                async with self.session.get(
+                    BASE + "user/hpke/public-key",
+                    headers={"X-Device-ID": self.device, "Accept": "application/json"},
+                ) as response:
+                    payload = await response.json()
+                    if response.status != 200 or payload.get("code") != 0:
+                        raise RemoteError(
+                            response.status,
+                            business_code=payload.get("code"),
+                            endpoint="user/hpke/public-key",
+                        )
+                    key = (payload.get("data") or {}).get("public_key", "")
+                    if (
+                        not isinstance(key, str)
+                        or "." in key
+                        and not key.startswith("ae71.")
+                    ):
+                        raise RemoteError(
+                            "unsupported_encryption", endpoint="user/hpke/public-key"
+                        )
+                    try:
+                        key = key.removeprefix("ae71.")
+                        raw = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
+                        if len(raw) != 32:
+                            raise ValueError("Invalid key length")
+                        self.hpke_key = self.hpke_suite.kem.deserialize_public_key(raw)
+                    except Exception:
+                        raise RemoteError(
+                            "invalid_key", endpoint="user/hpke/public-key"
+                        ) from None
+                    self.hpke_until = time.monotonic() + 300
+        method = "POST" if data is not None else "GET"
+        url = urlsplit(BASE + path)
+        timestamp = str(int(time.time()))
+        enc, sender = self.hpke_suite.create_sender_context(
+            self.hpke_key, info=b"live-api-v1"
+        )
+        ciphertext = sender.seal(
+            json.dumps(
+                {"q": url.query, "b": data}, ensure_ascii=False, separators=(",", ":")
+            ).encode(),
+            f"{method}\n{url.path}\n{timestamp}".encode(),
+        )
+        headers.update(
+            {
+                "X-Enc": "v1",
+                "X-Enc-Ts": timestamp,
+                "X-Enc-Enc": base64.urlsafe_b64encode(enc).rstrip(b"=").decode(),
+            }
+        )
+        target = url._replace(query="", fragment="").geturl()
+        if data is None:
+            target += "?e=" + base64.urlsafe_b64encode(ciphertext).rstrip(b"=").decode()
+        else:
+            headers["Content-Type"] = "application/octet-stream"
         async with self.session.request(
-            "POST" if data is not None else "GET",
-            BASE + path,
-            json=data,
+            method,
+            target,
+            data=ciphertext if data is not None else None,
             headers=headers,
         ) as response:
+            if response.headers.get("X-Enc", "").lower() == "v1":
+                try:
+                    nonce = response.headers["X-Enc-Nonce"]
+                    nonce = base64.urlsafe_b64decode(nonce + "=" * (-len(nonce) % 4))
+                    secret = sender.export(b"live-api-v1 response", 32)
+                    key = HKDF(
+                        algorithm=hashes.SHA256(),
+                        length=32,
+                        salt=enc + nonce,
+                        info=b"key",
+                    ).derive(secret)
+                    iv = HKDF(
+                        algorithm=hashes.SHA256(),
+                        length=12,
+                        salt=enc + nonce,
+                        info=b"nonce",
+                    ).derive(secret)
+                    payload = json.loads(
+                        AESGCM(key).decrypt(iv, await response.read(), None)
+                    )
+                except Exception:
+                    raise RemoteError(
+                        "invalid_encrypted_response", endpoint=endpoint
+                    ) from None
+            else:
+                try:
+                    payload = await response.json()
+                except Exception:
+                    raise RemoteError("invalid_response", endpoint=endpoint) from None
+            if not isinstance(payload, dict):
+                raise RemoteError("invalid_response", endpoint=endpoint)
+            business_code = payload.get("code")
+            if type(business_code) is not int:
+                business_code = None
+            if business_code in {2001031, 2001032}:
+                self.hpke_key = None
             if response.status != 200:
-                raise RemoteError(response.status, endpoint=path.split("?", 1)[0])
-            payload = await response.json()
+                raise RemoteError(
+                    response.status, business_code=business_code, endpoint=endpoint
+                )
             if payload.get("code") != 0:
                 raise RemoteError(
-                    payload.get("code", "unknown"), endpoint=path.split("?", 1)[0]
+                    business_code if business_code is not None else "unknown",
+                    endpoint=endpoint,
                 )
             return payload.get("data") or {}
 
@@ -266,4 +392,13 @@ class Client:
                         business_code = detail["code"]
                 except (ValueError, TypeError):
                     pass
+                diagnostic["error_code"] = (
+                    message.get("ErrorCode")
+                    if type(message.get("ErrorCode")) is int
+                    else None
+                )
+                diagnostic["business_code"] = business_code
+                diagnostic["review_reason"] = RemoteError(
+                    message.get("ErrorCode"), business_code
+                ).review_reason
                 raise RemoteError(message.get("ErrorCode", "rejected"), business_code)

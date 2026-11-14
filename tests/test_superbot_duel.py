@@ -92,8 +92,7 @@ async def test_expiry_restart_and_reply(text_service):
     await s.text.deliver("-1001")
     assert s.bot.send_message.await_args.kwargs["reply_parameters"].message_id == 1
     assert (
-        s.store.db.execute("SELECT due FROM gt_delete").fetchone()[0]
-        == s.clock[0] + 120
+        s.store.db.execute("SELECT due FROM gt_delete").fetchone()[0] == s.clock[0] + 10
     )
     s.clock[0] += 121
     Duel(s.text).tick()
@@ -404,7 +403,7 @@ async def test_prefix_free_flow_final_reply_and_native_entities(text_service):
     assert any(e.type == "expandable_blockquote" for e in args["entities"])
     assert any(e.type == "bold" for e in args["entities"])
     assert (
-        s.store.db.execute("SELECT due FROM gt_delete").fetchone()[0] == s.clock[0] + 30
+        s.store.db.execute("SELECT due FROM gt_delete").fetchone()[0] == s.clock[0] + 60
     )
 
 

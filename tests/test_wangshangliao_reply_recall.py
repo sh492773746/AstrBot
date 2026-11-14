@@ -549,7 +549,8 @@ async def test_private_and_unflagged_chat_do_not_schedule(setup):
     await adapter.send_text("5", "chat", "Chat")
     session = "private/2/" + wire.b64(b"902")
     await adapter.ledger.ingest("1", session, "m", {"sender": "2"})
-    await adapter.send_reply_text(session, "private", "Private", auto_recall=True)
+    with pytest.raises(wire.ProtocolError, match="private_messages_retired"):
+        await adapter.send_reply_text(session, "private", "Private", auto_recall=True)
     assert await jobs(adapter) == []
 
 
@@ -836,6 +837,9 @@ async def test_all_command_replies_including_followups_ignore_keep_marker(
     )
     for text in ("Menu", "Confirmation preview"):
         await event.send(MessageChain([Plain(text)]))
+    if private:
+        event.platform.send_reply_text.assert_not_awaited()
+        return
     assert event.platform.send_reply_text.await_count == 2
     assert all(
         call.kwargs.get("auto_recall", False) is (not private)
@@ -845,31 +849,41 @@ async def test_all_command_replies_including_followups_ignore_keep_marker(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("same_sender", [False, True])
-async def test_real_menu_numbers_only_clean_up_the_senders_own_active_session(
-    command_event, setup, monkeypatch, same_sender
+@pytest.mark.parametrize("text", ["1", "0"])
+async def test_group_consent_confirmation_and_cancellation_preserve_actor_scope(
+    command_event, setup, monkeypatch, same_sender, text
 ):
     from astrbot.builtin_stars.wangshangliao_moderation.command_menu import (
         CommandMenu,
-        overview,
-    )
-    from astrbot.builtin_stars.wangshangliao_moderation.open_service import (
-        recognize_integrated,
+        Session,
     )
 
     adapter, _ = setup
     monkeypatch.setattr(
         "astrbot.core.platform.astr_message_event.AstrMessageEvent.send", AsyncMock()
     )
-    menu = CommandMenu(
-        SimpleNamespace(
-            integrated=True,
-            tenants={},
-            recognize_command=recognize_integrated,
-            admit_command=lambda _: True,
-            menu=overview(),
-        )
+    service = SimpleNamespace(
+        tenants={},
+        suspended_groups=set(),
+        membership_receiving={},
+        settings={"version": 1},
+        group_ai=SimpleNamespace(configs={}),
+        plans=SimpleNamespace(confirm_stamp=Mock(return_value=())),
+        admit_command=lambda _: True,
+        manager_command=AsyncMock(return_value="Billing confirmed"),
     )
-    assert await menu.handle(command_event, "菜单")
+    menu = CommandMenu(service)
+    state = Session(
+        expires=time.monotonic() + 60,
+        confirm="确认本群扣费",
+        stamp=menu.stamp(command_event),
+        preview_message="123",
+    )
+    owner_key = menu.key(command_event)
+    menu.sessions[owner_key] = state
+    command_event.set_extra("wsl_plain_command", True)
+    await reply_recall.schedule_command(command_event)
+    await command_event.send(command_event.plain_result("Billing confirmation preview"))
     sender, peer = ("2", "902") if same_sender else ("3", "903")
     adapter.members["5"][sender] = peer
     await adapter.ledger.ingest(
@@ -879,7 +893,7 @@ async def test_real_menu_numbers_only_clean_up_the_senders_own_active_session(
         {
             "sender": sender,
             "name": "Member",
-            "text": "3",
+            "text": text,
             "created_at": time.time() * 1000,
             "mentions": [],
             "recall_route": {"client": "choice-client", "time": "1000", "peer": peer},
@@ -888,12 +902,17 @@ async def test_real_menu_numbers_only_clean_up_the_senders_own_active_session(
     work = asyncio.create_task(adapter.process_group("5", single=True))
     event = await asyncio.wait_for(adapter._event_queue.get(), 1)
     try:
-        assert await menu.handle(event, "3") is same_sender
+        consumed = same_sender or text == "0"
+        assert await menu.handle(event, text) is consumed
+        await reply_recall.schedule_command(event)
         async with adapter.ledger.db.execute(
             "SELECT sender FROM reply_recalls WHERE key='recall/1/5/124'"
         ) as cursor:
-            assert await cursor.fetchone() == (("2",) if same_sender else None)
-        assert len(await jobs(adapter)) == (4 if same_sender else 2)
+            assert await cursor.fetchone() == ((sender,) if consumed else None)
+        assert len(await jobs(adapter)) == (4 if consumed else 2)
+        assert service.manager_command.await_count == int(same_sender and text == "1")
+        assert (owner_key not in menu.sessions) is same_sender
+        assert state.closed is same_sender
     finally:
         event.processing_completion.set_result(None)
         await asyncio.wait_for(work, 1)

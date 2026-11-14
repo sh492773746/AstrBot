@@ -13,7 +13,9 @@ from data.plugins.astrbot_plugin_superbot import community_ui
 from data.plugins.astrbot_plugin_superbot.ad_killer import AdKiller, defaults
 from data.plugins.astrbot_plugin_superbot.community import Community
 from data.plugins.astrbot_plugin_superbot.community_logs import CommunityLogs
+from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
 from data.plugins.astrbot_plugin_superbot.join_verify import JoinVerify
+from data.plugins.astrbot_plugin_superbot.semantic_review import SemanticReview
 from data.plugins.astrbot_plugin_superbot.store import Rejected
 
 
@@ -39,6 +41,33 @@ def private(uid=1):
     )
 
 
+@pytest.mark.asyncio
+async def test_welcome_and_rules_current_and_legacy_callbacks(community):
+    from unittest.mock import AsyncMock
+
+    s = community
+    s.runtime.semantic_review = SemanticReview(s.runtime)
+    s.members[2] = Member("administrator")
+    tenants = GroupAuthority(s.runtime).runtime.tenants
+    await tenants.designate("1", "-1001", "2", True, s.mod.row("-1001")["version"])
+    s.runtime.ui.render = AsyncMock()
+    await s.runtime.ui.action(
+        private(2), {"action": "semantic_group_menu", "chat": "-1001"}
+    )
+    buttons = s.runtime.ui.render.await_args.args[2]
+    welcome = next(payload for label, payload in buttons if label == "欢迎与群规")
+    await s.runtime.ui.action(private(2), welcome)
+    assert "欢迎与群规" in s.runtime.ui.render.await_args.args[1]
+    assert "🔴" in str(s.runtime.ui.render.await_args.args[2])
+    await s.runtime.ui.action(private(2), {"action": "cm_home", "chat": "-1001"})
+    assert "欢迎与群规" in s.runtime.ui.render.await_args.args[1]
+    s.members[2].status = "member"
+    with pytest.raises(Rejected):
+        await s.runtime.ui.action(private(2), welcome)
+    with pytest.raises(Rejected):
+        await s.runtime.ui.action(private(2), {"action": "cm_home", "chat": "-1001"})
+
+
 def report_update(uid=2, number=10):
     update = message("/report", number=100 + number, user=uid)
     update.message.reply_to_message = SimpleNamespace(
@@ -56,7 +85,10 @@ async def test_defaults_migration_and_view_permission(community):
     s = community
     assert not any(s.cm.policy("-1001")["config"]["enabled"].values())
     assert not s.cm.policy("-1001")["config"]["log"]["enabled"]
+    s.members[2] = Member("creator")
     s.members[1] = Member("administrator")
+    tenants = GroupAuthority(s.runtime).runtime.tenants
+    await tenants.designate("2", "-1001", "1", True, s.mod.row("-1001")["version"])
     s.members[1].can_restrict_members = False
     s.members[9].can_restrict_members = False
     cfg = s.cm.policy("-1001")["config"]
@@ -67,9 +99,10 @@ async def test_defaults_migration_and_view_permission(community):
     with pytest.raises(Rejected):
         await s.mod.check("1", "-1001", "mute")
     await s.runtime.ui.action(private(), {"action": "mod_group", "chat": "-1001"})
-    assert "举报处理" in str(s.bot.send_message.await_args.kwargs["reply_markup"])
+    assert "举报处理" not in str(s.bot.send_message.await_args.kwargs["reply_markup"])
+    assert "限时禁言" in str(s.bot.send_message.await_args.kwargs["reply_markup"])
     with pytest.raises(Rejected):
-        await s.cm.save("2", "-1001", 1, cfg)
+        await s.cm.save("3", "-1001", 1, cfg)
     with pytest.raises(Rejected):
         await s.cm.save("1", "-1001", 0, cfg)
     s.members[2] = Member("left")
@@ -87,12 +120,18 @@ async def test_scoped_admin_and_old_button_revoked(community):
         "INSERT INTO roles VALUES('2','[\"moderation\"]',?)", (s.clock[0] + 10,)
     )
     s.store.db.execute("INSERT INTO mod_acl VALUES('2','-1001')")
-    await s.runtime.ui.action(private(2), {"action": "cm_cases", "chat": "-1001"})
-    s.store.db.execute("DELETE FROM mod_acl WHERE uid='2'")
     with pytest.raises(Rejected):
         await s.runtime.ui.action(private(2), {"action": "cm_cases", "chat": "-1001"})
-    s.store.db.execute("INSERT INTO mod_acl VALUES('2','-1001')")
+    tenants = s.runtime.tenants
+    await tenants.designate("1", "-1001", "2", True, s.mod.row("-1001")["version"])
+    await s.runtime.ui.action(private(2), {"action": "cm_cases", "chat": "-1001"})
+    await tenants.designate("1", "-1001", "2", False, s.mod.row("-1001")["version"])
+    with pytest.raises(Rejected):
+        await s.runtime.ui.action(private(2), {"action": "cm_cases", "chat": "-1001"})
+    await tenants.designate("1", "-1001", "2", True, s.mod.row("-1001")["version"])
     s.clock[0] += 11
+    await s.runtime.ui.action(private(2), {"action": "cm_cases", "chat": "-1001"})
+    s.members[2].status = "member"
     with pytest.raises(Rejected):
         await s.runtime.ui.action(private(2), {"action": "cm_cases", "chat": "-1001"})
     assert "群管理" not in str(s.runtime.ui.keyboard("2"))
@@ -461,8 +500,6 @@ async def test_log_preflight_failure_backoff_and_revocation(community):
 async def test_public_command_links_and_foreign_command(community):
     from unittest.mock import MagicMock
 
-    from telegram.ext import ApplicationHandlerStop
-
     from data.plugins.astrbot_plugin_superbot.main import Main
 
     s = community
@@ -481,8 +518,7 @@ async def test_public_command_links_and_foreign_command(community):
     plugin.application = SimpleNamespace(bot=s.bot, running=True)
     update.message.text = "/report@someone_else"
     s.bot.send_message.reset_mock()
-    with pytest.raises(ApplicationHandlerStop):
-        await plugin.receive(update, None)
+    await plugin.receive(update, None)
     s.bot.send_message.assert_not_awaited()
     assert not plugin.active_updates
 
@@ -527,6 +563,7 @@ async def test_unload_waits_without_cancelling_transport():
 
     plugin = Main(MagicMock(), {})
     plugin.store = MagicMock()
+    store = plugin.store
     release = asyncio.Event()
     transport = asyncio.create_task(release.wait())
     plugin.active_updates.add(transport)
@@ -537,7 +574,8 @@ async def test_unload_waits_without_cancelling_transport():
     assert not transport.cancelled()
     release.set()
     await stopping
-    plugin.store.close.assert_called_once()
+    store.close.assert_called_once()
+    assert plugin.store is None
     assert not transport.cancelled()
 
 

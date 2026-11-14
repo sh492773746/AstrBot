@@ -4,7 +4,7 @@ import { adminConversationCandidates } from "../src/utils/adminConversationCandi
 
 function wsl(uid, name, extra = {}) {
   return {
-    umo: `wangshangliao_bot:FriendMessage:20000002/private/${uid}/MTIz`,
+    umo: `wangshangliao_bot:FriendMessage:9798577/private/${uid}/MTIz`,
     creator_sender_id: uid,
     auto_name: name,
     ...extra,
@@ -20,7 +20,7 @@ test("uses the business UID, never the bot, UMO or NIM transport identity", () =
 
 test("rejects groups even when they have a named creator", () => {
   assert.deepEqual(adminConversationCandidates([
-    wsl("23691273", "Group", { umo: "wangshangliao_bot:GroupMessage:20000002/1143980" }),
+    wsl("23691273", "Group", { umo: "wangshangliao_bot:GroupMessage:9798577/1143980" }),
     { umo: "telegram_bot:GroupMessage:group", creator_sender_id: "123", auto_name: "A group" },
   ]), []);
 });

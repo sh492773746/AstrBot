@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import nacl.bindings
+import lz4.block
 import pytest
 
 from astrbot.core.platform.sources.wangshangliao import wire
@@ -30,16 +31,18 @@ def application():
 
 def inner_message(*, compressed=True, key=KEY):
     message = application()
-    if compressed:
-        return wire.seal_message(key, message, 123, 321, 1000)
+    aad = 321 if compressed else 0
     plain = message.SerializeToString()
+    if compressed:
+        plain = lz4.block.compress(plain, store_size=True)
     sealed = nacl.bindings.crypto_aead_chacha20poly1305_encrypt(
-        plain, bytes(8), struct.pack("<Q", 123), key
+        plain, struct.pack("<Q", aad), struct.pack("<Q", 123), key
     )
     envelope = wire.Envelope(
         header=1002 << 34 | 1000 << 4 | 1 << 2 | 1,
         timestamp=1000,
         nonce=123,
+        aad=aad,
         body=sealed[:-16],
         tag=sealed[-16:],
     )
@@ -167,7 +170,7 @@ def test_authenticated_packet_metadata_cannot_replace_message_identity():
 
 
 @pytest.mark.asyncio
-async def test_current_packet_reaches_durable_ingress_without_model_or_management(
+async def test_private_packet_is_acknowledged_without_decoding_or_storage(
     tmp_path,
 ):
     adapter = WangshangliaoAdapter(
@@ -195,14 +198,9 @@ async def test_current_packet_reaches_durable_ingress_without_model_or_managemen
         )
         adapter.nim.acknowledge.assert_awaited_once_with(0, "77")
         assert adapter.receive_health["decode_failures"] == 0
-        assert adapter.receive_health["decoded_messages"] == 1
-        async with adapter.ledger.db.execute(
-            "SELECT payload,state FROM inbox WHERE message='77'"
-        ) as cursor:
-            payload, state = await cursor.fetchone()
-        assert json.loads(payload)["sender"] == "1002"
-        assert json.loads(payload)["transport_peer"] == "9002"
-        assert state == "business_suspended"
+        assert adapter.receive_health["decoded_messages"] == 0
+        async with adapter.ledger.db.execute("SELECT COUNT(*) FROM inbox") as cursor:
+            assert (await cursor.fetchone())[0] == 0
         assert adapter._event_queue.empty()
     finally:
         await adapter.ledger.close()

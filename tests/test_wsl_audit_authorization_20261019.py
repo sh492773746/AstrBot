@@ -9,9 +9,10 @@ import threading
 import time
 from contextlib import closing
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+import pytest_asyncio
 
 import astrbot.core as astrbot_core
 from astrbot.api.message_components import At
@@ -19,9 +20,6 @@ from astrbot.builtin_stars.wangshangliao_moderation import group_management
 from astrbot.builtin_stars.wangshangliao_moderation.ai_config import AdminConfigDrafts
 from astrbot.builtin_stars.wangshangliao_moderation.cashback_finance import FinanceActor
 from astrbot.builtin_stars.wangshangliao_moderation.cashback_store import CashbackError
-from astrbot.builtin_stars.wangshangliao_moderation.conversation_profiles import (
-    DEFAULT as PROFILE_DEFAULT,
-)
 from astrbot.builtin_stars.wangshangliao_moderation.group_management import (
     GroupManagement,
 )
@@ -48,7 +46,6 @@ from astrbot.builtin_stars.wangshangliao_moderation.open_store import (
 )
 from astrbot.core.platform.sources.wangshangliao.event import WangshangliaoEvent
 from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
-from tests.test_wangshangliao_ai_plans import setup_billing
 from tests.test_wangshangliao_cashback import (
     CASHIER,
     OWNER,
@@ -62,10 +59,11 @@ from tests.test_wangshangliao_cashback import (
 from tests.test_wangshangliao_cashback import (
     store as store,
 )
-from tests.test_wangshangliao_group_ai import fake_http
+from tests.test_wangshangliao_group_ai import fake_http, model_scope
 from tests.test_wangshangliao_integrated_service import service
 from tests.test_wangshangliao_lifecycle import lifecycle as lifecycle
 from tests.test_wangshangliao_lifecycle import notice
+from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
 from tests.test_wangshangliao_plain_commands import native_event
 
 
@@ -276,11 +274,14 @@ async def test_rpc_postcommit_cancel_reconciles_revoked_manager(tmp_path, monkey
     event = SimpleNamespace(
         platform=adapter,
         actor_identity=ActorIdentity("99", "2", "1002", "2"),
-        is_private_chat=lambda: True,
+        is_private_chat=lambda: False,
+        get_group_id=lambda: "5",
         get_sender_id=lambda: "2",
+        unified_msg_origin="offline:GroupMessage:99/5",
         get_extra=lambda _: None,
     )
     assert value.management.allowed(event, "5")
+    assert value.management.allowed(event, "6")
     request = asyncio.create_task(
         OpenRPC(value).dispatch(
             OpenCall(action="tenant", actor="dashboard/offline", payload=payload)
@@ -297,6 +298,7 @@ async def test_rpc_postcommit_cancel_reconciles_revoked_manager(tmp_path, monkey
         assert value.store.tenant("99", "5")["managers"] == ["1"]
         assert not value.management.allowed(event, "5")
         assert denied_while_draining
+        assert not value.reconciling_groups
         assert value.management.allowed(event, "6")
         assert [
             t
@@ -449,7 +451,8 @@ def test_legacy_group_grants_reject_unverified_actor(tmp_path, identity):
         actor_identity=identity,
         get_sender_id=lambda: "2",
         get_extra=lambda _: None,
-        is_private_chat=lambda: True,
+        get_group_id=lambda: "5",
+        is_private_chat=lambda: False,
         is_admin=lambda: False,
     )
     assert not management.allowed(event, "5")
@@ -511,58 +514,39 @@ def test_maintenance_recovery_rejects_other_group_actor(
     assert select(store, "4") == item
 
 
-@pytest.fixture
-def private_chat_scope(tmp_path):
-    """Provide a private consultation with only an in-memory HTTP test double.
+@pytest_asyncio.fixture
+async def group_chat_scope(rpc_scope):
+    """Provide an admitted group AI scope backed by isolated stores.
 
     Args:
-        tmp_path: Temporary service and billing storage.
+        rpc_scope: Temporary tenants, inbox and synthetic native roster API.
 
-    Returns:
-        Service and synthetic private event, without native transport methods.
+    Yields:
+        Service, offline adapter and a configured, payer-authorized group AI row.
     """
-    value, adapter, rows = scoped_service(tmp_path)
-    value.model = {"provider_id": "existing/model"}
-    value.profiles.save("consultation", "99", "", 0, PROFILE_DEFAULT, "offline/fixture")
-    setup_billing(value)
-    value.store.confirm_budget(
-        value.budget["version"],
-        True,
-        "existing/model",
-        "offline cap",
-        "audit",
-        binding=value.store.model_binding(value.resolve_model()),
-    )
-    value.budget = value.store.budget()
-    value.store.remember_roster("99", rows)
-    value.notify_quota = AsyncMock()
-    extras = {"_wsl_native_reply_result": "accepted"}
-    event = SimpleNamespace(
-        platform=adapter,
-        actor_identity=ActorIdentity("99", "1", "1001", "1"),
-        get_sender_id=lambda: "1",
-        is_private_chat=lambda: True,
-        eligible=True,
-        message_str="offline question",
-        unified_msg_origin="offline:FriendMessage:99/private/1001",
-        message_obj=SimpleNamespace(message_id="offline-chat"),
-        get_extra=extras.get,
-        set_extra=lambda key, value: extras.__setitem__(key, value),
-        send=AsyncMock(),
-        plain_result=lambda text: text,
-    )
-    return value, event
+    value, adapter, _ = rpc_scope
+    row = await model_scope(value, adapter)
+    try:
+        yield value, adapter, row
+    finally:
+        await value.group_ai.close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("publish", [False, True])
-async def test_budget_revocation_suppresses_late_private_reply_and_history(
-    private_chat_scope, monkeypatch, publish
+async def test_budget_revocation_suppresses_late_group_reply_and_history(
+    group_chat_scope, monkeypatch, publish
 ):
-    value, event = private_chat_scope
+    value, adapter, row = group_chat_scope
     entered, release = asyncio.Event(), asyncio.Event()
-    fake_http(monkeypatch, content="offline late answer", barrier=(entered, release))
-    task = asyncio.create_task(value.chat(event))
+    requests = fake_http(
+        monkeypatch, content="offline late answer", barrier=(entered, release)
+    )
+    task = asyncio.create_task(
+        value.group_ai.run(
+            adapter, row, "mention/audit-budget/2/1002", "offline question"
+        )
+    )
     try:
         await asyncio.wait_for(entered.wait(), 5)
         value.store.confirm_budget(
@@ -578,7 +562,8 @@ async def test_budget_revocation_suppresses_late_private_reply_and_history(
     finally:
         release.set()
         await asyncio.wait_for(task, 5)
-    event.send.assert_not_awaited()
+    assert len(requests) == 1
+    adapter.send_text.assert_not_awaited()
     assert all(
         not row.content for row in value.context.conversation_manager.db.rows.values()
     )
@@ -588,10 +573,11 @@ async def test_budget_revocation_suppresses_late_private_reply_and_history(
 
 
 @pytest.mark.asyncio
-async def test_exit_fences_a_pending_native_history_append(
-    private_chat_scope, monkeypatch
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_group_revocation_fences_a_pending_native_history_append(
+    group_chat_scope, monkeypatch, cancel
 ):
-    value, event = private_chat_scope
+    value, adapter, row = group_chat_scope
     fake_http(monkeypatch, content="offline old answer")
     entered, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
     original_save = value.conversations.save
@@ -608,16 +594,29 @@ async def test_exit_fences_a_pending_native_history_append(
             finished.set()
 
     monkeypatch.setattr(value.conversations, "save", delayed_save)
-    task = asyncio.create_task(value.chat(event))
+    task = asyncio.create_task(
+        value.group_ai.run(
+            adapter, row, "mention/audit-history/2/1002", "offline question"
+        )
+    )
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        await value.end_chat("99", "nim/1001")
+        adapter.send_text.assert_awaited_once()
+        tenant = value.store.tenant("99", "5")
+        value.store.depart("99", "5", tenant["epoch"], "offline-audit")
+        await value.refresh()
+        if cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+        assert not value.tenants[("99", "5")]["active"]
+        assert value.tenants[("99", "6")]["active"]
         assert all(
             not row.content
             for row in value.context.conversation_manager.db.rows.values()
         )
         release.set()
-        await asyncio.gather(task, return_exceptions=True)
+        result = await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5)
+        assert result == [None]
         assert finished.is_set()
         assert all(
             not row.content
@@ -629,24 +628,29 @@ async def test_exit_fences_a_pending_native_history_append(
 
 
 @pytest.mark.asyncio
-async def test_budget_revocation_at_private_delivery_boundary(
-    private_chat_scope, monkeypatch
+async def test_budget_revocation_at_group_delivery_boundary(
+    group_chat_scope, monkeypatch
 ):
-    value, event = private_chat_scope
+    value, adapter, row = group_chat_scope
     fake_http(monkeypatch, content="offline queued answer")
     entered, release = asyncio.Event(), asyncio.Event()
     delivered = []
 
-    async def delayed_delivery(message):
+    async def delayed_delivery(group, key, text, *, authorize, **kwargs):
+        assert group == "5"
+        assert key.startswith("group-ai/")
+        assert callable(authorize)
         entered.set()
         await release.wait()
-        guard = event.get_extra("_wsl_management_delivery_guard")
-        if callable(guard):
-            guard()
-        delivered.append(message)
+        await authorize()
+        delivered.append(text)
 
-    event.send = delayed_delivery
-    task = asyncio.create_task(value.chat(event))
+    adapter.send_text = AsyncMock(side_effect=delayed_delivery)
+    task = asyncio.create_task(
+        value.group_ai.run(
+            adapter, row, "mention/audit-delivery/2/1002", "offline question"
+        )
+    )
     try:
         await asyncio.wait_for(entered.wait(), 5)
         value.store.confirm_budget(
@@ -661,58 +665,40 @@ async def test_budget_revocation_at_private_delivery_boundary(
         release.set()
         await asyncio.wait_for(task, 5)
     assert delivered == []
+    adapter.send_text.assert_awaited_once()
     assert all(
         not row.content for row in value.context.conversation_manager.db.rows.values()
     )
 
 
 @pytest.mark.asyncio
-async def test_native_event_delivers_with_latest_budget_authorization(
-    private_chat_scope, monkeypatch
+async def test_native_private_event_never_delivers_or_consumes_budget(
+    group_chat_scope, monkeypatch
 ):
-    value, template = private_chat_scope
-    fake_http(monkeypatch, content="offline queued native answer")
-    message = native_event(template.message_str, private=True).message_obj
+    value, adapter, _ = group_chat_scope
+    requests = fake_http(monkeypatch, content="offline answer must not be requested")
+    message = native_event("offline question", private=True).message_obj
     message.self_id = "99"
     message.session_id = "99/private/1/MTAwMQ=="
     message.sender.user_id = "1"
     message.raw_message = {"_transport_peer": "1001"}
-    event = WangshangliaoEvent(message, template.platform, True)
-    entered, release = asyncio.Event(), asyncio.Event()
-    delivered, prior_checks = [], []
-
-    def previous_delivery():
-        prior_checks.append(True)
-
+    event = WangshangliaoEvent(message, adapter, True)
+    previous_delivery = Mock()
     event.set_extra("_wsl_management_delivery_guard", previous_delivery)
-
-    async def offline_transport(target, key, text, *, authorize, **kwargs):
-        entered.set()
-        await release.wait()
-        await authorize()
-        delivered.append(text)
-        return "accepted"
-
-    event.platform.send_reply_text = offline_transport
-    task = asyncio.create_task(value.chat(event))
-    try:
-        await asyncio.wait_for(entered.wait(), 5)
-        value.store.confirm_budget(
-            value.budget["version"],
-            False,
-            "existing/model",
-            "offline revoke",
-            "audit",
-            binding=value.budget["binding"],
-        )
-    finally:
-        release.set()
-        await asyncio.wait_for(task, 5)
-    assert prior_checks == [True]
-    assert delivered == []
-    assert all(
-        not row.content for row in value.context.conversation_manager.db.rows.values()
-    )
+    adapter.send_reply_text = AsyncMock()
+    with value.store.connect() as db:
+        before = tuple(db.iterdump())
+    await value.on_event(event)
+    assert event.is_stopped()
+    assert event.get_extra("_component_claimed") is True
+    assert not event.eligible
+    assert requests == []
+    adapter.send_text.assert_not_awaited()
+    adapter.send_reply_text.assert_not_awaited()
+    previous_delivery.assert_not_called()
+    assert not value.context.conversation_manager.db.rows
+    with value.store.connect() as db:
+        assert tuple(db.iterdump()) == before
     assert event.get_extra("_wsl_management_delivery_guard") is previous_delivery
 
 
@@ -897,7 +883,7 @@ def test_historical_binding_cannot_add_a_departed_member(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_chat_manager_list_can_revoke_departed_grant_but_cannot_add_it(tmp_path):
+async def test_group_manager_list_can_revoke_departed_grant_but_cannot_add_it(tmp_path):
     value, adapter, rows = scoped_service(tmp_path)
     value.store.remember_roster("99", rows)
     rows.pop("2")
@@ -907,18 +893,14 @@ async def test_chat_manager_list_can_revoke_departed_grant_but_cannot_add_it(tmp
         platform=adapter,
         actor_identity=ActorIdentity("99", "1", "1001", "1"),
         get_sender_id=lambda: "1",
-        get_group_id=lambda: "",
-        is_private_chat=lambda: True,
+        get_group_id=lambda: "5",
+        is_private_chat=lambda: False,
         get_extra=extras.get,
         get_messages=lambda: [],
-        unified_msg_origin="offline:FriendMessage:99/private/1",
+        unified_msg_origin="offline:GroupMessage:99/5",
         message_obj=SimpleNamespace(message_id="list"),
     )
-    key = (id(adapter), adapter.account, "1", event.unified_msg_origin)
-    value.plugin.commands.selections[key] = {
-        "expires": time.monotonic() + 600,
-        "group": "5",
-    }
+    assert value.management.allowed(event, "5")
     assert "UID 2" in await value.manager_command(event, "管理员列表")
     assert "不能用于添加" in await value.manager_command(event, "添加管理员 2")
     event.get_messages = lambda: [At(qq="2")]
@@ -956,17 +938,23 @@ def test_shared_cleanup_without_trusted_instances_preserves_native_looking_rows(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("peer", ["902", "forged-peer"])
-async def test_real_legacy_private_entry_denies_unverified_identity(tmp_path, peer):
+@pytest.mark.parametrize("verified", [False, True])
+async def test_real_legacy_private_entry_is_inert_even_with_group_grants(
+    tmp_path, peer, verified
+):
     event = native_event("管理 群列表", private=True)
-    event.actor_identity = ActorIdentity("1", "2", peer)
+    event.actor_identity = ActorIdentity("1", "2", peer, "2" if verified else "")
     event.send = AsyncMock()
     context = SimpleNamespace(get_config=lambda *args: {"admins_id": []})
     management = GroupManagement(context, tmp_path)
     management.assignments[management.key(event.platform, "5")] = ("2",)
+    before = dict(management.assignments)
     plugin = object.__new__(Main)
     plugin.context = context
     plugin.group_management = management
     plugin.commands = SimpleNamespace(run=AsyncMock())
     await Main.moderation_command(plugin, event, "群列表")
     plugin.commands.run.assert_not_awaited()
-    event.send.assert_awaited_once()
+    event.send.assert_not_awaited()
+    assert event.is_stopped()
+    assert management.assignments == before
