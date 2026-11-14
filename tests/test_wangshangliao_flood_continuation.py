@@ -76,8 +76,11 @@ def test_latest_warning_batch_never_inherits_an_older_mute(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mute_status", ["accepted", "unknown"])
 async def test_eighty_five_messages_keep_every_recall_without_repeated_preflight(
-    bot, mute_status
+    bot, monkeypatch, mute_status
 ):
+    # Keep one live burst independent of SQLite speed; async delays stay real.
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
     runtime = runtime_for(bot)
     bot.diagnostics.gauges = {}
     original = bot.get_moderation_members.return_value
@@ -95,9 +98,12 @@ async def test_eighty_five_messages_keep_every_recall_without_repeated_preflight
         bot.execute_moderation.return_value = {"status": "unknown"}
     try:
         for number in range(85):
+            clock[0] += 0.025
             mid = str(100 + number)
             payload = await ingest(bot, mid, "", kind="image")
+            assert payload["_ingress_flood"]["rapid"] == number + 1
             if number >= 4:
+                assert payload["_ingress_flood"]["category"] == "message_flood"
                 await runtime.execute(
                     ("fixture", "1", "5", "2"), bot, mid, payload, None
                 )

@@ -11,7 +11,7 @@ import pytest
 from astrbot.builtin_stars.wangshangliao_moderation import content_rules, policy
 from astrbot.builtin_stars.wangshangliao_moderation.flood import FloodRuntime
 from astrbot.core.pipeline.rate_limit_check.stage import RateLimitStage
-from tests.test_wangshangliao_flood import fresh_bot, ingest
+from tests.test_wangshangliao_flood import drain_recalls, fresh_bot, ingest
 
 bot = fresh_bot
 
@@ -275,11 +275,79 @@ async def test_fastlane_backlog_is_bounded_and_scans_past_benign_messages(bot):
             await asyncio.gather(*runtime.workers.values())
             if len([call for call in bot.calls if call[0] == "recall"]) == 6:
                 break
-        assert len([call for call in bot.calls if call[0] == "recall"]) == 6
-        assert len([call for call in bot.calls if call[0] == "mute"]) == 3
+        await drain_recalls(runtime)
+        assert sorted(call for call in bot.calls if call[0] == "recall") == [
+            ("recall", str(mid), "22") for mid in (101, 103, 105, 107, 109, 111)
+        ]
+        assert [call for call in bot.calls if call[0] == "mute"] == [
+            ("mute", "2", minutes) for minutes in (1, 3, 10)
+        ]
         assert bot.diagnostics.gauges["rule_queue_full"] > 0
         assert bot.diagnostics.gauges["rule_pending"] == 0
+        assert not runtime.recalls
+        assert not any(runtime.recall_counts.values())
+        with bot._review_store.connect() as db:
+            assert db.execute(
+                "SELECT message,status,warning FROM content_violations ORDER BY message"
+            ).fetchall() == [
+                (str(mid), "recalled" if mid < 107 else "muted", "accepted")
+                for mid in (101, 103, 105, 107, 109, 111)
+            ]
     finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_fastlane_drain_waits_for_independent_recall_receipt(bot):
+    bot.config["moderation"].update(mute_keywords=["fixture-ad"], flood_enabled=False)
+    runtime = runtime_for(bot, slots=1, backlog=2)
+    entered, release = asyncio.Event(), asyncio.Event()
+    draining = None
+    try:
+        for mid in (101, 103, 105):
+            await ingest(bot, str(mid), "fixture-ad")
+            await runtime.step()
+            await asyncio.gather(*runtime.workers.values())
+        original = bot.nim.request.side_effect
+
+        async def delayed_recall(*args):
+            entered.set()
+            await release.wait()
+            return await original(*args)
+
+        bot.nim.request.side_effect = delayed_recall
+        await ingest(bot, "107", "fixture-ad")
+        await runtime.step()
+        await asyncio.gather(*runtime.workers.values())
+        assert bot.calls[-1] == ("mute", "2", 1)
+        draining = asyncio.create_task(drain_recalls(runtime))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert all(task.done() for task in runtime.workers.values())
+        assert len(runtime.recall_workers) == 1
+        assert not next(iter(runtime.recall_workers.values())).done()
+        assert not draining.done()
+        assert sum(runtime.recall_counts.values()) == 1
+        with bot._review_store.connect() as db:
+            assert db.execute(
+                "SELECT status,warning FROM content_violations WHERE message='107'"
+            ).fetchone() == ("muted", "pending")
+        release.set()
+        await asyncio.wait_for(draining, 5)
+        assert [call for call in bot.calls if call[0] == "recall"] == [
+            ("recall", str(mid), "22") for mid in (101, 103, 105, 107)
+        ]
+        assert not runtime.recalls
+        assert not any(runtime.recall_counts.values())
+        with bot._review_store.connect() as db:
+            assert db.execute(
+                "SELECT status,warning FROM content_violations WHERE message='107'"
+            ).fetchone() == ("muted", "accepted")
+    finally:
+        release.set()
+        if draining is not None:
+            if not draining.done():
+                draining.cancel()
+            await asyncio.gather(draining, return_exceptions=True)
         await runtime.close()
 
 
