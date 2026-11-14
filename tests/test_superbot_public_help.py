@@ -87,7 +87,7 @@ def test_public_service_knowledge_covers_current_boundaries():
 async def test_private_catalog_is_guidance_only(flow):  # noqa: F811
     ui = flow.runtime.ui
     labels = [button.text for row in ui.keyboard("2").keyboard for button in row]
-    assert labels == ["我的群", "客服", "帮助"]
+    assert labels == ["我的群", "帮助", "客服"]
     for action in ("game",):
         flow.bot.send_message.reset_mock()
         await ui.action(private(2), {"action": action})

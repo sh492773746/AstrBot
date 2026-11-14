@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from data.plugins.astrbot_plugin_superbot.ads import Ads
-from data.plugins.astrbot_plugin_superbot.group_points import migrate as points_migrate
 from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
+from data.plugins.astrbot_plugin_superbot.group_points import migrate as points_migrate
 from data.plugins.astrbot_plugin_superbot.merchant_ads import MerchantAds, authorized
 from data.plugins.astrbot_plugin_superbot.moderation import Moderation
 from data.plugins.astrbot_plugin_superbot.payments import (
@@ -31,7 +31,11 @@ def merchant(tmp_path):
     clock = [1800000000.0]
     store = Store(tmp_path / "tenant.sqlite", "1", lambda: clock[0])
     points_migrate(store)
-    runtime = SimpleNamespace(store=store, report=lambda *args: None)
+    runtime = SimpleNamespace(
+        store=store,
+        report=lambda *args: None,
+        application=SimpleNamespace(running=True),
+    )
     owners = {"-1001": "10", "-1002": "20", "-1003": "10"}
 
     async def member(chat, uid):
@@ -42,6 +46,8 @@ def merchant(tmp_path):
             if owners.get(str(chat)) == str(uid)
             else "member",
             can_pin_messages=True,
+            can_delete_messages=True,
+            can_restrict_members=True,
         )
 
     runtime.bot = SimpleNamespace(
@@ -86,7 +92,9 @@ def merchant(tmp_path):
         for chat, uid in (("-1001", "10"), ("-1002", "20"), ("-1003", "10")):
             await runtime.tenants.bind(uid, chat, runtime.tenants.invite(uid))
             for feature in ("group", "ads"):
-                async with GroupAuthority(runtime).session(uid, chat, allow_paused=True):
+                async with GroupAuthority(runtime).session(
+                    uid, chat, allow_paused=True
+                ):
                     runtime.tenants.switch(
                         uid, chat, feature, True, binding(store, chat)["version"]
                     )
@@ -113,14 +121,17 @@ def merchant(tmp_path):
     store.close()
 
 
-def invoice(runtime, key="order1", buyer="30"):
+async def invoice(runtime, key="order1", buyer="30"):
     runtime.merchant_ads.submit(buyer, "pkg1", "test creative", "test contact", 1, key)
     row = runtime.merchant_ads.order(buyer, key)
-    return runtime.merchant_ads.approve("10", key, row["version"])
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        return runtime.merchant_ads.approve("10", key, row["version"])
 
 
 @pytest.mark.asyncio
-async def test_auto_owner_correction_rejects_member_and_requires_separate_restore(merchant):
+async def test_auto_owner_correction_rejects_member_and_requires_separate_restore(
+    merchant,
+):
     runtime, _, owners = merchant
     store = runtime.store
     store.db.execute("UPDATE tenant_groups SET mode='auto' WHERE chat='-1003'")
@@ -133,9 +144,12 @@ async def test_auto_owner_correction_rejects_member_and_requires_separate_restor
     row = binding(store, "-1003")
     assert row["owner"] == "30" and row["mode"] == "verified"
     assert row["status"] == "suspended"
-    assert store.db.execute(
-        "SELECT enabled FROM mod_groups WHERE chat='-1003'"
-    ).fetchone()[0] == 0
+    assert (
+        store.db.execute(
+            "SELECT enabled FROM mod_groups WHERE chat='-1003'"
+        ).fetchone()[0]
+        == 0
+    )
     with pytest.raises(Rejected):
         await runtime.tenants.claim_owner("30", "-1003", version)
     await runtime.tenants.restore("30", "-1003", row["version"])
@@ -193,10 +207,15 @@ async def test_admin_can_confirm_owner_and_restore_through_private_buttons(merch
         return await original(chat, uid)
 
     runtime.bot.get_chat_member.side_effect = member
-    runtime.bot.get_chat_administrators = AsyncMock(return_value=[
-        SimpleNamespace(status="administrator", user=SimpleNamespace(id=10)),
-        SimpleNamespace(status="creator", user=SimpleNamespace(id=30)),
-    ])
+    await runtime.tenants.designate(
+        "30", "-1003", "10", True, runtime.moderation.row("-1003")["version"]
+    )
+    runtime.bot.get_chat_administrators = AsyncMock(
+        return_value=[
+            SimpleNamespace(status="administrator", user=SimpleNamespace(id=10)),
+            SimpleNamespace(status="creator", user=SimpleNamespace(id=30)),
+        ]
+    )
     ui = UI(runtime)
     ui.render = AsyncMock()
     event = SimpleNamespace(
@@ -216,9 +235,15 @@ async def test_admin_can_confirm_owner_and_restore_through_private_buttons(merch
     await action(ui, event, ui.render.await_args.args[2][0][1])
     assert binding(store, "-1003")["owner"] == "30"
     assert binding(store, "-1003")["status"] == "active"
-    assert store.db.execute(
-        "SELECT enabled FROM mod_groups WHERE chat='-1003'"
-    ).fetchone()[0] == 1
+    assert (
+        store.db.execute(
+            "SELECT enabled FROM mod_groups WHERE chat='-1003'"
+        ).fetchone()[0]
+        == 1
+    )
+    await runtime.tenants.designate(
+        "30", "-1003", "10", False, runtime.moderation.row("-1003")["version"]
+    )
     with pytest.raises(Rejected):
         await action(ui, event, {"action": "tenant_address", "chat": "-1003"})
     audit = store.db.execute(
@@ -231,7 +256,9 @@ async def test_admin_can_confirm_owner_and_restore_through_private_buttons(merch
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["member", "left", "kicked"])
 @pytest.mark.parametrize("operation", ["claim_owner", "restore"])
-async def test_owner_confirmation_and_restore_reject_non_admins(merchant, role, operation):
+async def test_owner_confirmation_and_restore_reject_non_admins(
+    merchant, role, operation
+):
     runtime, _, _ = merchant
     store = runtime.store
     store.db.execute("UPDATE tenant_groups SET mode='auto' WHERE chat='-1003'")
@@ -265,7 +292,9 @@ async def test_admin_owner_confirmation_rechecks_after_creator_lookup(merchant, 
     async def member(chat, uid):
         if uid == 20:
             return SimpleNamespace(
-                status="member" if changed and change == "actor_revoked" else "administrator"
+                status="member"
+                if changed and change == "actor_revoked"
+                else "administrator"
             )
         if uid == runtime.bot.id and changed and change == "bot_demoted":
             return SimpleNamespace(status="member")
@@ -313,9 +342,12 @@ async def test_tenant_verification_waits_for_telegram_binding(merchant, running)
     runtime, _, _ = merchant
     runtime.application = None if running is None else SimpleNamespace(running=running)
     runtime.tenants.verify = AsyncMock()
-    before = [tuple(r) for r in runtime.store.db.execute(
-        "SELECT chat,status,error,version FROM tenant_groups ORDER BY chat"
-    )]
+    before = [
+        tuple(r)
+        for r in runtime.store.db.execute(
+            "SELECT chat,status,error,version FROM tenant_groups ORDER BY chat"
+        )
+    ]
     with patch(
         "data.plugins.astrbot_plugin_superbot.tenants.asyncio.sleep",
         new=AsyncMock(side_effect=asyncio.CancelledError),
@@ -323,12 +355,16 @@ async def test_tenant_verification_waits_for_telegram_binding(merchant, running)
         with pytest.raises(asyncio.CancelledError):
             await runtime.tenants.loop()
     runtime.tenants.verify.assert_not_awaited()
-    assert [tuple(r) for r in runtime.store.db.execute(
-        "SELECT chat,status,error,version FROM tenant_groups ORDER BY chat"
-    )] == before
+    assert [
+        tuple(r)
+        for r in runtime.store.db.execute(
+            "SELECT chat,status,error,version FROM tenant_groups ORDER BY chat"
+        )
+    ] == before
 
 
-def test_temporary_delivery_switch_does_not_fake_payment(merchant):
+@pytest.mark.asyncio
+async def test_temporary_delivery_switch_does_not_fake_payment(merchant):
     runtime, clock, _ = merchant
     ads = runtime.merchant_ads
     store = runtime.store
@@ -337,15 +373,17 @@ def test_temporary_delivery_switch_does_not_fake_payment(merchant):
 
     with pytest.raises(Rejected, match="仅超管"):
         ads.test_switch("10", "-1001", True)
-    with pytest.raises(Rejected, match="权限"):
+    with pytest.raises(Rejected, match="核实群主"):
         ads.test_publish("1", row["id"], row["version"])
     with pytest.raises(Rejected):
         ads.test_switch("1", "-1001", True)
     authorize_owner_as_superadmin(runtime)
     with pytest.raises(Rejected, match="未开启"):
-        ads.test_publish("10", row["id"], row["version"])
+        async with GroupAuthority(runtime).session("10", "-1001"):
+            ads.test_publish("10", row["id"], row["version"])
     ads.test_switch("10", "-1001", True)
-    ads.test_publish("10", row["id"], row["version"])
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        ads.test_publish("10", row["id"], row["version"])
     published = ads.order("30", row["id"])
     assert published["status"] == "pending"
     assert published["payment_source"] == "test"
@@ -357,7 +395,7 @@ def test_temporary_delivery_switch_does_not_fake_payment(merchant):
     assert not store.db.execute(
         "SELECT 1 FROM payment_claims WHERE op=?", (row["id"],)
     ).fetchone()
-    with pytest.raises(Rejected, match="权限"):
+    with pytest.raises(Rejected, match="核实群主"):
         ads.test_publish("1", row["id"], published["version"])
 
     ads.test_switch("10", "-1001", False)
@@ -386,13 +424,16 @@ def test_no_address_test_order_cannot_be_submitted_by_normal_customer(merchant):
 
 
 @pytest.mark.asyncio
-async def test_temporary_delivery_publishes_labeled_message_only_while_enabled(merchant):
+async def test_temporary_delivery_publishes_labeled_message_only_while_enabled(
+    merchant,
+):
     runtime, _, _ = merchant
     authorize_owner_as_superadmin(runtime)
     ads = runtime.merchant_ads
     ads.submit("30", "pkg1", "TEST ONLY", "contact", 1, "publish-test-order")
     ads.test_switch("10", "-1001", True)
-    ads.test_publish("10", "publish-test-order", 1)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        ads.test_publish("10", "publish-test-order", 1)
     await runtime.ads.tick(runtime.bot)
     order = ads.order("30", "publish-test-order")
     assert order["status"] == "published", (order["status"], order["error"])
@@ -412,7 +453,8 @@ async def test_expired_delivery_switch_cannot_send_to_group(merchant):
     ads = runtime.merchant_ads
     ads.submit("30", "pkg1", "TEST ONLY", "contact", 1, "expired-test-order")
     ads.test_switch("10", "-1001", True)
-    ads.test_publish("10", "expired-test-order", 1)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        ads.test_publish("10", "expired-test-order", 1)
     clock[0] += 3601
     await runtime.ads.tick(runtime.bot)
     runtime.bot.send_message.assert_not_awaited()
@@ -420,10 +462,12 @@ async def test_expired_delivery_switch_cannot_send_to_group(merchant):
 
 
 @pytest.mark.asyncio
-async def test_departure_preserves_finance_and_requires_original_owner_to_restore(merchant):
+async def test_departure_preserves_finance_and_requires_original_owner_to_restore(
+    merchant,
+):
     runtime, _, owners = merchant
     store = runtime.store
-    invoice(runtime, "depart-order")
+    await invoice(runtime, "depart-order")
     before = store.db.execute(
         "SELECT * FROM merchant_invoices WHERE id='depart-order'"
     ).fetchone()
@@ -433,9 +477,11 @@ async def test_departure_preserves_finance_and_requires_original_owner_to_restor
     store.suspend_group("-1001")
     store.suspend_group("-1001")
     store.register_group("-1001", "test", "10", fresh=True)
-    assert dict(store.db.execute(
-        "SELECT * FROM merchant_invoices WHERE id='depart-order'"
-    ).fetchone()) == dict(before)
+    assert dict(
+        store.db.execute(
+            "SELECT * FROM merchant_invoices WHERE id='depart-order'"
+        ).fetchone()
+    ) == dict(before)
     assert runtime.merchant_ads.order("30", "depart-order")["status"] == "review"
     assert not store.db.execute(
         "SELECT enabled FROM mod_groups WHERE chat='-1001'"
@@ -462,7 +508,8 @@ async def test_departure_during_send_cannot_complete_order(merchant):
     authorize_owner_as_superadmin(runtime)
     runtime.merchant_ads.submit("30", "pkg1", "TEST ONLY", "contact", 1, "mid-send")
     runtime.merchant_ads.test_switch("10", "-1001", True)
-    runtime.merchant_ads.test_publish("10", "mid-send", 1)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.merchant_ads.test_publish("10", "mid-send", 1)
 
     async def depart(**kwargs):
         runtime.store.suspend_group("-1001")
@@ -471,9 +518,12 @@ async def test_departure_during_send_cannot_complete_order(merchant):
     runtime.bot.send_message.side_effect = depart
     await runtime.ads.tick(runtime.bot)
     assert runtime.merchant_ads.order("30", "mid-send")["status"] == "review"
-    assert runtime.store.db.execute(
-        "SELECT status FROM ad_operations WHERE chat='-1001' ORDER BY at DESC LIMIT 1"
-    ).fetchone()["status"] == "review"
+    assert (
+        runtime.store.db.execute(
+            "SELECT status FROM ad_operations WHERE chat='-1001' ORDER BY at DESC LIMIT 1"
+        ).fetchone()["status"]
+        == "review"
+    )
 
 
 def transfer(order, tx="a" * 64, amount=None, stamp=None, to=None):
@@ -509,10 +559,14 @@ def transfer(order, tx="a" * 64, amount=None, stamp=None, to=None):
     return index, receipt
 
 
-def test_no_global_role_and_cross_owner_access(merchant):
+@pytest.mark.asyncio
+async def test_no_global_role_and_cross_owner_access(merchant):
     r, _, _ = merchant
     assert not r.store.allowed("10")
-    r.store.require("10", "points", chat="-1001")
+    with pytest.raises(Rejected):
+        r.store.require("10", "points", chat="-1001")
+    async with GroupAuthority(r).session("10", "-1001"):
+        r.store.require("10", "points", chat="-1001")
     with pytest.raises(Rejected):
         r.store.require("20", "points", chat="-1001")
     token = r.store.grant("1", "40", ["manager"], 1)
@@ -569,9 +623,10 @@ async def test_binding_challenge_cannot_be_replayed_or_borrowed(merchant, case):
     ]
 
 
-def test_direct_payment_replay_after_reopen_is_idempotent(merchant):
+@pytest.mark.asyncio
+async def test_direct_payment_replay_after_reopen_is_idempotent(merchant):
     r, _, _ = merchant
-    order = invoice(r)
+    order = await invoice(r)
     proof = transfer(order)
     assert r.merchant_ads.ingest(ADDRESS, *proof) == "paid"
     before = dict(r.merchant_ads.order("30", order["id"]))
@@ -594,10 +649,11 @@ def test_direct_payment_replay_after_reopen_is_idempotent(merchant):
         reopened.close()
 
 
-def test_one_payment_transaction_cannot_pay_two_orders(merchant):
+@pytest.mark.asyncio
+async def test_one_payment_transaction_cannot_pay_two_orders(merchant):
     r, _, _ = merchant
-    first = invoice(r, "first")
-    second = invoice(r, "second")
+    first = await invoice(r, "first")
+    second = await invoice(r, "second")
     assert first["amount"] != second["amount"]
     assert r.merchant_ads.ingest(ADDRESS, *transfer(first)) == "paid"
     with pytest.raises(Rejected, match="Conflicting chain evidence"):
@@ -618,7 +674,8 @@ async def test_platform_resource_budget_menu_renders_sqlite_rows(merchant):
 
     runtime, _, _ = merchant
     authorize_owner_as_superadmin(runtime)
-    runtime.tenants.resource_grant("10", "-1001", "avatar", 3, 0)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.resource_grant("10", "-1001", "avatar", 3, 0)
     ui = UI(runtime)
     ui.render = AsyncMock()
     update = SimpleNamespace(
@@ -633,22 +690,26 @@ async def test_platform_resource_budget_menu_renders_sqlite_rows(merchant):
     assert "AI客服：默认授权" in text
 
 
-def test_rewards_are_scoped_and_settings_cannot_cross_groups(merchant):
+@pytest.mark.asyncio
+async def test_rewards_are_scoped_and_settings_cannot_cross_groups(merchant):
     r, _, _ = merchant
     config = {**DEFAULT, "enabled": True, "checkin": 17, "groups": ["-1001"]}
-    r.tenants.settings("10", "-1001", "points", config, 1)
+    async with GroupAuthority(r).session("10", "-1001"):
+        r.tenants.settings("10", "-1001", "points", config, 1)
     r.points.checkin("30", "-1001")
     assert r.store.balance("30", "-1001") == 17
     assert r.store.balance("30", "-1003") == 0
     with pytest.raises(Rejected):
         r.tenants.settings("20", "-1001", "points", config, 2)
     with pytest.raises(Rejected):
-        r.tenants.settings("10", "-1003", "points", config, 1)
+        async with GroupAuthority(r).session("10", "-1003"):
+            r.tenants.settings("10", "-1003", "points", config, 1)
 
 
-def test_direct_payment_never_credits_platform_or_points(merchant):
+@pytest.mark.asyncio
+async def test_direct_payment_never_credits_platform_or_points(merchant):
     r, _, _ = merchant
-    order = invoice(r)
+    order = await invoice(r)
     assert 1 <= order["amount"] - order["base"] <= 999
     assert r.merchant_ads.ingest(ADDRESS, *transfer(order)) == "paid"
     assert r.merchant_ads.ingest(ADDRESS, *transfer(order)) == "paid"
@@ -658,10 +719,11 @@ def test_direct_payment_never_credits_platform_or_points(merchant):
     assert r.store.db.execute("SELECT COUNT(*) FROM payment_claims").fetchone()[0] == 1
 
 
-def test_order_identity_and_cross_owner(merchant):
+@pytest.mark.asyncio
+async def test_order_identity_and_cross_owner(merchant):
     r, _, _ = merchant
-    order = invoice(r)
-    assert invoice(r) == order
+    order = await invoice(r)
+    assert await invoice(r) == order
     with pytest.raises(Rejected):
         r.merchant_ads.order("20", order["id"])
     with pytest.raises(Rejected):
@@ -683,9 +745,10 @@ def test_order_identity_and_cross_owner(merchant):
         "failed",
     ],
 )
-def test_invalid_evidence_never_marks_paid(merchant, case):
+@pytest.mark.asyncio
+async def test_invalid_evidence_never_marks_paid(merchant, case):
     r, _, _ = merchant
-    order = invoice(r)
+    order = await invoice(r)
     index, receipt = transfer(order)
     if case == "wrong_token":
         index["token_info"]["address"] = ADDRESS
@@ -705,9 +768,10 @@ def test_invalid_evidence_never_marks_paid(merchant, case):
 
 
 @pytest.mark.parametrize("delta", [-1, 1])
-def test_mismatched_amount_requires_review(merchant, delta):
+@pytest.mark.asyncio
+async def test_mismatched_amount_requires_review(merchant, delta):
     r, _, _ = merchant
-    order = invoice(r)
+    order = await invoice(r)
     assert (
         r.merchant_ads.ingest(ADDRESS, *transfer(order, amount=order["amount"] + delta))
         == "review"
@@ -715,15 +779,16 @@ def test_mismatched_amount_requires_review(merchant, delta):
     assert not r.merchant_ads.order("30", order["id"])["paid"]
 
 
-def test_late_and_delayed_valid_payment_do_not_overbook(merchant):
+@pytest.mark.asyncio
+async def test_late_and_delayed_valid_payment_do_not_overbook(merchant):
     r, clock, _ = merchant
-    order = invoice(r)
+    order = await invoice(r)
     clock[0] += 2000
     r.merchant_ads.expire()
     assert r.merchant_ads.ingest(ADDRESS, *transfer(order)) == "paid_waiting"
     assert not authorized(r.store, r.merchant_ads.order("30", order["id"]))
     r.store.db.execute("UPDATE merchant_scans SET at=?", (clock[0],))
-    order2 = invoice(r, "order2")
+    order2 = await invoice(r, "order2")
     clock[0] += 2000
     assert (
         r.merchant_ads.ingest(ADDRESS, *transfer(order2, tx="b" * 64, stamp=clock[0]))
@@ -731,26 +796,31 @@ def test_late_and_delayed_valid_payment_do_not_overbook(merchant):
     )
 
 
-def test_address_is_frozen_and_foreign_owner_cannot_reuse(merchant):
+@pytest.mark.asyncio
+async def test_address_is_frozen_and_foreign_owner_cannot_reuse(merchant):
     r, _, _ = merchant
-    order = invoice(r)
-    r.merchant_ads.set_address("10", "-1001", SENDER, 1)
+    order = await invoice(r)
+    async with GroupAuthority(r).session("10", "-1001"):
+        r.merchant_ads.set_address("10", "-1001", SENDER, 1)
     assert (
         r.store.db.execute("SELECT address FROM merchant_invoices").fetchone()[0]
         == ADDRESS
     )
     assert r.merchant_ads.ingest(ADDRESS, *transfer(order)) == "paid"
     with pytest.raises(Rejected):
-        r.merchant_ads.set_address("20", "-1002", ADDRESS, 0)
-    r.merchant_ads.set_address("10", "-1003", ADDRESS, 0)
+        async with GroupAuthority(r).session("20", "-1002"):
+            r.merchant_ads.set_address("20", "-1002", ADDRESS, 0)
+    async with GroupAuthority(r).session("10", "-1003"):
+        r.merchant_ads.set_address("10", "-1003", ADDRESS, 0)
 
 
-def test_stale_health_closed_invoices_and_capacity_no_invoice(merchant):
+@pytest.mark.asyncio
+async def test_stale_health_closed_invoices_and_capacity_no_invoice(merchant):
     r, _, _ = merchant
-    invoice(r)
+    await invoice(r)
     r.store.db.execute("UPDATE merchant_scans SET error='RateLimit'")
     with pytest.raises(Rejected):
-        invoice(r, "order2")
+        await invoice(r, "order2")
     assert (
         r.store.db.execute("SELECT COUNT(*) FROM merchant_invoices").fetchone()[0] == 1
     )
@@ -760,14 +830,16 @@ def test_stale_health_closed_invoices_and_capacity_no_invoice(merchant):
             "SELECT config FROM merchant_packages WHERE id='pkg1'"
         ).fetchone()[0]
     )
-    r.merchant_ads.configure("10", "-1001", "pkg1", {**cfg, "slots": 1}, 1)
-    with pytest.raises(Rejected):
-        r.merchant_ads.approve("10", "order2", 1)
+    async with GroupAuthority(r).session("10", "-1001"):
+        r.merchant_ads.configure("10", "-1001", "pkg1", {**cfg, "slots": 1}, 1)
+        with pytest.raises(Rejected):
+            r.merchant_ads.approve("10", "order2", 1)
 
 
-def test_legacy_buttons_cannot_pay_edit_or_cancel_merchant(merchant):
+@pytest.mark.asyncio
+async def test_legacy_buttons_cannot_pay_edit_or_cancel_merchant(merchant):
     r, _, _ = merchant
-    order = invoice(r)
+    order = await invoice(r)
     with pytest.raises(Rejected):
         r.payments.pay("30", order["id"], order["base"])
     with pytest.raises(Rejected):
@@ -778,9 +850,10 @@ def test_legacy_buttons_cannot_pay_edit_or_cancel_merchant(merchant):
         r.ads.cancel("1", order["id"])
 
 
-def test_refund_requires_customer_address_full_amount_and_unique_tx(merchant):
+@pytest.mark.asyncio
+async def test_refund_requires_customer_address_full_amount_and_unique_tx(merchant):
     r, clock, _ = merchant
-    order = invoice(r)
+    order = await invoice(r)
     r.merchant_ads.ingest(ADDRESS, *transfer(order))
     row = r.store.db.execute("SELECT * FROM merchant_invoices").fetchone()
     with pytest.raises(Rejected):
@@ -790,10 +863,12 @@ def test_refund_requires_customer_address_full_amount_and_unique_tx(merchant):
     bad = transfer(
         order, tx="b" * 64, to=SENDER, amount=order["base"], stamp=clock[0] + 1
     )
-    with pytest.raises(Rejected):
-        r.merchant_ads.refund_proof("10", order["id"], row["version"], *bad)
+    async with GroupAuthority(r).session("10", "-1001"):
+        with pytest.raises(Rejected):
+            r.merchant_ads.refund_proof("10", order["id"], row["version"], *bad)
     proof = transfer(order, tx="b" * 64, to=SENDER, stamp=clock[0] + 1)
-    r.merchant_ads.refund_proof("10", order["id"], row["version"], *proof)
+    async with GroupAuthority(r).session("10", "-1001"):
+        r.merchant_ads.refund_proof("10", order["id"], row["version"], *proof)
     assert (
         r.store.db.execute("SELECT status FROM merchant_invoices").fetchone()[0]
         == "refunded"
@@ -824,14 +899,16 @@ def test_shared_resources_default_on_but_private_context_still_required(merchant
     assert r.tenants.resource_allowed("1")
 
 
-def test_platform_grant_is_scoped_and_consumed_once(merchant):
+@pytest.mark.asyncio
+async def test_platform_grant_is_scoped_and_consumed_once(merchant):
     r, _, _ = merchant
     r.store.db.execute(
         "INSERT INTO mod_members(chat,uid,name,username,seen) VALUES(?,?,?,?,?)",
         ("-1001", "30", "buyer", "buyer", 1),
     )
     authorize_owner_as_superadmin(r)
-    r.tenants.resource_grant("10", "-1001", "avatar", 2, 0)
+    async with GroupAuthority(r).session("10", "-1001"):
+        r.tenants.resource_grant("10", "-1001", "avatar", 2, 0)
     assert r.tenants.resource_allowed("30", "-1001", "avatar")
     with r.store.tx() as db:
         r.tenants.consume_resource("30", "-1001", "avatar", "job-1", db)
@@ -849,21 +926,26 @@ def test_platform_grant_is_scoped_and_consumed_once(merchant):
     assert not r.tenants.resource_allowed("30", "-1001", "avatar")
 
 
-def test_private_resource_finds_member_budget_without_cross_tenant_fallback(merchant):
+@pytest.mark.asyncio
+async def test_private_resource_finds_member_budget_without_cross_tenant_fallback(
+    merchant,
+):
     r, _, _ = merchant
     r.store.db.execute(
         "INSERT INTO mod_members(chat,uid,name,username,seen) VALUES(?,?,?,?,?)",
         ("-1003", "30", "buyer", "buyer", 2),
     )
     authorize_owner_as_superadmin(r)
-    r.tenants.resource_grant("10", "-1003", "chat", 1, 0)
+    async with GroupAuthority(r).session("10", "-1003"):
+        r.tenants.resource_grant("10", "-1003", "chat", 1, 0)
     assert r.tenants.resource_allowed("30", None, "chat")
     assert not r.tenants.resource_allowed("31", None, "chat")
 
 
-def test_historical_transfer_without_watch_window_is_unrelated(merchant):
+@pytest.mark.asyncio
+async def test_historical_transfer_without_watch_window_is_unrelated(merchant):
     r, clock, _ = merchant
-    order = invoice(r)
+    order = await invoice(r)
     clock[0] += 4000
     r.merchant_ads.expire()
     old = transfer(order, tx="c" * 64, stamp=order["created"] - 100)

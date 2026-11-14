@@ -7,14 +7,14 @@ from telegram.error import ChatMigrated
 from test_superbot_community import community, private  # noqa: F401
 from test_superbot_moderation import setup  # noqa: F401
 
-from data.plugins.astrbot_plugin_superbot.tenants import migrate
+from data.plugins.astrbot_plugin_superbot.tenants import Tenants, migrate
 
 
 @pytest.mark.asyncio
 async def test_old_group_select_uses_my_groups_without_global_acl(community):  # noqa: F811
     s = community
     migrate(s.store)
-    s.runtime.tenants = SimpleNamespace()
+    s.runtime.tenants = Tenants(s.runtime)
     s.runtime.merchant_ads = SimpleNamespace()
     s.store.db.execute(
         "INSERT INTO mod_groups(chat,title,enabled) VALUES('-1002','Discovered',0)"

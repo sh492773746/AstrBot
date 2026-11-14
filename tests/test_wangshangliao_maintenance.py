@@ -81,7 +81,7 @@ async def test_migration_retention_and_dedup(tmp_path):
             "CREATE TABLE inbox(account,team,message,payload,state,PRIMARY KEY(account,team,message))"
         )
         db.execute(
-            "INSERT INTO inbox VALUES('a','private/2/peer','old','{}','processed')"
+            "INSERT INTO inbox VALUES('a','5','old','{}','processed')"
         )
     ledger = Ledger(path)
     await ledger.open()
@@ -89,17 +89,17 @@ async def test_migration_retention_and_dedup(tmp_path):
         for state in ("processed", "pending", "processing", "needs_review"):
             await ledger.ingest(
                 "a",
-                "private/2/peer",
+                "5",
                 state,
                 {
-                    "text": "private body",
+                    "text": "group body",
                     "mentions": ["2"],
                     "sender": "2",
                     "recall_route": {"peer": "peer"},
                     "created_at": 0,
                 },
             )
-            await ledger.mark("a", "private/2/peer", state, state)
+            await ledger.mark("a", "5", state, state)
         await ledger.db.execute(
             "UPDATE inbox SET completed_at=? WHERE message<>'old'",
             (time.time() - 31 * 86400,),
@@ -113,7 +113,7 @@ async def test_migration_retention_and_dedup(tmp_path):
         await ledger.db.commit()
         assert await ledger.prune() == 1
         assert await ledger.prune() == 0
-        await ledger.ingest("a", "private/2/peer", "processed", {"text": "duplicate"})
+        await ledger.ingest("a", "5", "processed", {"text": "duplicate"})
         async with ledger.db.execute(
             "SELECT message,payload,state FROM inbox"
         ) as cursor:
@@ -123,7 +123,7 @@ async def test_migration_retention_and_dedup(tmp_path):
             "processed",
         )
         for state in ("pending", "processing", "needs_review"):
-            assert rows[state][0]["text"] == "private body"
+            assert rows[state][0]["text"] == "group body"
         await ledger.close()
         await ledger.open()
         assert await ledger.prune() == 0
@@ -132,13 +132,15 @@ async def test_migration_retention_and_dedup(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_is_bounded_and_recovers_overflow(tmp_path, wsl_active_policy):
+async def test_dispatch_is_bounded_and_drains_member_lanes(tmp_path, wsl_active_policy):
     adapter = WangshangliaoAdapter(
-        {"id": "maintenance-test", "account_id": "a"}, {}, asyncio.Queue()
+        {"id": "maintenance-test", "account_id": "a", "enabled_groups": ["5"]},
+        {}, asyncio.Queue()
     )
     adapter.ledger = Ledger(tmp_path / "messages.sqlite3")
     await adapter.ledger.open()
     adapter.connection_state = "online"
+    adapter.groups = {"5": "500"}
     calls = []
     active = set()
     peak = 0
@@ -146,39 +148,41 @@ async def test_dispatch_is_bounded_and_recovers_overflow(tmp_path, wsl_active_po
 
     async def process(team, *, single, sender, control=False):
         nonlocal peak
-        assert single and team not in active
-        active.add(team)
+        lane = (team, sender)
+        assert single and lane not in active
+        active.add(lane)
         peak = max(peak, len(active))
         await asyncio.sleep(0)
         async with adapter.ledger.db.execute(
-            "SELECT message FROM inbox WHERE team=? AND state='pending' ORDER BY rowid LIMIT 1",
-            (team,),
+            "SELECT message FROM inbox WHERE team=? AND sender=? "
+            "AND state='pending' ORDER BY rowid LIMIT 1",
+            (team, sender),
         ) as cursor:
             row = await cursor.fetchone()
         if row:
-            calls.append((team, row[0]))
+            calls.append((sender, row[0]))
             await adapter.ledger.mark("a", team, row[0], "processed")
-        active.remove(team)
-        if len(calls) == 256:
+        active.remove(lane)
+        if len(calls) == 258:
             finished.set()
 
     adapter.process_group = process
-    for n in range(1100):
+    for n in range(256):
         await adapter.ledger.ingest(
-            "a", f"private/{n}/peer", "0", {"transport_peer": str(n)}
+            "a", "5", f"{n}-0", {"transport_peer": str(n), "sender": str(n)}
         )
     for n in (1, 2):
-        await adapter.ledger.ingest("a", "private/0/peer", str(n), {})
+        await adapter.ledger.ingest("a", "5", f"0-{n}", {"sender": "0"})
     task = asyncio.create_task(adapter.dispatch_pending())
     try:
         await asyncio.wait_for(finished.wait(), 15)
         assert peak <= 16
-        assert [mid for team, mid in calls if team == "private/0/peer"] == ["0"]
-        assert len(set(calls)) == 256
+        assert [mid for sender, mid in calls if sender == "0"] == ["0-0", "0-1", "0-2"]
+        assert len(set(calls)) == 258
         async with adapter.ledger.db.execute(
-            "SELECT COUNT(*) FROM inbox WHERE state='queue_full'"
+            "SELECT COUNT(*) FROM inbox WHERE state IN ('pending','processing','queue_full')"
         ) as cursor:
-            assert (await cursor.fetchone())[0] == 846
+            assert (await cursor.fetchone())[0] == 0
     finally:
         adapter.stopping.set()
         task.cancel()

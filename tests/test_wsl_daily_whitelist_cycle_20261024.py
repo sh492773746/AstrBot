@@ -410,9 +410,7 @@ async def test_rank_twenty_one_is_not_promoted_when_top_member_is_blocked(
         )
     elif blocked_by == "blacklist":
         with sqlite3.connect(root / "member_blacklist.sqlite3") as db:
-            db.execute(
-                "CREATE TABLE blacklist_entries(account,group_id,member,status)"
-            )
+            db.execute("CREATE TABLE blacklist_entries(account,group_id,member,status)")
             db.execute("INSERT INTO blacklist_entries VALUES('1','5','10','active')")
     else:
         adapter.members["5"].pop("10")

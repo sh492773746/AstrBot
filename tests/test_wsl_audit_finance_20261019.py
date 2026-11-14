@@ -477,15 +477,39 @@ def test_native_confirmation_and_domain_receipt_roll_back_together(ledger):
         store.groups(str(actor))
 
 
-def test_private_totals_bind_sender_collector_and_account_without_writes(ledger):
+@pytest.mark.parametrize(
+    "change,code",
+    [("account", "collector_changed"), ("collector", "collector_unavailable")],
+)
+def test_group_totals_preserve_sender_and_collector_history_without_writes(
+    ledger, audit_service, change, code
+):
     store, *_ = ledger
+    service, adapter = audit_service
+    service.selected_groups = lambda: {"5"}
     before = dump(store)
-    own = store.private_invitation_summaries("1", "audit-bot", "99", ["5"])
-    other = store.private_invitation_summaries("2", "audit-bot", "99", ["5"])
-    assert own[0]["total"] == 1 and own[0]["pending"] == 500
-    assert other[0]["total"] == 0 and other[0]["pending"] == 0
-    assert store.private_invitation_summaries("1", "other-bot", "99", ["5"]) == []
-    assert store.private_invitation_summaries("1", "audit-bot", "100", ["5"]) == []
+    own = store.invitation_summary("5", "1")
+    other = store.invitation_summary("5", "2")
+    assert own["total"] == 1 and own["pending"] == 500
+    assert own["items"][0]["member_name"] == "Invitee"
+    assert not {"paid_by", "member", "peer", "inviter", "inviter_peer"}.intersection(
+        own["items"][0]
+    )
+    assert other["total"] == 0 and other["pending"] == 0 and other["items"] == []
+    assert store.invitation_summary("6", "1") is None
+    financial = store.list_entries(OWNER, "5")
+    assert financial["payable_count"] == 1 and financial["payable_amount"] == 500
+    guard = service._lifecycle_guard("5", store.get_group("5"))
+    guard()
+    if change == "account":
+        adapter.account = "100"
+    else:
+        adapter.config["id"] = "other-bot"
+    with pytest.raises(CashbackError, match=code):
+        guard()
+    # Collector changes block writes, not read-only access to established history.
+    assert store.invitation_summary("5", "1") == own
+    assert store.list_entries(OWNER, "5") == financial
     assert dump(store) == before
 
 
@@ -584,11 +608,9 @@ def test_kick_member_invalidates_original_invitation_without_rewriting_history(
         assert page["payable_count"] == 0 and page["payable_amount"] == 0
         assert page["items"][0]["membership_left_at"] == 2010
         assert page["items"][0]["review_reason"] == integrity["review_reason"]
-    assert store.invitation_summary("5", "1")["pending"] == 0
-    assert (
-        store.private_invitation_summaries("1", "audit-bot", "99", ["5"])[0]["pending"]
-        == 0
-    )
+    summary = store.invitation_summary("5", "1")
+    assert summary["total"] == 1 and summary["pending"] == 0
+    assert summary["review"] == 1
     with pytest.raises(CashbackError, match="price_change_forbidden"):
         store.price_preview(OWNER, "5", selection(store), "agent")
     with pytest.raises(CashbackError, match="not_payable|qualification_required"):
@@ -652,15 +674,22 @@ def test_existing_admission_view_stays_untouched_but_new_kicks_block_totals(
             },
         )
         before = dump(reopened)
-        assert reopened.list_entries(OWNER, "5")["payable_amount"] == 0
-        assert reopened.invitation_summary("5", "1")["pending"] == 0
-        assert (
-            reopened.private_invitation_summaries(
-                "1", "audit-bot", "99", ["5"], detail_group="5"
-            )[0]["items"][0]["payable"]
-            == 0
-        )
+        for pagination in ("entries", "inviters"):
+            page = reopened.list_entries(OWNER, "5", pagination=pagination)
+            assert page["total"] == 1 and page["amount"] == 500
+            assert page["payable_count"] == 0 and page["payable_amount"] == 0
+            assert page["items"][0]["membership_left_at"] == 2010
+        summary = reopened.invitation_summary("5", "1")
+        assert summary["total"] == 1 and summary["pending"] == 0
+        assert summary["review"] == 1
         with reopened.connect() as db:
+            assert (
+                db.execute(
+                    "SELECT payable_evidence FROM cashback_admission_checks WHERE id=?",
+                    (original["id"],),
+                ).fetchone()[0]
+                == 1
+            )
             assert (
                 db.execute(
                     "SELECT sql FROM sqlite_master WHERE name='cashback_admission_checks'"
@@ -741,11 +770,11 @@ def test_kick_member_is_bound_to_exact_account_collector_member_and_cycle(
     assert page["payable_amount"] == 500
     assert page["items"][0]["membership_left_at"] == 0
     assert page["items"][0]["review_reason"] == ""
-    assert store.invitation_summary("5", "1")["pending"] == 500
-    assert (
-        store.private_invitation_summaries("1", "audit-bot", "99", ["5"])[0]["pending"]
-        == 500
-    )
+    summary = store.invitation_summary("5", "1")
+    assert summary["total"] == 1 and summary["pending"] == 500
+    assert summary["review"] == 0
+    grouped = store.list_entries(OWNER, "5", pagination="inviters", inviter="1")
+    assert grouped["payable_count"] == 1 and grouped["payable_amount"] == 500
     assert dump(store) == before
 
 

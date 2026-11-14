@@ -77,8 +77,43 @@ async def test_native_help_handler_failure_stops_without_generic_fallback(monkey
     event.stop_event.assert_called_once()
 
 
-def test_plugin_help_entry_is_removed():
-    assert not hasattr(main.Main, "moderation_help")
+@pytest.mark.parametrize(
+    "name",
+    [
+        "moderation_help",
+        "private_management",
+        "private_invitations",
+        "private_chat",
+    ],
+)
+def test_retired_plugin_entries_are_removed(name):
+    assert not hasattr(main.Main, name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("public_service", [False, True])
+async def test_private_fixed_command_stops_before_any_service_or_finance_work(
+    public_service,
+):
+    plugin = object.__new__(main.Main)
+    plugin.commands = SimpleNamespace(run=AsyncMock())
+    plugin.open_service = (
+        SimpleNamespace(on_event=AsyncMock()) if public_service else None
+    )
+    plugin.cashback = SimpleNamespace(handle=AsyncMock())
+    event = SimpleNamespace(
+        get_platform_name=lambda: "wangshangliao",
+        is_private_chat=lambda: True,
+        stop_event=Mock(),
+        send=AsyncMock(),
+    )
+    await plugin.moderation_command(event, "我的邀请")
+    plugin.commands.run.assert_not_awaited()
+    plugin.cashback.handle.assert_not_awaited()
+    if public_service:
+        plugin.open_service.on_event.assert_not_awaited()
+    event.send.assert_not_awaited()
+    event.stop_event.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -117,7 +152,11 @@ async def test_plugin_entry_filters(
     plugin.context = SimpleNamespace(get_provider_by_id=lambda _: None)
     await plugin.moderate(event)
     assert handler.await_count == int(called)
-    assert event.stop_event.call_count == int(called and consumed)
+    assert event.stop_event.call_count == int(
+        platform == "wangshangliao" and (private or called and consumed)
+    )
+    if platform == "wangshangliao" and private:
+        event.set_extra.assert_not_called()
     if called:
         handler.assert_awaited_once_with(event.platform, "5", "stable-message", payload)
 
@@ -154,7 +193,10 @@ async def test_media_never_falls_back_to_ai(monkeypatch, kind, consumed, private
     plugin.ai_runtime = SimpleNamespace(customer=AsyncMock())
     await plugin.moderate(event)
     assert stopped
-    assert extra["_component_claimed"]
+    if private:
+        assert "_component_claimed" not in extra
+    else:
+        assert extra["_component_claimed"]
     assert handler.await_count == (0 if private else 1)
     plugin.ai_runtime.customer.assert_not_awaited()
 

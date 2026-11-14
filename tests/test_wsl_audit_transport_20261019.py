@@ -5,7 +5,6 @@ import json
 import socket
 import sqlite3
 import threading
-import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -52,8 +51,13 @@ async def offline_audit(monkeypatch, tmp_path):
     monkeypatch.setenv("ASTRBOT_DISABLE_METRICS", "1")
 
 
-def test_private_test_admission_requires_original_transport_peer():
-    """Reject a claimed controlled UID arriving from another authenticated peer."""
+@pytest.mark.parametrize("peer", ["902", "999"])
+def test_private_test_admission_rejects_even_original_transport_peer(peer):
+    """Reject private scopes and routes regardless of the authenticated peer.
+
+    Args:
+        peer: Original controlled peer or a mismatched transport identity.
+    """
     receiver = SimpleNamespace(
         account="1",
         nim_account="901",
@@ -62,14 +66,45 @@ def test_private_test_admission_requires_original_transport_peer():
         config={"id": "receiver", "_business_active": True, "_business_epoch": 1},
     )
     sender = SimpleNamespace(account="2", nim_account="902", stopping=asyncio.Event())
-    window = Window(receiver, sender, [], ["private_ai"], [], 300, 1)
+    with pytest.raises(wire.ProtocolError, match="^test_window_arguments$"):
+        Window(receiver, sender, ["5"], ["private_ai"], [], 300, 1)
+    window = Window(receiver, sender, ["5"], ["group_ai"], [], 300, 1)
     receiver.test_window = window
-    route = "private/2/" + wire.b64(b"999")
+    route = "private/2/" + wire.b64(peer.encode())
     scope = window.admit(
-        route, "1", {"sender": "2", "transport_peer": "999", "text": "hello"}
+        route, "1", {"sender": "2", "transport_peer": peer, "text": "hello"}
     )
     assert scope == ""
     assert window.remaining == 1
+    assert not window.reply(route, "1")
+    assert not window.accepted and not window.replies
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["send_text", "send_reply_text"])
+@pytest.mark.parametrize("target", ["private/2/OTAy", "private/2/wrong", "private/"])
+async def test_private_send_rejected_before_authorization_storage_or_transport(
+    method, target
+):
+    """Reject private sends before accessing any adapter resource.
+
+    Args:
+        method: Native plain-text or logical-reply entry point.
+        target: Original, forged or malformed legacy private route.
+    """
+    authorize = AsyncMock()
+    with pytest.raises(wire.ProtocolError, match="^private_messages_retired$"):
+        await getattr(WangshangliaoAdapter, method)(
+            object(),
+            target,
+            "retired-private-operation",
+            "private fixture body",
+            test_mid="legacy-private-admission",
+            proactive=True,
+            authorize=authorize,
+            reply_to="private-quote",
+        )
+    authorize.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -304,7 +339,17 @@ async def test_uncertain_provider_outcome_stays_unknown_without_replay(
     )
     assert result["status"] == "unknown"
     assert result["submitted"] is True
-    assert "provider_code" not in result
+    expected_code = {
+        "http_500": 500,
+        "http_503": 503,
+        "business_504": 504,
+    }.get(outcome)
+    if expected_code is None:
+        assert "provider_code" not in result
+    else:
+        assert type(result["provider_code"]) is int
+        assert result["provider_code"] == expected_code
+        assert -(1 << 31) <= result["provider_code"] < 1 << 31
     assert (
         await moderation.execute(client, "audit", "1", "audit-uncertain", "mute_all", 5)
         == result
@@ -342,7 +387,11 @@ async def test_readback_failure_preserves_accepted_mutation(tmp_path, outcome):
     )
     assert result["status"] == "accepted"
     assert result["submitted"] is True
-    assert "provider_code" not in result
+    if outcome == "rejected":
+        assert type(result["provider_code"]) is int
+        assert result["provider_code"] == 403
+    else:
+        assert "provider_code" not in result
     assert (
         await moderation.execute(
             client, "audit", "1", "audit-readback", "announce", 5, text="Audit notice"
@@ -503,6 +552,7 @@ async def test_dashboard_approval_contention_does_not_block_event_loop(
 
     Args:
         tmp_path: Isolated approval database directory.
+        monkeypatch: Test-scoped storage and permission replacements.
     """
     from astrbot.core.platform.sources.wangshangliao import dashboard as native_page
     from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
@@ -524,22 +574,22 @@ async def test_dashboard_approval_contention_does_not_block_event_loop(
     locked, release = threading.Event(), threading.Event()
 
     def hold_writer():
-        with sqlite3.connect(path) as db:
-            db.execute("BEGIN EXCLUSIVE")
-            locked.set()
-            release.wait(3)
+        try:
+            with sqlite3.connect(path) as db:
+                db.execute("BEGIN EXCLUSIVE")
+                locked.set()
+                release.wait(3)
+        finally:
+            locked.clear()
 
     thread = threading.Thread(target=hold_writer)
     thread.start()
-    timer = None
+    pending = None
     try:
         assert await asyncio.to_thread(locked.wait, 2)
-        timer = threading.Timer(0.25, release.set)
-        timer.start()
         loop = asyncio.get_running_loop()
         callback = loop.create_future()
         loop.call_soon(callback.set_result, None)
-        started = time.monotonic()
         pending = asyncio.create_task(
             native_page.handle_registration(
                 manager,
@@ -553,11 +603,14 @@ async def test_dashboard_approval_contention_does_not_block_event_loop(
             )
         )
         await callback
-        assert time.monotonic() - started < 0.1
+        assert locked.is_set(), "Event loop stalled until the SQLite writer exited"
+        assert not release.is_set()
+        release.set()
         result = await pending
         assert result["action"] == "mute_all"
     finally:
         release.set()
-        if timer is not None:
-            timer.cancel()
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
         await asyncio.to_thread(thread.join, 2)

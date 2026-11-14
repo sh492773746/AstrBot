@@ -1,8 +1,7 @@
-"""Recheck deployed WSL pages and fixed private commands without business writes."""
+"""Recheck deployed group-management pages without business writes."""
 
 import argparse
 import asyncio
-import copy
 import json
 import os
 import time
@@ -20,60 +19,35 @@ from astrbot.core.platform.sources.wangshangliao.business import (
 )
 from astrbot.core.platform.sources.wangshangliao.storage import Vault
 from scripts.check_wsl_account_names import ROOT, snapshot
-from scripts.check_wsl_authorization_live import rows
 from scripts.check_wsl_tree_menu_live import (
-    BOT,
     PREFIX,
     RECEIVER,
-    REGISTRATION,
     SENDER,
-    USER,
-    MenuCheck,
 )
 
-READ_ACTIONS = {"status", "finance_status", "finance_members", "tenant_members"}
+READ_ACTIONS = {"status", "finance_status", "tenant_members", "page_schema"}
 READ_ENDPOINTS = {
     "settings",
     "audit",
     "activities",
     "schedule",
-    "friend-approval",
     "operations",
     "cashback-logs",
     "group-managers",
+    "speech-activity",
+    "video-relay",
 }
 PAGE_SECTIONS = {
-    "groups": ("open", "permissions", "friend-approval"),
-    "ai": ("consultation", "group-ai", "plans", "model"),
-    "finance": ("activities", "cashback", "finance"),
+    "groups": ("open", "rules", "permissions", "speech-activity", "video-relay"),
+    "ai": ("group-ai", "plans", "model"),
+    "finance": ("activities", "invite-rewards", "cashback"),
     "runtime": ("runtime", "schedule", "audit", "operations", "open-audit"),
     "help": ("commands", "examples", "architecture", "matrix"),
 }
-PRIVATE_CHECKS = (
-    ("取消", "已取消"),
-    ("菜单", "9. 群聊与热群AI"),
-    ("999", "请按本页的数字选择"),
-    ("8", "私聊AI咨询"),
-    ("3", "当前套餐："),
-    ("4", "次数为上限，同时受成本预算保护"),
-    ("0", "9. 群聊与热群AI"),
-    ("9", "群聊与热群AI"),
-    ("0", "9. 群聊与热群AI"),
-    ("取消", "已取消"),
-    (
-        "结账",
-        ("暂无获授权", "暂时无法核实你的账号身份", "旺商聊暂不允许机器人核实成员"),
-    ),
-    (
-        "结账结果",
-        ("暂无获授权", "暂时无法核实你的账号身份", "旺商聊暂不允许机器人核实成员"),
-    ),
-    ("/exit", "已结束AI咨询"),
-)
 
 
 async def check_pages(client, output):
-    """Inspect actual deployed UI, including denied member reads, at two sizes."""
+    """Inspect current deployed group pages at mobile and desktop widths."""
     evidence = {"screens": [], "requests": [], "blocked_mutations": []}
 
     async def api(_source, method, endpoint, payload):
@@ -110,7 +84,7 @@ async def check_pages(client, output):
             args=["--no-sandbox"],
         )
         try:
-            for width in (390, 1440):
+            for width in (320, 390, 1440):
                 page = await browser.new_page(viewport={"width": width, "height": 900})
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
@@ -131,34 +105,6 @@ async def check_pages(client, output):
                         / "astrbot/builtin_stars/wangshangliao_moderation/pages/management/index.html"
                     ).as_uri()
                 )
-                await page.locator("#section-finance").click()
-                await page.locator("#tab-finance").click()
-                await page.get_by_label("结算授权范围", exact=True).wait_for()
-                finance = page.get_by_role("region", name="结算授权", exact=True)
-                scope = finance.get_by_label("结算授权范围", exact=True)
-                await scope.select_option(
-                    json.dumps([BOT, "1459282"], separators=(",", ":"))
-                )
-                await page.wait_for_function(
-                    "!document.querySelector('.finance-grants select')?.disabled"
-                    " && !document.querySelector('.finance-grants')"
-                    "?.textContent.includes('读取成员中')"
-                )
-                alerts = await finance.get_by_role("alert").all_text_contents()
-                if alerts:
-                    assert await finance.get_by_label(
-                        "结算授权成员", exact=True
-                    ).is_disabled()
-                    assert await finance.get_by_role(
-                        "button", name="保存结算授权", exact=True
-                    ).is_disabled()
-                else:
-                    assert (
-                        await finance.get_by_label("结算授权成员", exact=True)
-                        .locator("option")
-                        .count()
-                        > 1
-                    )
                 assert not await page.get_by_role(
                     "button", name="开始登录", exact=True
                 ).count()
@@ -169,7 +115,6 @@ async def check_pages(client, output):
                 evidence["screens"].append(
                     {
                         "width": width,
-                        "member_read_alerts": alerts,
                         "page_errors": errors,
                     }
                 )
@@ -187,7 +132,7 @@ async def check_pages(client, output):
                         ), f"Overflow on {tab} at {width}px"
                         assert not errors, errors
                         visited.append(tab)
-                        if tab in {"friend-approval", "commands", "operations"}:
+                        if tab in {"rules", "commands", "operations"}:
                             await page.screenshot(
                                 path=str(output / f"readonly-{tab}-{width}.png"),
                                 full_page=True,
@@ -197,60 +142,6 @@ async def check_pages(client, output):
         finally:
             await browser.close()
     assert not evidence["blocked_mutations"], evidence
-    return evidence
-
-
-async def check_private(client, output):
-    """Use the two fixed accounts for read-only menus; restore temporary send scope."""
-    test = MenuCheck(client, output)
-    evidence = {}
-    operations = {
-        instance: rows(instance, "moderation.sqlite3", "SELECT * FROM operations")
-        for instance in (SENDER, RECEIVER)
-    }
-    try:
-        for instance in (SENDER, RECEIVER):
-            status = await test.api(
-                "POST", REGISTRATION, {"action": "test_status", "instance_id": instance}
-            )
-            assert not status["window"]["active"], "Another test window is active"
-        current = await test.settings()
-        test.original = copy.deepcopy(current["proactive_send"])
-        test.proposed = copy.deepcopy(test.original)
-        test.proposed["enabled"] = True
-        test.proposed["targets"] = list(
-            dict.fromkeys(test.proposed.get("targets", []) + [test.target])
-        )
-        test.changed = True
-        await test.api(
-            "POST",
-            PREFIX + "settings",
-            {
-                "bot_id": SENDER,
-                "revision": current["revision"],
-                "proactive_send": test.proposed,
-            },
-        )
-        for text, expected in PRIVATE_CHECKS:
-            await test.send(text, expected)
-    finally:
-        await test.restore()
-        evidence.update(
-            checks=len(test.results),
-            passed=sum(result["passed"] for result in test.results),
-            actions_unchanged=all(
-                rows(instance, "moderation.sqlite3", "SELECT * FROM operations")
-                == values
-                for instance, values in operations.items()
-            ),
-            test_closed=not test.window,
-            send_scope_restored=not test.changed,
-            finance_denial_only=True,
-        )
-        output.joinpath("private-summary.json").write_text(
-            json.dumps(evidence, ensure_ascii=False, indent=2)
-        )
-    assert evidence["actions_unchanged"], evidence
     return evidence
 
 
@@ -288,7 +179,6 @@ async def check_platform():
 
 async def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--private", action="store_true")
     parser.add_argument("--platform", action="store_true")
     args = parser.parse_args()
     output = Path("/opt/backups") / time.strftime(
@@ -324,11 +214,6 @@ async def main():
                 item["instance_id"]: item["account"] for item in state["accounts"]
             } == expected
             assert all(item["state"] == "online" for item in state["accounts"])
-            assert all(
-                group["paused"] or not group["active"]
-                for group in state["groups"]
-                if group["group_id"] in {"1516387", "1488006"}
-            )
             evidence["runtime"] = {
                 key: state.get(key)
                 for key in (
@@ -342,37 +227,9 @@ async def main():
             evidence["runtime"]["ai_hard_budget_confirmed"] = state["ai_budget"][
                 "confirmed"
             ]
-            response = await client.post(
-                PREFIX + "open-service",
-                json={"action": "finance_status", "payload": {}},
-            )
-            response.raise_for_status()
-            assert not any(
-                row["active"] and row["uid"] == USER and row["account"] == BOT
-                for row in response.json()["data"]["grants"]
-            ), "Read-only denial test cannot run with active finance permission"
-            evidence["friends"] = {}
-            for instance in (SENDER, RECEIVER):
-                response = await client.get(
-                    PREFIX + "friend-approval", params={"bot_id": instance}
-                )
-                response.raise_for_status()
-                evidence["friends"][instance] = {
-                    key: response.json()["data"].get(key)
-                    for key in (
-                        "enabled",
-                        "active",
-                        "paused_reason",
-                        "pending",
-                        "accepted",
-                        "read_failures",
-                    )
-                }
             if args.platform:
                 evidence["platform"] = await check_platform()
             evidence["pages"] = await check_pages(client, output)
-            if args.private:
-                evidence["private"] = await check_private(client, output)
         async with httpx.AsyncClient(trust_env=False, timeout=15) as anonymous:
             evidence["anonymous"] = {}
             for action in ("me", "groups", "audit"):

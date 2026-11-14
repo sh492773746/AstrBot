@@ -7,11 +7,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from superbot_authority import designate_admin
 from telegram import ChatPermissions
 
 from data.plugins.astrbot_plugin_superbot.moderation import TZ, Moderation, boundary
 from data.plugins.astrbot_plugin_superbot.semantic_review import SemanticReview
 from data.plugins.astrbot_plugin_superbot.store import Rejected, Store
+from data.plugins.astrbot_plugin_superbot.tenants import Tenants
 from data.plugins.astrbot_plugin_superbot.ui import UI
 
 
@@ -72,6 +74,7 @@ def setup(tmp_path):
     store.db.execute(
         "INSERT INTO mod_groups(chat,title,enabled) VALUES('-1001','Fixture',1)"
     )
+    runtime.tenants = Tenants(runtime)
     with store.tx() as db:
         store.put(db, "modules", {"moderation": True})
     yield SimpleNamespace(
@@ -122,11 +125,15 @@ async def test_dual_authority_and_revocation(setup):
     with pytest.raises(Rejected):
         await s.mod.check("2", "-1001")
     s.store.db.execute("INSERT INTO mod_acl VALUES('2','-1001')")
+    with pytest.raises(Rejected):
+        await s.mod.check("2", "-1001")
+    await designate_admin(s.runtime, "2")
     await s.mod.check("2", "-1001")
     s.members[2].can_restrict_members = False
     with pytest.raises(Rejected):
         await s.mod.check("2", "-1001")
     s.store.revoke("1", "2")
+    await designate_admin(s.runtime, "2", enabled=False)
     with pytest.raises(Rejected):
         await s.mod.check("2", "-1001")
 
@@ -340,6 +347,7 @@ async def test_current_group_admin_can_confirm_mute_and_restore_without_global_a
     s = setup
     s.runtime.semantic_review = SemanticReview(s.runtime)
     s.members[2] = Member("administrator")
+    await designate_admin(s.runtime, "2")
     s.runtime.ui.render = AsyncMock()
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=2),
@@ -377,6 +385,7 @@ async def test_group_admin_can_enable_disabled_group_without_business_role(setup
     s = setup
     s.runtime.semantic_review = SemanticReview(s.runtime)
     s.members[2] = Member("administrator")
+    await designate_admin(s.runtime, "2")
     s.store.db.execute("UPDATE mod_groups SET enabled=0 WHERE chat='-1001'")
     s.runtime.ui.render = AsyncMock()
     update = SimpleNamespace(
@@ -401,6 +410,7 @@ async def test_revoked_admin_confirmation_does_not_pause_schedule_or_write(setup
     s = setup
     s.runtime.semantic_review = SemanticReview(s.runtime)
     s.members[2] = Member("administrator")
+    await designate_admin(s.runtime, "2")
     s.runtime.ui.render = AsyncMock()
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=2),
@@ -432,6 +442,7 @@ async def test_scheduled_group_admin_without_business_role_rechecks_live_rights(
     s = setup
     s.runtime.semantic_review = SemanticReview(s.runtime)
     s.members[2] = Member("administrator")
+    await designate_admin(s.runtime, "2")
     s.clock[0] = insert_schedule(s)
     s.store.db.execute("UPDATE mod_schedules SET actor='2'")
     await s.mod.tick()
@@ -452,6 +463,8 @@ async def test_group_owner_and_admin_member_actions_confirm_without_role(
     s = setup
     s.runtime.semantic_review = SemanticReview(s.runtime)
     s.members[3] = Member(status)
+    if status == "administrator":
+        await designate_admin(s.runtime, "3")
     s.runtime.ui.render = AsyncMock()
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=3),
@@ -473,7 +486,9 @@ async def test_membership_discovers_basic_group(setup):
 
     plugin = Main(MagicMock(), {})
     plugin.store, plugin.moderation = setup.store, setup.mod
+    plugin.application = SimpleNamespace(bot=setup.bot)
     update = SimpleNamespace(
+        update_id=1,
         effective_chat=SimpleNamespace(id=-999, type="group", title="Invited"),
         my_chat_member=SimpleNamespace(
             new_chat_member=SimpleNamespace(status="member")
@@ -497,11 +512,14 @@ async def test_membership_binds_creator_not_inviting_administrator(setup):
     plugin = Main(MagicMock(), {})
     plugin.store, plugin.moderation = setup.store, setup.mod
     plugin.application = SimpleNamespace(bot=setup.bot)
-    plugin.bot.get_chat_administrators = AsyncMock(return_value=[
-        SimpleNamespace(status="administrator", user=SimpleNamespace(id=3)),
-        SimpleNamespace(status="creator", user=SimpleNamespace(id=4)),
-    ])
+    plugin.bot.get_chat_administrators = AsyncMock(
+        return_value=[
+            SimpleNamespace(status="administrator", user=SimpleNamespace(id=3)),
+            SimpleNamespace(status="creator", user=SimpleNamespace(id=4)),
+        ]
+    )
     update = SimpleNamespace(
+        update_id=2,
         effective_chat=SimpleNamespace(id=-999, type="supergroup", title="Invited"),
         my_chat_member=SimpleNamespace(
             old_chat_member=SimpleNamespace(status="left"),
@@ -513,9 +531,12 @@ async def test_membership_binds_creator_not_inviting_administrator(setup):
     )
     await plugin.receive(update, None)
     assert binding(setup.store, "-999")["owner"] == "4"
-    assert setup.store.db.execute(
-        "SELECT enabled FROM mod_groups WHERE chat='-999'"
-    ).fetchone()[0] == 1
+    assert (
+        setup.store.db.execute(
+            "SELECT enabled FROM mod_groups WHERE chat='-999'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 @pytest.mark.asyncio

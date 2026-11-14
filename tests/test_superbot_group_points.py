@@ -179,7 +179,10 @@ def test_checkin_chat_caps_and_duplicates_are_per_group(scoped):
     assert not points.chat("3", "-1002", 35, "今天还会有什么活动")
 
 
-def test_adjust_requires_group_and_is_idempotent(scoped):
+@pytest.mark.asyncio
+async def test_adjust_requires_group_and_is_idempotent(scoped):
+    from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
+
     s = scoped
     p = s.runtime.points
     with pytest.raises(Rejected):
@@ -187,8 +190,9 @@ def test_adjust_requires_group_and_is_idempotent(scoped):
     with pytest.raises(Rejected):
         p.adjust("2", "2", 100, "test", "unauthorized", chat="-1001")
     for group in ("-1001", "-1002"):
-        p.adjust("1", "2", 100, "test", "adjust-test", chat=group)
-        p.adjust("1", "2", 100, "test", "adjust-test", chat=group)
+        async with GroupAuthority(s.runtime).session("1", group):
+            p.adjust("1", "2", 100, "test", "adjust-test", chat=group)
+            p.adjust("1", "2", 100, "test", "adjust-test", chat=group)
     assert s.store.balance("2", "-1001") == 1100
     assert s.store.balance("2", "-1002") == 100
     assert parse_form("adjust", "-1002 2 100 测试奖励", {}) == {

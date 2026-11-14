@@ -91,7 +91,7 @@ async def test_reply_call_preserves_optional_arguments_and_receipt(
         private: Whether the reply uses a private route.
         command: Whether the incoming event is a command.
         ranking: Whether ranking whitespace and mention omission apply.
-        test_scope: Optional private test admission scope.
+        test_scope: Optional legacy private scope, which must remain inert.
         quoted: Whether a native group quote is requested.
         receipt: Synthetic native result to normalize.
     """
@@ -102,18 +102,27 @@ async def test_reply_call_preserves_optional_arguments_and_receipt(
         chain.insert(0, Reply(id="quoted"))
     await event.send(MessageChain(chain))
 
-    target = "private/2/OTAy" if private else "5"
-    text = "Reply" if private or ranking else "@Fixture Member Reply"
+    if private:
+        event.platform.send_reply_text.assert_not_awaited()
+        bookkeeping.assert_not_awaited()
+        event._log_reply.assert_called_once_with("private_messages_retired")
+        assert event.is_stopped()
+        assert event.reply_index == 0
+        assert event.get_extra("_wsl_native_reply_result") == "not_sent"
+        return
+
+    target = "5"
+    text = "Reply" if ranking else "@Fixture Member Reply"
     expected = {}
-    if quoted and not private:
+    if quoted:
         expected["reply_to"] = "quoted"
-    if not private and not ranking:
+    if not ranking:
         expected["mentions"] = [
             {"uid": 902, "nick": "Fixture Member", "start": 0, "end": 16}
         ]
-    elif command or test_scope == "private_ai":
+    elif command:
         expected["test_mid"] = "incoming"
-    if command and not private:
+    if command:
         expected["auto_recall"] = True
     event.platform.send_reply_text.assert_awaited_once_with(
         target, f"{event.session_id}/incoming/0", text, **expected

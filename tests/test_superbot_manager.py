@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from superbot_authority import designate_admin
 from test_superbot_avatar import avatar, update  # noqa: F401
 from test_superbot_moderation import setup  # noqa: F401
 
@@ -57,9 +58,7 @@ async def test_manager_menu_and_forged_access_callbacks(setup):  # noqa: F811
         "data.plugins.astrbot_plugin_superbot.tenant_ui.action", new_callable=AsyncMock
     ) as tenant_home:
         await ui.admin(event, {"action": "admin"}, "")
-        tenant_home.assert_awaited_once_with(
-            ui, event, {"action": "tenant_home"}
-        )
+        tenant_home.assert_awaited_once_with(ui, event, {"action": "tenant_home"})
     await ui.admin(
         event, {"action": "module_preview", "key": "game", "enabled": True}, ""
     )
@@ -102,12 +101,20 @@ async def test_manager_all_groups_still_requires_telegram_admin(setup):  # noqa:
     with pytest.raises(Rejected, match="Telegram"):
         await s.mod.check("2", "-1001")
     s.members[2].status = "administrator"
+    with pytest.raises(Rejected):
+        await s.mod.check("2", "-1001")
+    await designate_admin(s.runtime, "2")
     await s.mod.check("2", "-1001")
     s.store.db.execute(
         "INSERT INTO mod_groups(chat,title,enabled) VALUES('-1002','Second',1)"
     )
+    with pytest.raises(Rejected):
+        await s.mod.check("2", "-1002")
+    await designate_admin(s.runtime, "2", chat="-1002")
     await s.mod.check("2", "-1002")
     s.store.revoke("1", "2")
+    await s.mod.check("2", "-1002")
+    await designate_admin(s.runtime, "2", chat="-1002", enabled=False)
     with pytest.raises(Rejected):
         await s.mod.check("2", "-1002")
 

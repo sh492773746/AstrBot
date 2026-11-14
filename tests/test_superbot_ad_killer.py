@@ -34,6 +34,7 @@ def env(tmp_path):
     members = {1: Member("creator"), 9: Member("administrator"), 2: Member("member")}
     bot = SimpleNamespace(
         id=9,
+        username="fixture",
         get_chat=AsyncMock(return_value=SimpleNamespace(type="supergroup")),
         get_chat_member=AsyncMock(side_effect=lambda chat, uid: members[uid]),
         delete_message=AsyncMock(),
@@ -238,7 +239,9 @@ async def test_platform_hidden_link_zero_width_and_telegram_separation(env):
 
 
 @pytest.mark.asyncio
-async def test_link_rule_migration_preserves_existing_settings_and_invalidates_buttons(env):
+async def test_link_rule_migration_preserves_existing_settings_and_invalidates_buttons(
+    env,
+):
     import json
 
     old = await enable(env, "contact")
@@ -453,9 +456,7 @@ async def test_private_buttons_version_and_role(env):
     await ui.action(update, {"action": "mod_ak_home", "chat": "-1001"})
     assert "执行开关" in env.runtime.bot.send_message.await_args.kwargs["text"]
     markup = env.runtime.bot.send_message.await_args.kwargs["reply_markup"]
-    switch_labels = [
-        button.text for row in markup.inline_keyboard for button in row
-    ]
+    switch_labels = [button.text for row in markup.inline_keyboard for button in row]
     assert switch_labels == ["启用自动执行", "返回广告与刷屏"]
     assert "外链" not in env.runtime.bot.send_message.await_args.kwargs["text"]
     await ui.action(update, {"action": "mod_ak_rules", "chat": "-1001"})

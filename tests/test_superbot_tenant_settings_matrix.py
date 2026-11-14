@@ -10,6 +10,7 @@ from test_superbot_tenants import merchant  # noqa: F401
 
 from data.plugins.astrbot_plugin_superbot.duel import Duel
 from data.plugins.astrbot_plugin_superbot.game import Game
+from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
 from data.plugins.astrbot_plugin_superbot.k3 import K3
 from data.plugins.astrbot_plugin_superbot.mines import Mines
 from data.plugins.astrbot_plugin_superbot.points import DEFAULT
@@ -47,16 +48,19 @@ def configured(merchant):
 @pytest.mark.parametrize(
     "feature", ["group", "ads", "canada", "k3", "duel", "wheel", "slots", "mines"]
 )
-def test_all_local_switches_isolated_and_versioned(configured, feature):
+@pytest.mark.asyncio
+async def test_all_local_switches_isolated_and_versioned(configured, feature):
     runtime, _, _ = configured
     store = runtime.store
     modules = store.get("modules")
     other = dict(binding(store, "-1002"))
     for enabled in (False, True):
         version = binding(store, "-1001")["version"]
-        runtime.tenants.switch("10", "-1001", feature, enabled, version)
-        with pytest.raises(Rejected):
+        async with GroupAuthority(runtime).session("10", "-1001", allow_paused=True):
             runtime.tenants.switch("10", "-1001", feature, enabled, version)
+        async with GroupAuthority(runtime).session("10", "-1001", allow_paused=True):
+            with pytest.raises(Rejected):
+                runtime.tenants.switch("10", "-1001", feature, enabled, version)
         with pytest.raises(Rejected):
             runtime.tenants.switch(
                 "20", "-1001", feature, enabled, binding(store, "-1001")["version"]
@@ -88,39 +92,48 @@ def test_all_local_switches_isolated_and_versioned(configured, feature):
         ("k3_limits", {"ordinary": 500, "special": 50, "number": 10, "total": 1000}),
     ],
 )
-def test_local_operating_values_and_replay(configured, key, value):
+@pytest.mark.asyncio
+async def test_local_operating_values_and_replay(configured, key, value):
     runtime, _, _ = configured
-    runtime.tenants.operating("10", "-1001", key, value, 0)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.operating("10", "-1001", key, value, 0)
     assert local_config(runtime.store, "-1001", key, None) == value
     assert local_config(runtime.store, "-1002", key, None) is None
     if key.endswith("_stakes"):
         assert group_stakes(runtime.store, "-1001", key.split("_")[0]) == value
     with pytest.raises(Rejected):
-        runtime.tenants.operating("10", "-1001", key, value, 0)
+        async with GroupAuthority(runtime).session("10", "-1001"):
+            runtime.tenants.operating("10", "-1001", key, value, 0)
     with pytest.raises(Rejected):
         runtime.tenants.operating("20", "-1001", key, value, 1)
 
 
-def test_local_settings_survive_reopen_and_reject_stale_save(configured):
+@pytest.mark.asyncio
+async def test_local_settings_survive_reopen_and_reject_stale_save(configured):
     runtime, _, _ = configured
-    runtime.tenants.operating("10", "-1001", "slots_stakes", [100, 300], 0)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.operating("10", "-1001", "slots_stakes", [100, 300], 0)
     reopened = Store(runtime.store.path, "1", runtime.store.clock)
     try:
-        service = Tenants(SimpleNamespace(store=reopened))
+        reopened_runtime = SimpleNamespace(store=reopened, bot=runtime.bot)
+        service = reopened_runtime.tenants = Tenants(reopened_runtime)
         assert group_stakes(reopened, "-1001", "slots") == [100, 300]
         with pytest.raises(Rejected):
-            service.operating("10", "-1001", "slots_stakes", [300], 0)
+            async with GroupAuthority(reopened_runtime).session("10", "-1001"):
+                service.operating("10", "-1001", "slots_stakes", [300], 0)
         with pytest.raises(Rejected):
             service.operating("20", "-1001", "slots_stakes", [300], 1)
         assert group_stakes(reopened, "-1001", "slots") == [100, 300]
-        service.operating("10", "-1001", "slots_stakes", [300], 1)
+        async with GroupAuthority(reopened_runtime).session("10", "-1001"):
+            service.operating("10", "-1001", "slots_stakes", [300], 1)
         assert group_stakes(reopened, "-1001", "slots") == [300]
         assert local_config(reopened, "-1002", "slots_stakes", None) is None
     finally:
         reopened.close()
 
 
-def test_canada_reader_uses_group_limits_without_changing_odds(configured):
+@pytest.mark.asyncio
+async def test_canada_reader_uses_group_limits_without_changing_odds(configured):
     runtime, _, _ = configured
     original = runtime.game.rooms()
     for room_id, room in original.items():
@@ -129,7 +142,10 @@ def test_canada_reader_uses_group_limits_without_changing_odds(configured):
             "maximum": room["minimum"],
             "total": room["minimum"],
         }
-        runtime.tenants.operating("10", "-1001", "canada_limits:" + room_id, value, 0)
+        async with GroupAuthority(runtime).session("10", "-1001"):
+            runtime.tenants.operating(
+                "10", "-1001", "canada_limits:" + room_id, value, 0
+            )
         current = runtime.game.rooms(chat="-1001")[room_id]
         for field in value:
             assert current[field] == value[field]
@@ -171,7 +187,8 @@ async def test_wheel_owner_save_and_effective_reader(configured, field, value):
         await wheel_action(ui, update, {**payload, "version": 1})
 
 
-def test_reward_values_drive_actual_wallet_and_daily_cap(configured):
+@pytest.mark.asyncio
+async def test_reward_values_drive_actual_wallet_and_daily_cap(configured):
     runtime, clock, _ = configured
     config = {
         **DEFAULT,
@@ -182,7 +199,8 @@ def test_reward_values_drive_actual_wallet_and_daily_cap(configured):
         "cap": 3,
         "groups": ["-1001"],
     }
-    runtime.tenants.settings("10", "-1001", "points", config, 1)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.settings("10", "-1001", "points", config, 1)
     runtime.points.checkin("30", "-1001")
     assert runtime.store.balance("30", "-1001") == 13
     runtime.points.chat("30", "-1001", "100", "这是第一条测试发言")
@@ -193,7 +211,8 @@ def test_reward_values_drive_actual_wallet_and_daily_cap(configured):
     runtime.points.chat("30", "-1001", "102", "这是第三条测试发言")
     assert runtime.store.balance("30", "-1001") == 16
     assert runtime.store.balance("30", "-1002") == 0
-    runtime.points.adjust("10", "30", 5, "isolated test", "adjust-test", "-1001")
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.points.adjust("10", "30", 5, "isolated test", "adjust-test", "-1001")
     assert runtime.store.balance("30", "-1001") == 21
     with pytest.raises(Rejected):
         runtime.points.adjust("20", "30", 5, "foreign owner", "bad", "-1001")
@@ -210,17 +229,20 @@ def test_reward_values_drive_actual_wallet_and_daily_cap(configured):
         ("fee", 0),
     ],
 )
-def test_invalid_or_platform_only_settings_rejected(configured, key, value):
+@pytest.mark.asyncio
+async def test_invalid_or_platform_only_settings_rejected(configured, key, value):
     runtime, _, _ = configured
     with pytest.raises(Rejected):
-        runtime.tenants.operating("10", "-1001", key, value, 0)
+        async with GroupAuthority(runtime).session("10", "-1001"):
+            runtime.tenants.operating("10", "-1001", key, value, 0)
     assert local_config(runtime.store, "-1001", key, None) is None
 
 
 @pytest.mark.parametrize("kind", ["normal", "pinned"])
 @pytest.mark.parametrize("duration", ["30days", "month"])
 @pytest.mark.parametrize("capacity", [1, 2, 3, 5, 10])
-def test_ad_settings_used_in_order_snapshot(merchant, kind, duration, capacity):
+@pytest.mark.asyncio
+async def test_ad_settings_used_in_order_snapshot(merchant, kind, duration, capacity):
     runtime, _, _ = merchant
     config = {
         "name": "isolated setting",
@@ -230,7 +252,8 @@ def test_ad_settings_used_in_order_snapshot(merchant, kind, duration, capacity):
         "slots": capacity,
         "enabled": True,
     }
-    runtime.merchant_ads.configure("10", "-1001", "matrix", config)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.merchant_ads.configure("10", "-1001", "matrix", config)
     runtime.merchant_ads.submit("30", "matrix", "synthetic", "test", 1, "matrix-order")
     order = runtime.merchant_ads.order("30", "matrix-order")
     snapshot = json.loads(order["package"])
@@ -243,9 +266,10 @@ def test_ad_settings_used_in_order_snapshot(merchant, kind, duration, capacity):
             ).fetchone()[0]
             == capacity
         )
-    runtime.merchant_ads.configure(
-        "10", "-1001", "matrix", {**config, "price": "23.45", "enabled": False}, 1
-    )
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.merchant_ads.configure(
+            "10", "-1001", "matrix", {**config, "price": "23.45", "enabled": False}, 1
+        )
     assert (
         runtime.merchant_ads.order("30", "matrix-order")["package"] == order["package"]
     )
@@ -255,14 +279,17 @@ def test_ad_settings_used_in_order_snapshot(merchant, kind, duration, capacity):
         runtime.merchant_ads.configure("20", "-1001", "matrix", config, 2)
 
 
-def test_k3_config_changes_actual_limit_and_freezes_existing_round(configured):
+@pytest.mark.asyncio
+async def test_k3_config_changes_actual_limit_and_freezes_existing_round(configured):
     runtime, clock, _ = configured
     store = runtime.store
-    runtime.tenants.switch(
-        "10", "-1001", "k3", True, binding(store, "-1001")["version"]
-    )
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.switch(
+            "10", "-1001", "k3", True, binding(store, "-1001")["version"]
+        )
     limits = {"ordinary": 5, "special": 3, "number": 2, "total": 10}
-    runtime.tenants.operating("10", "-1001", "k3_limits", limits, 0)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.operating("10", "-1001", "k3_limits", limits, 0)
     with store.tx() as db:
         store.credit(db, "matrix-seed", "30", 100, "isolated", chat="-1001")
         db.execute(
@@ -274,13 +301,14 @@ def test_k3_config_changes_actual_limit_and_freezes_existing_round(configured):
     assert store.balance("30", "-1001") == 100
     runtime.k3.place("-1001", "30", 3, [("big", 5)], clock[0])
     assert store.balance("30", "-1001") == 95
-    runtime.tenants.operating(
-        "10",
-        "-1001",
-        "k3_limits",
-        {"ordinary": 10, "special": 5, "number": 3, "total": 20},
-        1,
-    )
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.operating(
+            "10",
+            "-1001",
+            "k3_limits",
+            {"ordinary": 10, "special": 5, "number": 3, "total": 20},
+            1,
+        )
     with pytest.raises(Rejected):
         runtime.k3.place("-1001", "30", 4, [("big", 1)], clock[0])
     assert store.balance("30", "-1001") == 95
@@ -295,9 +323,10 @@ async def test_disabled_group_admin_access_does_not_open_game(configured, game):
 
     runtime, _, _ = configured
     store = runtime.store
-    runtime.tenants.switch(
-        "10", "-1001", "group", False, binding(store, "-1001")["version"]
-    )
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.switch(
+            "10", "-1001", "group", False, binding(store, "-1001")["version"]
+        )
     ui = UI(runtime)
     ui.render = AsyncMock()
     event = SimpleNamespace(
@@ -324,7 +353,8 @@ async def test_admin_stakes_match_local_reader(configured, game):
     import importlib
 
     runtime, _, _ = configured
-    runtime.tenants.operating("10", "-1001", game + "_stakes", [100, 300], 0)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.operating("10", "-1001", game + "_stakes", [100, 300], 0)
     ui = UI(runtime)
     ui.render = AsyncMock()
     event = SimpleNamespace(
@@ -343,9 +373,10 @@ async def test_admin_stakes_match_local_reader(configured, game):
 @pytest.mark.asyncio
 async def test_wheel_save_while_group_disabled(configured):
     runtime, _, _ = configured
-    runtime.tenants.switch(
-        "10", "-1001", "group", False, binding(runtime.store, "-1001")["version"]
-    )
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.switch(
+            "10", "-1001", "group", False, binding(runtime.store, "-1001")["version"]
+        )
     ui = UI(runtime)
     ui.render = AsyncMock()
     event = SimpleNamespace(

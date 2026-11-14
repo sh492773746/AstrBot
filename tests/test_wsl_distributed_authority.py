@@ -7,7 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from astrbot.builtin_stars.wangshangliao_moderation.command_menu import CommandMenu
+from astrbot.builtin_stars.wangshangliao_moderation.command_menu import (
+    CommandMenu,
+    Session,
+)
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import (
     DEFAULT_RULES,
     OpenError,
@@ -326,14 +329,15 @@ def menu_event():
     """Build a transport-bound event without any live platform methods.
 
     Returns:
-        Synthetic private event suitable for menu-key checks.
+        Synthetic group event suitable for billing-consent key checks.
     """
     return SimpleNamespace(
         platform=SimpleNamespace(account="99"),
         actor_identity=ActorIdentity("99", "1", "1001", "1"),
-        unified_msg_origin="fixture:private:1001",
+        unified_msg_origin="fixture:group:5",
+        is_private_chat=lambda: False,
         get_sender_id=lambda: "1",
-        get_group_id=lambda: "",
+        get_group_id=lambda: "5",
     )
 
 
@@ -341,6 +345,10 @@ def menu_event():
 def test_menu_state_isolated_from_other_transport_scopes(menu_event, scope):
     menu = CommandMenu(SimpleNamespace())
     original = menu.key(menu_event)
+    assert original is not None
+    state = Session(expires=time.monotonic() + 60, confirm="确认本群扣费")
+    menu.sessions[original] = state
+    assert menu.accepts(menu_event, "1")
     if scope == "peer":
         menu_event.actor_identity = replace(
             menu_event.actor_identity, peer="other-peer"
@@ -349,11 +357,13 @@ def test_menu_state_isolated_from_other_transport_scopes(menu_event, scope):
         menu_event.platform.account = "199"
         menu_event.actor_identity = replace(menu_event.actor_identity, account="199")
     elif scope == "group":
-        menu_event.get_group_id = lambda: "5"
+        menu_event.get_group_id = lambda: "6"
     else:
-        menu_event.unified_msg_origin = "fixture:group:5"
+        menu_event.unified_msg_origin = "fixture:group:5:other"
     assert menu.key(menu_event) is not None
     assert menu.key(menu_event) != original
+    assert not menu.accepts(menu_event, "1")
+    assert menu.sessions == {original: state}
 
 
 @pytest.mark.parametrize("change", ["account", "sender", "missing_peer"])
@@ -365,3 +375,19 @@ def test_menu_rejects_mismatched_transport_identity(menu_event, change):
     else:
         menu_event.actor_identity = replace(menu_event.actor_identity, peer="")
     assert CommandMenu(SimpleNamespace()).key(menu_event) is None
+
+
+@pytest.mark.parametrize("private,group", [(True, ""), (True, "5"), (False, "")])
+def test_private_or_groupless_event_cannot_reuse_group_consent(
+    menu_event, private, group
+):
+    menu = CommandMenu(SimpleNamespace())
+    original = menu.key(menu_event)
+    assert original is not None
+    state = Session(expires=time.monotonic() + 60, confirm="确认本群扣费")
+    menu.sessions[original] = state
+    menu_event.is_private_chat = lambda: private
+    menu_event.get_group_id = lambda: group
+    assert menu.key(menu_event) is None
+    assert all(not menu.accepts(menu_event, text) for text in ("1", "取消", "0"))
+    assert menu.sessions == {original: state}

@@ -85,10 +85,13 @@ async def test_settled_rankings_reuse_bodies_but_recheck_late_inputs(
         2
     ]
     assert body_reads() == 4
-    assert sum(
-        "SELECT rowid,message,state,pruned_at FROM inbox" in sql
-        for sql in statements
-    ) == 5
+    assert (
+        sum(
+            "SELECT rowid,message,state,pruned_at FROM inbox" in sql
+            for sql in statements
+        )
+        == 5
+    )
     for sql in statements:
         if sql.startswith("SELECT rowid,message,state,pruned_at"):
             assert "WHERE account='1' AND team='5'" in sql

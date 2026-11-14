@@ -1,16 +1,21 @@
 """Offline onboarding, scoped support and menu regression tests."""
 
+import asyncio
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 import test_superbot_tenants as tenant_tests
+from telegram.error import TimedOut
 
 from data.plugins.astrbot_plugin_superbot.availability import refresh, snapshot
+from data.plugins.astrbot_plugin_superbot.group_authority import CURRENT, GroupAuthority
 from data.plugins.astrbot_plugin_superbot.onboarding import invitation
 from data.plugins.astrbot_plugin_superbot.store import Rejected
 from data.plugins.astrbot_plugin_superbot.support_menu import action, contact_url
 from data.plugins.astrbot_plugin_superbot.tenant_ui import action as tenant_action
+from data.plugins.astrbot_plugin_superbot.tenants import binding, local_config
 
 merchant = tenant_tests.merchant
 
@@ -32,7 +37,9 @@ def test_invitation_reflects_switch_without_mutation(merchant, public):
     before = runtime.store.db.total_changes
     text, buttons = invitation(runtime)
     assert ("分批开放" in text) is not public
-    assert "AI、制图及付费广告另行开通" in text
+    assert "默认授权AI客服与制图" in text
+    assert "功能开关及服务限额" in text
+    assert "广告投递须先配置广告位" in text
     assert buttons[0][1]["url"] == "https://t.me/example_fixture_bot?startgroup"
     assert runtime.store.db.total_changes == before
 
@@ -51,7 +58,11 @@ async def test_closed_entry_has_contact_and_no_challenge(merchant):
         == before
     )
     await tenant_action(ui, event(10), {"action": "tenant_join"})
-    assert "/bindgroup" in ui.render.call_args.args[1]
+    assert "新群不需要凭证" in ui.render.call_args.args[1]
+    assert (
+        runtime.store.db.execute("SELECT count(*) FROM tenant_bindings").fetchone()[0]
+        == before
+    )
 
 
 def test_group_snapshot_is_independent_and_suspension_hides_everything(merchant):
@@ -118,33 +129,198 @@ async def test_contact_context_and_unauthorized_ai_never_calls_model(merchant):
     assert ui.render.call_args.args[2][0][1]["url"] == "tg://user?id=20"
     with pytest.raises(Rejected):
         await action(ui, event(), {"action": "support_contact_edit", "chat": "-1002"})
-    with pytest.raises(Rejected):
+    runtime.store.db.execute(
+        "INSERT INTO tenant_resource_grants(chat,resource,budget,enabled) "
+        "VALUES('-1001','chat',0,0)"
+    )
+    with pytest.raises(Rejected, match="显式限额"):
         await action(ui, event(), {"action": "support_ai", "chat": "-1001"})
     assert runtime.tenants.resource_context("10", "chat") is None
 
 
 @pytest.mark.asyncio
-async def test_contact_save_version_owner_and_group_isolation(merchant):
-    runtime, _, _ = merchant
+@pytest.mark.parametrize("platform", [False, True])
+async def test_contact_save_version_owner_and_group_isolation(
+    merchant, monkeypatch, platform
+):
+    runtime, _, owners = merchant
+    store = runtime.store
+    uid = 1 if platform else 10
+    if platform:
+        owners["-1001"] = str(uid)
+        store.db.execute(
+            "UPDATE tenant_groups SET tenant='platform',version=version+1 "
+            "WHERE chat='-1001'"
+        )
+    transaction = store.tx
+    committed = []
+
+    @contextmanager
+    def scoped_transaction():
+        proof = CURRENT.get()
+        assert proof is not None
+        assert proof.store is store and proof.task is asyncio.current_task()
+        assert (proof.uid, proof.chat) == (str(uid), "-1001")
+        with transaction() as db:
+            try:
+                yield db
+            finally:
+                assert CURRENT.get() is proof
+        assert CURRENT.get() is proof
+        committed.append(proof)
+
+    monkeypatch.setattr(store, "tx", scoped_transaction)
+    get_chat = runtime.bot.get_chat
+    get_member = runtime.bot.get_chat_member
+
+    async def chat_lookup(*args, **kwargs):
+        assert not store.db.in_transaction
+        return await get_chat(*args, **kwargs)
+
+    async def member_lookup(*args, **kwargs):
+        assert not store.db.in_transaction
+        return await get_member(*args, **kwargs)
+
+    async def render(*args):
+        assert not store.db.in_transaction
+
+    monkeypatch.setattr(runtime.bot, "get_chat", AsyncMock(side_effect=chat_lookup))
+    monkeypatch.setattr(
+        runtime.bot, "get_chat_member", AsyncMock(side_effect=member_lookup)
+    )
     runtime.community = SimpleNamespace(member=AsyncMock())
-    ui = SimpleNamespace(runtime=runtime, store=runtime.store, render=AsyncMock())
-    await action(ui, event(), {"action": "support_contact_edit", "chat": "-1001"})
-    from data.plugins.astrbot_plugin_superbot.tenants import binding, local_config
+    ui = SimpleNamespace(
+        runtime=runtime, store=store, render=AsyncMock(side_effect=render)
+    )
+    assert CURRENT.get() is None
+    await action(ui, event(uid), {"action": "support_contact_edit", "chat": "-1001"})
+    assert CURRENT.get() is None
 
     payload = {
         "action": "support_contact_save",
         "chat": "-1001",
         "value": "@example_contact",
         "version": 0,
-        "owner_version": binding(runtime.store, "-1001")["version"],
+        "owner_version": binding(store, "-1001")["version"],
     }
-    await action(ui, event(), payload)
+    await action(ui, event(uid), payload)
+    assert CURRENT.get() is None
+    assert len(committed) == 1
     assert (
-        local_config(runtime.store, "-1001", "business_contact", "")
+        local_config(store, "-1001", "business_contact", "")
         == "https://t.me/example_contact"
     )
-    assert local_config(runtime.store, "-1002", "business_contact", "") == ""
-    with pytest.raises(Rejected):
-        await action(ui, event(), payload)
+    assert local_config(store, "-1002", "business_contact", "") == ""
+    with pytest.raises(Rejected, match="群归属或配置已变化"):
+        await action(ui, event(uid), payload)
+    assert CURRENT.get() is None
+    store.db.execute("UPDATE tenant_groups SET version=version+1 WHERE chat='-1001'")
+    with pytest.raises(Rejected, match="群归属或配置已变化"):
+        await action(ui, event(uid), {**payload, "version": 1})
+    assert CURRENT.get() is None
     with pytest.raises(Rejected):
         await action(ui, event(20), {**payload, "version": 1})
+    assert CURRENT.get() is None
+    assert len(committed) == 1
+    assert (
+        store.db.execute(
+            "SELECT count(*) FROM audit WHERE action='business_contact'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        store.db.execute(
+            "SELECT version FROM tenant_settings "
+            "WHERE chat='-1001' AND key='business_contact'"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    ["owner_changed", "bot_removed", "group_revision_race", "timeout", "paused"],
+)
+async def test_contact_save_rechecks_live_authority(merchant, failure):
+    runtime, _, owners = merchant
+    store = runtime.store
+    ui = SimpleNamespace(runtime=runtime, store=store, render=AsyncMock())
+    await action(ui, event(), {"action": "support_contact_edit", "chat": "-1001"})
+    payload = {
+        "action": "support_contact_save",
+        "chat": "-1001",
+        "value": "@example_contact",
+        "version": 0,
+        "owner_version": binding(store, "-1001")["version"],
+    }
+    original = runtime.bot.get_chat_member.side_effect
+
+    async def changed_member(chat, uid):
+        assert not store.db.in_transaction
+        if uid == runtime.bot.id:
+            if failure == "bot_removed":
+                return SimpleNamespace(status="left")
+            if failure == "group_revision_race":
+                store.db.execute(
+                    "UPDATE mod_groups SET version=version+1 WHERE chat=?", (chat,)
+                )
+        return await original(chat, uid)
+
+    runtime.bot.get_chat_member.side_effect = changed_member
+    if failure == "owner_changed":
+        owners["-1001"] = "30"
+    elif failure == "timeout":
+        runtime.bot.get_chat.side_effect = TimedOut()
+    elif failure == "paused":
+        store.suspend_group("-1001")
+    assert CURRENT.get() is None
+    with pytest.raises(Rejected):
+        await action(ui, event(), payload)
+    assert CURRENT.get() is None
+    assert not store.db.in_transaction
+    assert local_config(store, "-1001", "business_contact", "") == ""
+    assert local_config(store, "-1002", "business_contact", "") == ""
+    assert (
+        store.db.execute(
+            "SELECT count(*) FROM audit WHERE action='business_contact'"
+        ).fetchone()[0]
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["support_contact_edit", "support_contact_save"])
+async def test_contact_management_remains_owner_only_for_designated_admin(
+    merchant, name
+):
+    runtime, _, _ = merchant
+    original = runtime.bot.get_chat_member.side_effect
+
+    async def designated_admin(chat, uid):
+        if uid == 30:
+            return SimpleNamespace(status="administrator")
+        return await original(chat, uid)
+
+    runtime.bot.get_chat_member.side_effect = designated_admin
+    await runtime.tenants.designate(
+        "10", "-1001", "30", True, runtime.moderation.row("-1001")["version"]
+    )
+    async with GroupAuthority(runtime).session("30", "-1001"):
+        runtime.store.require("30", "moderation", chat="-1001")
+    assert CURRENT.get() is None
+    ui = SimpleNamespace(runtime=runtime, store=runtime.store, render=AsyncMock())
+    with pytest.raises(Rejected, match="仅本群经营群主"):
+        await action(
+            ui,
+            event(30),
+            {
+                "action": name,
+                "chat": "-1001",
+                "value": "@example_contact",
+                "version": 0,
+                "owner_version": binding(runtime.store, "-1001")["version"],
+            },
+        )
+    assert CURRENT.get() is None
+    assert local_config(runtime.store, "-1001", "business_contact", "") == ""

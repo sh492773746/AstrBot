@@ -309,8 +309,33 @@ def test_multitenant_retrieval_uses_incremental_index_and_bounded_results(
         for query in queries
         if not query.lstrip().startswith("--") and "'knowledge_fts_config'" not in query
     ]
-    assert len(application_queries) == 300
-    assert sum("MATCH" in query for query in application_queries) == 100
+    # SQLite versions differ in whether this FTS5 guard is marked internal.
+    version_guard = "PRAGMA 'main'.data_version"
+    version_checks = [
+        query for query in application_queries if query.strip() == version_guard
+    ]
+    retrieval_queries = [
+        query for query in application_queries if query.strip() != version_guard
+    ]
+    assert len(version_checks) <= 100
+    assert len(application_queries) <= 400
+    assert len(retrieval_queries) == 300
+    assert (
+        sum(
+            query.startswith("SELECT * FROM knowledge_spaces WHERE ")
+            for query in retrieval_queries
+        )
+        == 100
+    )
+    assert (
+        sum(
+            query.startswith("SELECT 1 FROM knowledge_entries WHERE ")
+            for query in retrieval_queries
+        )
+        == 100
+    )
+    assert sum("MATCH" in query for query in retrieval_queries) == 100
+    assert all(query.lstrip().startswith("SELECT ") for query in retrieval_queries)
     assert not any(
         "CREATE" in query or "INSERT" in query or "UPDATE" in query
         for query in application_queries

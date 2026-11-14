@@ -4,10 +4,12 @@ import json
 import sqlite3
 
 import pytest
+from superbot_authority import designate_admin
 from test_superbot_community import community, private  # noqa: F401
 from test_superbot_game_hardening import flow  # noqa: F401
 from test_superbot_moderation import Member, setup  # noqa: F401
 
+from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
 from data.plugins.astrbot_plugin_superbot.group_template import KEY, action
 from data.plugins.astrbot_plugin_superbot.store import Rejected, encode
 
@@ -65,6 +67,7 @@ async def test_manager_template_and_ad_policy_without_group_acl(template):
     s = template
     s.store.accept_grant("2", s.store.grant("1", "2", ["manager"], 30))
     s.members[2].status = "administrator"
+    await designate_admin(s.runtime, "2")
     await action(
         s.runtime.ui,
         private(2),
@@ -80,7 +83,8 @@ async def test_manager_template_and_ad_policy_without_group_acl(template):
     assert all(s.runtime.community.policy("-1001")["config"]["enabled"].values())
     cfg = json.loads(s.runtime.ad_killer.policy("-1001")["config"])
     version = s.runtime.ad_killer.policy("-1001")["version"]
-    s.runtime.ad_killer.save("-1001", "2", version, cfg, True)
+    async with GroupAuthority(s.runtime).session("2", "-1001"):
+        s.runtime.ad_killer.save("-1001", "2", version, cfg, True)
     s.store.revoke("1", "2")
     with pytest.raises(Rejected):
         await action(
@@ -96,7 +100,8 @@ async def test_capture_and_reuse_preserves_target_whitelists_and_log(template):
     cfg = json.loads(s.runtime.ad_killer.policy("-1001")["config"])
     cfg["rules"]["links"]["enabled"] = True
     cfg["domains"] = ["source.example"]
-    s.runtime.ad_killer.save("-1001", "1", 0, cfg, True)
+    async with GroupAuthority(s.runtime).session("1", "-1001"):
+        s.runtime.ad_killer.save("-1001", "1", 0, cfg, True)
     token, payload = await preview(s, "capture")
     await action(s.runtime.ui, private(), payload, token)
     saved = s.store.get(KEY)
@@ -107,7 +112,8 @@ async def test_capture_and_reuse_preserves_target_whitelists_and_log(template):
     )
     cfg["domains"] = ["target.example"]
     cfg["rules"]["links"]["enabled"] = False
-    s.runtime.ad_killer.save("-1002", "1", 0, cfg, False)
+    async with GroupAuthority(s.runtime).session("1", "-1002"):
+        s.runtime.ad_killer.save("-1002", "1", 0, cfg, False)
     target = s.runtime.community.policy("-1002")["config"]
     target["log"] = {"enabled": True, "channel": "-1009", "title": "Local"}
     s.store.db.execute(
@@ -170,7 +176,8 @@ async def test_saved_punishment_requires_current_permissions_and_no_fault(templa
     s = template
     cfg = json.loads(s.runtime.ad_killer.policy("-1001")["config"])
     cfg["rules"]["links"] = {"enabled": True, "action": "mute"}
-    s.runtime.ad_killer.save("-1001", "1", 0, cfg, True)
+    async with GroupAuthority(s.runtime).session("1", "-1001"):
+        s.runtime.ad_killer.save("-1001", "1", 0, cfg, True)
     token, payload = await preview(s, "capture")
     await action(s.runtime.ui, private(), payload, token)
     token, payload = await preview(s, "saved")
@@ -215,6 +222,7 @@ async def test_authorized_group_admin_cannot_use_owner_template(template):
     )
     s.store.db.execute("INSERT INTO mod_acl(uid,chat) VALUES('2','-1001')")
     s.members[2] = Member("administrator")
+    await designate_admin(s.runtime, "2")
     await s.runtime.ui.action(private(2), {"action": "mod_group", "chat": "-1001"})
     assert "超管群配置模板" not in str(
         s.bot.send_message.await_args.kwargs["reply_markup"]

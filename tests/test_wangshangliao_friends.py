@@ -1,8 +1,8 @@
-"""Friend deletion is absent; retained directory codecs are read-only."""
+"""Friend commands, native directory APIs and dashboard routes are retired."""
 
 import importlib.util
-import struct
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,7 +10,6 @@ import pytest
 from astrbot.builtin_stars.wangshangliao_moderation.dashboard import DashboardPage
 from astrbot.builtin_stars.wangshangliao_moderation.settings import BusinessSettings
 from astrbot.builtin_stars.wangshangliao_moderation.syntax import recognize_command
-from astrbot.core.platform.sources.wangshangliao import wire
 from astrbot.core.platform.sources.wangshangliao.nim import NimClient
 
 
@@ -25,6 +24,8 @@ from astrbot.core.platform.sources.wangshangliao.nim import NimClient
         "同意好友申请",
         "自动同意好友",
         "拒绝好友申请",
+        "好友列表",
+        "好友搜索 fixture",
     ],
 )
 def test_friend_mutations_have_no_conversational_command(text):
@@ -36,124 +37,60 @@ def test_friend_mutations_have_no_conversational_command(text):
     assert not recognize_command(text)
 
 
-def test_friend_cleanup_implementation_and_native_deletion_are_removed():
+def test_friend_cleanup_and_approval_implementations_are_removed():
     """Ensure removal extends beyond hiding the dashboard entry."""
-    assert (
-        importlib.util.find_spec(
-            "astrbot.builtin_stars.wangshangliao_moderation.friends"
+    for module in ("friends", "friend_auto"):
+        assert (
+            importlib.util.find_spec(
+                f"astrbot.builtin_stars.wangshangliao_moderation.{module}"
+            )
+            is None
         )
-        is None
-    )
-    assert not hasattr(NimClient, "delete_friend")
     assert not hasattr(DashboardPage, "friends")
+    assert not hasattr(DashboardPage, "friend_approval")
     assert not hasattr(BusinessSettings, "friend_cleanup_hold")
     root = Path(__file__).resolve().parents[1]
-    assert not (
-        root / "dashboard/plugin-pages/wangshangliao/FriendCleanup.vue"
-    ).exists()
+    for component in ("FriendCleanup.vue", "FriendApproval.vue"):
+        assert not (root / "dashboard/plugin-pages/wangshangliao" / component).exists()
     app = (root / "dashboard/plugin-pages/wangshangliao/App.vue").read_text()
     assert "FriendCleanup" not in app
-    assert "FriendApproval" in app
+    assert "FriendApproval" not in app
 
 
-def friend_page(rows):
-    """Encode bounded read-only SDK fixtures.
-
-    Args:
-        rows: Transport peer, timestamp and relation tuples.
-
-    Returns:
-        SDK directory response bytes.
-    """
-    return (
-        wire.varint(len(rows))
-        + b"".join(
-            wire.properties(
-                [
-                    (4, peer.encode()),
-                    (5, flag),
-                    (8, b"Fixture"),
-                    (11, b"1"),
-                    (12, str(updated).encode()),
-                ]
-            )
-            for peer, updated, flag in rows
-        )
-        + struct.pack("<Q", max((row[1] for row in rows), default=0))
-    )
-
-
-@pytest.mark.asyncio
-async def test_friend_directory_paginates_and_excludes_deleted_relations():
-    """Validate the retained read codec without a mutation API."""
-    client = NimClient.__new__(NimClient)
-    first = [(str(i + 1), i + 1, b"1") for i in range(3000)]
-    second = [("3001", 3001, b"1"), ("3002", 3002, b"0")]
-    client.request = AsyncMock(
-        side_effect=[(200, friend_page(first)), (200, friend_page(second))]
-    )
-    result = await client.get_friends()
-    assert len(result) == 3001 and "3002" not in result
-    assert client.request.await_args_list[0].args == (12, 4, struct.pack("<Q", 0))
-    assert client.request.await_args_list[1].args == (12, 4, struct.pack("<Q", 3000))
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "body",
-    [
-        wire.varint(3001),
-        friend_page([("1", 1, b"1")])[:-1],
-        friend_page([("1", 1, b"1"), ("1", 2, b"1")]),
-        friend_page([("1", 0, b"1")]),
-        friend_page([("1", 1, b"2")]),
-        friend_page([("../shell", 1, b"1")]),
-        friend_page([(str(i), 3000 - i, b"1") for i in range(3000)]),
-        friend_page([(str(i + 1), 1, b"1") for i in range(3000)]),
-    ],
-    ids=[
-        "over-limit",
-        "truncated",
-        "duplicate-account",
-        "invalid-peer",
-        "wrong-account",
-        "unsafe-account",
-        "oversized-page",
-        "ambiguous-peers",
-    ],
-)
-async def test_incomplete_or_ambiguous_friend_directory_fails_closed(body):
-    """Reject malformed read responses.
+@pytest.mark.parametrize("entry", ["get_friends", "get_friend_names", "delete_friend"])
+def test_native_friend_directory_and_mutation_apis_do_not_exist(entry):
+    """Reject native friendship access rather than retaining directory codecs.
 
     Args:
-        body: Ambiguous SDK page bytes.
+        entry: Former native directory or mutation method.
     """
-    client = NimClient.__new__(NimClient)
-    client.request = AsyncMock(return_value=(200, body))
-    with pytest.raises(wire.ProtocolError):
-        await client.get_friends()
+    assert not hasattr(NimClient, entry)
+    assert not hasattr(object.__new__(NimClient), entry)
 
 
-@pytest.mark.asyncio
-async def test_complete_single_friend_page_does_not_require_server_sort_order():
-    """Allow a complete unsorted read-only page."""
-    client = NimClient.__new__(NimClient)
-    client.request = AsyncMock(
-        return_value=(200, friend_page([("1", 2, b"1"), ("2", 1, b"1")]))
+def test_dashboard_registration_removes_stale_friend_routes_and_keeps_group_routes():
+    """Remove retired endpoints on reload without touching unrelated routes."""
+    retired_handler = AsyncMock()
+    retired = {
+        "/wangshangliao_moderation/friends",
+        "/wangshangliao_moderation/friend-approval",
+    }
+    unrelated = ("/other-plugin/fixture", retired_handler, ["GET"], "fixture")
+    context = SimpleNamespace(
+        registered_web_apis=[
+            (route, retired_handler, [method], "retired")
+            for route in sorted(retired)
+            for method in ("GET", "POST")
+        ]
+        + [unrelated]
     )
-    assert set(await client.get_friends()) == {"1", "2"}
-    client.request.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_friend_names_only_expose_requested_accounts_and_names():
-    """Keep unrequested profiles out of name lookup results."""
-    client = NimClient.__new__(NimClient)
-    body = wire.varint(1) + wire.properties(
-        [(1, b"123"), (3, b"Name"), (9, b"SECRET_PHONE")]
-    )
-    client.request = AsyncMock(return_value=(200, body))
-    assert await client.get_friend_names(["123"]) == {"123": "Name"}
-    client.request.assert_awaited_once_with(3, 7, b"\x01\x03123")
-    with pytest.raises(wire.ProtocolError):
-        await client.get_friend_names(["other"])
+    context.register_web_api = lambda *args: context.registered_web_apis.append(args)
+    page = DashboardPage(context)
+    for _ in range(2):
+        page.register()
+        routes = {api[0] for api in context.registered_web_apis}
+        assert routes.isdisjoint(retired)
+        assert "/wangshangliao_moderation/groups" in routes
+        assert "/wangshangliao_moderation/group-managers" in routes
+        assert unrelated in context.registered_web_apis
+    retired_handler.assert_not_awaited()

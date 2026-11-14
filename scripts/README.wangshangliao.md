@@ -86,7 +86,7 @@ their initial baseline rather than clearing the counter.
 | 隔离财务页面 | `tests/test_wangshangliao_settlement_page.py` | 插件结账使用临时账本、合成后台身份及真实本地API；旧独立站4个页面脚本已移除，不等于生产付款验收 |
 | 线上读取＋合成编辑 | [check_wangshangliao_page.py](check_wangshangliao_page.py)、[check_wsl_cards_browser.py](check_wsl_cards_browser.py) | 使用真实部署页面／读取，拦截设置写入；不是纯离线，也不证明真实改名片 |
 | 好友入口移除检查 | [check_wsl_friend_removal.py](check_wsl_friend_removal.py) | 访问真实后台并探测已移除路由；`--reload`重载插件，`--docs`写截图；不是好友删除或纯合成测试 |
-| 只读性能／本地负载 | [benchmark_wsl_database.py](benchmark_wsl_database.py)、[check_wsl_open_load.py](check_wsl_open_load.py) | 前者临时合成库；后者默认真实库只读，可`--database`指定快照；当前绝对报告显式加`--absolute-query-report` |
+| 只读性能／本地负载 | [benchmark_wsl_database.py](benchmark_wsl_database.py)、[check_wsl_open_load.py](check_wsl_open_load.py) | 前者临时合成库；后者默认真实库只读，可`--database`指定快照；`--integrated`使用群AI慢桩和群消息，私信只确认接收；`--finance`已退役并在访问数据前拒绝；当前绝对报告显式加`--absolute-query-report` |
 | 固定测试实验室 | [wsl_test_lab.py](wsl_test_lab.py) | 邀请、移除及平台角色等测试能力；预览确认、对象白名单，不用于正式群；预览也访问平台并保存测试日志 |
 | 旧群离线归零 | [reset_wsl_test_group.py](reset_wsl_test_group.py) | 默认预览；`--apply`只处理已授权1459282，双服务停止、备份／摘要确认；不是全新群证明 |
 | 历史群验收工具 | [check_wsl_pair_live.py](check_wsl_pair_live.py)、[check_wsl_pair_rejoin_live.py](check_wsl_pair_rejoin_live.py) | 仍依赖旧私信辅助类，不能作为当前整套验收直接运行；群处罚／成员流程需另审查现行阶段与恢复边界 |
@@ -96,7 +96,7 @@ their initial baseline rather than clearing the counter.
 | 独立收费测试 | [check_wsl_model_cost.py](check_wsl_model_cost.py) | 固定最多4次模型调用；只在单独授权后运行，不打开公共AI门禁 |
 | 知识检索模型测试 | [check_wsl_knowledge_model.py](check_wsl_knowledge_model.py) `--apply` | 独立测试库检索、当前咨询／热群人格各一次真实调用；不传正式知识，不等于公共AI聊天门禁通过 |
 | 语义模型专项 | [check_wangshangliao_semantic.py](check_wangshangliao_semantic.py) | 六个合成场景使用真实配置模型，可能计费，无`--apply`门禁；不执行平台处罚，但不是离线回归 |
-| 后台复核 | [check_wsl_readonly_retest.py](check_wsl_readonly_retest.py) | 默认真实读取及页面检查；旧`--private`阶段已不适用，不能运行；`--platform`访问认证平台，不能笼统称零写入 |
+| 后台复核 | [check_wsl_readonly_retest.py](check_wsl_readonly_retest.py) | 默认真实读取及20个群管理页面检查；`--private`入口已删除；`--platform`访问认证平台，不能笼统称零写入 |
 | 旧结账日志检查 | `check_wsl_cashier_logging.py`（已移除） | 不再重启独立结账进程；日志由插件入口统一记录 |
 
 English: prefer the entries above. Offline/rendering checks do not prove upstream
@@ -157,7 +157,7 @@ The first verifier error was recovered read-only without replaying the first mes
 `check_wsl_shared_soak.py`仍断言预算未确认；`check_wsl_account_names.py`仍要求
 双账号和零启用群，`check_wsl_friend_removal.py`要求双账号，
 `check_wsl_test_activation_live.py`还固定旧双账号实例，当前三账号绑定不适用，
-`check_wsl_readonly_retest.py`等旧工具还要求正式群暂停。运行基线已变化时，
+其他旧工具可能仍要求正式群暂停；`check_wsl_readonly_retest.py`已移除该历史断言。运行基线已变化时，
 先审阅适用性，不为通过旧脚本而停用已授权群、改预算或恢复旧账号配置。
 旧共享平台脚本已于2026-10-21移除：它只检查返回行的`running`，
 缺少启用实例的完整集合断言，空返回也可能通过，且重载选项指向旧采集插件。

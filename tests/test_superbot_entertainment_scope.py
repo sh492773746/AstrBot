@@ -15,6 +15,7 @@ from data.plugins.astrbot_plugin_superbot.game_registry import (
     LOCAL_SWITCHES,
 )
 from data.plugins.astrbot_plugin_superbot.game_schedule import reason, save
+from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
 from data.plugins.astrbot_plugin_superbot.onboarding import invitation
 from data.plugins.astrbot_plugin_superbot.store import Rejected
 
@@ -100,7 +101,8 @@ async def test_retired_schedules_rejected_and_stored_values_ignored(form, key):
 
 
 @pytest.mark.parametrize("resource", ["chat", "avatar"])
-def test_default_resource_admission_audits_once_and_preserves_explicit_denial(
+@pytest.mark.asyncio
+async def test_default_resource_admission_audits_once_and_preserves_explicit_denial(
     form, resource
 ):
     ui, *_ = form
@@ -118,7 +120,8 @@ def test_default_resource_admission_audits_once_and_preserves_explicit_denial(
         "INSERT INTO roles(uid,scopes,expires) VALUES(?,?,?)",
         ("10", '["superadmin"]', ui.store.clock() + 7200),
     )
-    tenants.resource_grant("10", "-1001", resource, 0, 0)
+    async with GroupAuthority(ui.runtime).session("10", "-1001"):
+        tenants.resource_grant("10", "-1001", resource, 0, 0)
     assert not tenants.resource_allowed("30", "-1001", resource)
     assert tenants.resource_allowed("30", "-1002", resource)
     assert not tenants.resource_allowed("999", None, resource)
@@ -156,7 +159,8 @@ async def test_group_cannot_customize_shared_provider_template_or_limits(form):
         )
 
 
-def test_avatar_navigation_matches_default_admission(form):
+@pytest.mark.asyncio
+async def test_avatar_navigation_matches_default_admission(form):
     ui, *_ = form
     ui.runtime.avatar = SimpleNamespace(enabled=lambda: True)
     ui.runtime.community = SimpleNamespace(
@@ -170,5 +174,6 @@ def test_avatar_navigation_matches_default_admission(form):
         "INSERT INTO roles(uid,scopes,expires) VALUES(?,?,?)",
         ("10", '["superadmin"]', ui.store.clock() + 7200),
     )
-    ui.runtime.tenants.resource_grant("10", "-1001", "avatar", 0, 0)
+    async with GroupAuthority(ui.runtime).session("10", "-1001"):
+        ui.runtime.tenants.resource_grant("10", "-1001", "avatar", 0, 0)
     assert not snapshot(ui.runtime, "-1001")["avatar"]

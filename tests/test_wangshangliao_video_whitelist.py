@@ -1,6 +1,7 @@
 """Video-only recalls share the bounded native worker without warning escalation."""
 
 import asyncio
+import json
 import sqlite3
 import time
 from contextlib import closing
@@ -91,12 +92,15 @@ async def test_manual_and_yesterday_automatic_whitelists_can_send_video(
         today = datetime.now(ZoneInfo("Asia/Shanghai")).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
+        ranking_day = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+        last_activity = (today - timedelta(minutes=1)).timestamp()
         with closing(sqlite3.connect(tmp_path / "automatic_exemptions.sqlite3")) as db:
             db.execute(
-                "CREATE TABLE automatic_exemptions(account,group_id,member,peer,name,messages,day_start,valid_until,ranking_day)"
+                "CREATE TABLE automatic_exemptions(account,group_id,member,peer,name,"
+                "messages,day_start,valid_until,ranking_day,last_activity,activity_history)"
             )
             db.execute(
-                "INSERT INTO automatic_exemptions VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO automatic_exemptions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     "1",
                     "5",
@@ -106,10 +110,18 @@ async def test_manual_and_yesterday_automatic_whitelists_can_send_video(
                     101,
                     today.timestamp(),
                     time.time() + 90,
-                    (today - timedelta(days=1)).strftime("%Y-%m-%d"),
+                    ranking_day,
+                    last_activity,
+                    json.dumps({ranking_day: last_activity}),
                 ),
             )
             db.commit()
+        assert (
+            automatic_whitelist.read_automatic(
+                "fixture", "1", "5", member="2", peer="22"
+            )["2"]["peer"]
+            == "22"
+        )
     runtime = runtime_for(bot)
     try:
         payload = await ingest(bot, "100", "", kind="video")

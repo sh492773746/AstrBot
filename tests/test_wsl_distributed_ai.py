@@ -1,30 +1,32 @@
-"""Offline regressions for shared AI accounting recipient isolation."""
+"""Retired private quota notices cannot create cross-account delivery queues."""
 
-import tempfile
+from unittest.mock import Mock
 
 from astrbot.builtin_stars.wangshangliao_moderation.ai_plans import AIPlans
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenStore
 
 
-def test_quota_notices_stay_with_their_account_recipient():
-    """Do not return a shared-pool notice through another account's transport."""
-    plans = AIPlans(OpenStore(tempfile.mkdtemp(prefix="wsl-distributed-ai-")))
+def test_retired_quota_notice_queues_stay_absent_across_account_reopens(
+    tmp_path, monkeypatch
+):
+    store = OpenStore(tmp_path)
+    store.discover("account-A", {})
+    store.discover("account-B", {})
+    for _ in range(2):
+        plans = AIPlans(OpenStore(tmp_path))
+        assert "notices" not in plans.status()
+        with plans.store.connect() as db:
+            assert not db.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='ai_quota_notices'"
+            ).fetchone()
+            before = "\n".join(db.iterdump())
 
-    account_a = plans.queue_notices(
-        "nim/1001", "1", "account-A", reason="personal_quota", now=1760000000
-    )
-    account_b = plans.queue_notices(
-        "nim/1001", "1", "account-B", reason="personal_quota", now=1760000001
-    )
-
-    assert {row["account"] for row in account_a} == {"account-A"}
-    assert {row["account"] for row in account_b} == {"account-B"}
-
-    account_a_again = plans.queue_notices(
-        "nim/1001", "1", "account-A", reason="personal_quota", now=1760000002
-    )
-    account_b_again = plans.queue_notices(
-        "nim/1001", "1", "account-B", reason="personal_quota", now=1760000003
-    )
-    assert {row["account"] for row in account_a_again} == {"account-A"}
-    assert {row["account"] for row in account_b_again} == {"account-B"}
+        blocked = Mock(side_effect=AssertionError("Retired notices attempted IO"))
+        with monkeypatch.context() as patch:
+            patch.setattr(plans.store, "connect", blocked)
+            for name in ("queue_notices", "claim_notice", "finish_notice"):
+                assert not hasattr(AIPlans, name)
+                assert not hasattr(plans, name)
+            blocked.assert_not_called()
+        with plans.store.connect() as db:
+            assert "\n".join(db.iterdump()) == before

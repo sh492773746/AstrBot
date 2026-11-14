@@ -142,7 +142,7 @@ async def measure(root, count, enabled):
                 sender=wire.Source(id=uid, name="fixture"),
                 target=wire.Source(id=int(group)),
                 device=1,
-                session=1,
+                session=2,
                 version=2,
                 format=0,
                 content=wire.Content(data="neutral fixture"),

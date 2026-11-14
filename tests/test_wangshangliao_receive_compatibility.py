@@ -90,7 +90,7 @@ def test_compressed_or_malformed_unsigned_body_is_not_guessed():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("format_id", [0, 1, 3, 7, 8, 9, 999])
 @pytest.mark.parametrize("scope", ["group", "unknown_group", "private"])
-async def test_unsigned_ingress_archives_only_and_uses_transport_scope(
+async def test_unsigned_ingress_archives_groups_and_retires_private_without_inspection(
     tmp_path, monkeypatch, format_id, scope
 ):
     adapter = WangshangliaoAdapter(
@@ -104,6 +104,7 @@ async def test_unsigned_ingress_archives_only_and_uses_transport_scope(
     adapter.business = SimpleNamespace(
         deployment=SimpleNamespace(key=lambda _: bytes(32))
     )
+    adapter.nim_account = "9000"
     adapter.nim = SimpleNamespace(acknowledge=AsyncMock())
     adapter.diagnostics.emit = Mock()
     observe = Mock(side_effect=AssertionError("Unverified content reached business"))
@@ -119,6 +120,19 @@ async def test_unsigned_ingress_archives_only_and_uses_transport_scope(
         10: plaintext_message(format_id),
         12: "77",
     }
+    if scope == "private":
+        decode = Mock(side_effect=AssertionError("Private message was decrypted"))
+        monkeypatch.setattr(wire, "open_message", decode)
+        monkeypatch.setattr(
+            adapter.business.deployment,
+            "key",
+            Mock(side_effect=AssertionError("Private message key was accessed")),
+        )
+        monkeypatch.setattr(
+            adapter.ledger,
+            "ingest",
+            AsyncMock(side_effect=AssertionError("Private message was stored")),
+        )
     try:
         for _ in range(2):
             await adapter.ingest(outer)
@@ -128,6 +142,21 @@ async def test_unsigned_ingress_archives_only_and_uses_transport_scope(
             "SELECT team,payload,state,sender FROM inbox"
         ) as cursor:
             rows = await cursor.fetchall()
+        if scope == "private":
+            assert rows == []
+            decode.assert_not_called()
+            adapter.business.deployment.key.assert_not_called()
+            adapter.ledger.ingest.assert_not_awaited()
+            assert adapter.receive_health["decode_failures"] == 0
+            assert adapter.receive_health["decoded_messages"] == 0
+            assert adapter.receive_health["plaintext_notices"] == 0
+            assert adapter.receive_health["unverified_messages"] == 0
+            assert adapter.get_stats()["receive_health"]["unverified_formats"] == {}
+            assert not adapter.dispatch_wakeup.is_set()
+            assert adapter._event_queue.empty()
+            assert adapter.ledger.review_groups == set()
+            observe.assert_not_called()
+            return
         notice = scope == "group" and format_id in {7, 8}
         assert rows == [
             (
@@ -149,6 +178,62 @@ async def test_unsigned_ingress_archives_only_and_uses_transport_scope(
         assert adapter.get_stats()["receive_health"]["unverified_formats"] == {label: 2}
     finally:
         await adapter.ledger.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target,peer,acknowledged",
+    [
+        ("9000", "9002", True),
+        ("9001", "9002", False),
+        ("9000", "9000", False),
+        ("9000", "", False),
+        ("9000", None, False),
+        ("9000", "x" * 1025, False),
+    ],
+)
+@pytest.mark.parametrize("body", [None, "", "malformed private ciphertext", {"b": []}])
+async def test_private_retirement_uses_only_authenticated_transport_headers(
+    monkeypatch, target, peer, acknowledged, body
+):
+    """Retire even malformed private bodies without opening or storing them.
+
+    Args:
+        monkeypatch: Test-scoped decode and business-observer sentinels.
+        target: Transport recipient, which must match the authenticated account.
+        peer: Original transport sender, never an application-level identity.
+        acknowledged: Whether the transport header is safe to acknowledge.
+        body: Untrusted private body that must never be inspected.
+    """
+    adapter = WangshangliaoAdapter(
+        {"id": "private-retirement-fixture", "account_id": "1000"},
+        {},
+        asyncio.Queue(),
+    )
+    adapter.nim_account = "9000"
+    adapter.nim = SimpleNamespace(acknowledge=AsyncMock())
+    adapter.ledger = SimpleNamespace(
+        ingest=AsyncMock(side_effect=AssertionError("Private message was stored"))
+    )
+    key = Mock(side_effect=AssertionError("Private message key was accessed"))
+    adapter.business = SimpleNamespace(deployment=SimpleNamespace(key=key))
+    decode = Mock(side_effect=AssertionError("Private message was decrypted"))
+    observe = Mock(side_effect=AssertionError("Private message reached business"))
+    monkeypatch.setattr(wire, "open_message", decode)
+    monkeypatch.setattr(runtime, "observe", observe)
+    await adapter.ingest({0: "0", 1: target, 2: peer, 8: "100", 10: body, 12: "77"})
+    if acknowledged:
+        adapter.nim.acknowledge.assert_awaited_once_with(0, "77")
+    else:
+        adapter.nim.acknowledge.assert_not_awaited()
+    decode.assert_not_called()
+    key.assert_not_called()
+    adapter.ledger.ingest.assert_not_awaited()
+    observe.assert_not_called()
+    assert not adapter.dispatch_wakeup.is_set()
+    assert adapter._event_queue.empty()
+    assert adapter.receive_health["decoded_messages"] == 0
+    assert adapter.receive_health["decode_failures"] == 0
 
 
 @pytest.mark.asyncio

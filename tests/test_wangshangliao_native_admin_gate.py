@@ -1,4 +1,4 @@
-"""Native bot-role gating and private account/group authorization regressions."""
+"""Native group-role gates and inert retired private management routes."""
 
 import copy
 import time
@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
+from astrbot.builtin_stars.wangshangliao_moderation.command_menu import Session
+from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
 from astrbot.builtin_stars.wangshangliao_moderation.policy import (
     GROUP_ADMIN_REQUIRED,
     handle,
@@ -21,14 +23,14 @@ pytestmark = pytest.mark.usefixtures("wsl_active_policy", "wsl_command_classifie
 
 
 @pytest_asyncio.fixture
-async def private_setup(setup):
-    """Bind a verified private manager to one group and keep other grants separate.
+async def scoped_setup(setup):
+    """Bind a group manager to one group and keep other grants separate.
 
     Args:
         setup: Isolated two-group command service.
 
     Returns:
-        Service, command engine and private event without friendship dependencies.
+        Service, command engine and group event without friendship dependencies.
     """
     value, engine, event = setup
     other = value.store.tenant("1", "6")
@@ -48,9 +50,6 @@ async def private_setup(setup):
     value.store.import_group("9", "5", other["rules"], ["3"], "system/test")
     await value.refresh()
     value.store.remember_roster("1", value.roster.return_value)
-    event.is_private_chat = lambda: True
-    event.get_group_id = lambda: ""
-    event.eligible = True
     event.platform.config.update(value.policy_values("1", event.platform.config))
     return value, engine, event
 
@@ -60,17 +59,12 @@ async def private_setup(setup):
 @pytest.mark.parametrize(
     "command",
     [
-        "菜单",
-        "帮助",
         "开通",
-        "群列表",
-        "选择群 1",
         "成员列表",
         "成员搜索 Target",
         "排名",
         "规则",
         "能力",
-        "我的权限",
         "管理员列表",
         "添加管理员 3",
         "移除管理员 3",
@@ -93,8 +87,6 @@ async def private_setup(setup):
         "开启抽奖",
         "邀请统计",
         "我的邀请",
-        "1",
-        "/chat",
     ],
 )
 async def test_group_commands_uniformly_require_native_bot_admin(setup, role, command):
@@ -107,7 +99,28 @@ async def test_group_commands_uniformly_require_native_bot_admin(setup, role, co
     event.platform.execute_action.assert_not_awaited()
     event.platform.get_moderation_members.assert_not_awaited()
     value.roster.assert_not_awaited()
-    value.plugin.cashback.private_invitation_reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["GROUP_ROLE_MEMBER", "GROUP_ROLE_ADMIN"])
+@pytest.mark.parametrize(
+    "command", ["菜单", "帮助", "群列表", "选择群 1", "我的权限", "1", "/chat"]
+)
+async def test_retired_commands_never_enter_group_management(setup, role, command):
+    value, engine, event = setup
+    before = value.store.tenants()
+    event.platform.config["_open_native_roles"]["5"] = role
+    engine.run = AsyncMock()
+    value.manager_command = AsyncMock()
+    assert value.recognize_command(command) == ""
+    assert await step(value, event, command, native=True) == ""
+    engine.run.assert_not_awaited()
+    value.manager_command.assert_not_awaited()
+    assert not value.navigation.sessions
+    assert value.store.tenants() == before
+    event.platform.execute_action.assert_not_awaited()
+    event.platform.get_moderation_members.assert_not_awaited()
+    value.roster.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -126,38 +139,40 @@ async def test_nonadmin_group_chatter_does_not_send_repeated_notices(
 
 
 @pytest.mark.asyncio
-async def test_private_list_and_selection_are_bound_to_manager_and_bot(private_setup):
-    value, engine, event = private_setup
+async def test_group_directory_is_bound_to_manager_and_bot(scoped_setup):
+    value, engine, event = scoped_setup
     event.role = "admin"
     value.quota_admins = {"2"}
-    reply = await engine.run(event, "群列表")
-    assert "Group 5" in reply
-    assert "Group 6" not in reply and "Other account" not in reply
     assert value.management.groups(event) == ["5"]
-    assert "当前已选群：Group 5" in await engine.run(event, "选择群 1")
-    assert "无效" in await engine.run(event, "选择群 2")
-    assert "无效" in await engine.run(event, "选择群 6")
+    assert "Target" in await engine.run(event, "成员列表")
+    event.platform.get_moderation_members.assert_awaited_with("5")
+    event.platform.get_moderation_members.reset_mock()
     event.platform.account = "9"
-    assert await engine.run(event, "群列表") == "无权限"
+    assert value.management.groups(event) == []
+    assert await engine.run(event, "成员列表") == "无权限"
+    event.platform.get_moderation_members.assert_not_awaited()
     event.platform.execute_action.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["account", "claimed_uid", "verified_uid"])
-async def test_mismatched_private_identity_cannot_list_groups(private_setup, change):
-    value, engine, event = private_setup
+async def test_mismatched_group_identity_cannot_read_directory(scoped_setup, change):
+    value, engine, event = scoped_setup
     event.actor_identity = replace(event.actor_identity, **{change: "9"})
     assert value.management.groups(event) == []
-    assert await engine.run(event, "群列表") == "无权限"
+    assert await engine.run(event, "成员列表") == "无权限"
+    event.platform.get_moderation_members.assert_not_awaited()
+    event.platform.execute_action.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_injected_foreign_selection_cannot_read_or_change_group(private_setup):
-    value, engine, event = private_setup
-    await engine.run(event, "群列表")
-    await engine.run(event, "选择群 1")
+async def test_injected_selection_cannot_grant_access_to_foreign_group(scoped_setup):
+    value, engine, event = scoped_setup
+    await engine.run(event, "成员列表")
     key = (id(event.platform), "1", "2", event.unified_msg_origin)
     engine.selections[key]["group"] = "6"
+    event.message_obj.group_id = "6"
+    event.platform.get_moderation_members.reset_mock()
     assert await engine.run(event, "成员列表") == "无权限"
     assert await value.manager_command(event, "规则") == "无权限"
     assert await value.manager_command(event, "关闭防刷屏") == "无权限"
@@ -167,37 +182,42 @@ async def test_injected_foreign_selection_cannot_read_or_change_group(private_se
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("command", ["规则", "能力", "成员列表", "定时状态", "公告 hi"])
-async def test_private_selected_group_reports_missing_bot_admin(private_setup, command):
-    value, engine, event = private_setup
-    event.platform.config["_open_native_roles"]["5"] = "GROUP_ROLE_MEMBER"
-    assert "Group 5" in await engine.run(event, "群列表")
-    assert GROUP_ADMIN_REQUIRED in await engine.run(event, "选择群 1")
-    assert GROUP_ADMIN_REQUIRED == await step(value, event, command, native=True)
-    event.platform.execute_action.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_private_menu_does_not_preview_operations_without_bot_admin(
-    private_setup,
+@pytest.mark.parametrize("role", ["GROUP_ROLE_MEMBER", "GROUP_ROLE_ADMIN"])
+@pytest.mark.parametrize(
+    "command",
+    ["规则", "能力", "成员列表", "定时状态", "公告 hi", "群列表", "选择群 1"],
+)
+async def test_cached_private_selection_cannot_enter_any_management_path(
+    scoped_setup, role, command
 ):
-    value, engine, event = private_setup
-    await engine.run(event, "群列表")
-    await engine.run(event, "选择群 1")
-    event.platform.config["_open_native_roles"]["5"] = "GROUP_ROLE_MEMBER"
-    for text in ("菜单", "5"):
-        await step(value, event, text, native=True)
-    assert GROUP_ADMIN_REQUIRED == await step(value, event, "1", native=True)
-    state = value.navigation.sessions[value.navigation.key(event)]
-    assert not state.pending and not state.confirm
+    value, engine, event = scoped_setup
+    before = value.store.tenants()
+    event.platform.config["_open_native_roles"]["5"] = role
+    event.is_private_chat = lambda: True
+    event.get_group_id = lambda: ""
+    event.eligible = True
+    key = (id(event.platform), "1", "2", event.unified_msg_origin)
+    engine.selections[key] = {"group": "5", "expires": time.monotonic() + 600}
+    selection = copy.deepcopy(engine.selections)
+    assert value.management.groups(event) == []
+    assert await engine.run(event, command) is None
+    with pytest.raises(OpenError, match="^private_messages_retired$"):
+        await value.manager_command(event, command)
+    assert await step(value, event, command, native=True) == ""
+    assert event.is_stopped()
+    assert engine.selections == selection
+    assert not value.navigation.sessions
+    assert value.store.tenants() == before
+    value.roster.assert_not_awaited()
+    event.platform.get_moderation_members.assert_not_awaited()
     event.platform.execute_action.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_revoked_private_manager_cannot_reuse_selected_group(private_setup):
-    value, engine, event = private_setup
-    await engine.run(event, "群列表")
-    await engine.run(event, "选择群 1")
+async def test_revoked_group_manager_cannot_reuse_directory_selection(scoped_setup):
+    value, engine, event = scoped_setup
+    await engine.run(event, "成员列表")
+    event.platform.get_moderation_members.reset_mock()
     tenant = value.store.tenant("1", "5")
     token = value.store.preview_control(
         "1", "5", tenant["version"], "dashboard/root", tenant["rules"], ["3"], None
@@ -214,15 +234,19 @@ async def test_revoked_private_manager_cannot_reuse_selected_group(private_setup
     await value.refresh()
     assert await engine.run(event, "成员列表") == "无权限"
     assert await value.manager_command(event, "关闭防刷屏") == "无权限"
+    value.roster.assert_not_awaited()
+    event.platform.get_moderation_members.assert_not_awaited()
+    event.platform.execute_action.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_role_loss_invalidates_prepared_group_menu_and_promotion_keeps_rules(
+async def test_role_loss_invalidates_group_confirmation_and_promotion_keeps_rules(
     setup,
 ):
     value, _, event = setup
-    for text in ("菜单", "3", "2", "2"):
-        await step(value, event, text, native=True)
+    value.navigation.sessions[value.navigation.key(event)] = Session(
+        expires=time.monotonic() + 60, confirm="确认本群扣费"
+    )
     before = copy.deepcopy(value.store.tenant("1", "5"))
     event.platform.config["_open_native_roles"]["5"] = "GROUP_ROLE_MEMBER"
     assert GROUP_ADMIN_REQUIRED == await step(value, event, "1", native=True)
@@ -234,10 +258,8 @@ async def test_role_loss_invalidates_prepared_group_menu_and_promotion_keeps_rul
 
 
 @pytest.mark.asyncio
-async def test_fresh_roster_role_loss_prevents_private_actions(private_setup):
-    _, engine, event = private_setup
-    await engine.run(event, "群列表")
-    await engine.run(event, "选择群 1")
+async def test_fresh_roster_role_loss_prevents_group_actions(scoped_setup):
+    _, engine, event = scoped_setup
     event.platform.get_moderation_members.return_value["groupMemberInfo"][0][
         "groupRole"
     ] = "GROUP_ROLE_MEMBER"

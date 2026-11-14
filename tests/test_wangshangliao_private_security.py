@@ -1,4 +1,4 @@
-"""Native private roles must retain hard boundaries despite hostile model input."""
+"""Retired private routes and group consultation remain inert to hostile input."""
 
 import json
 from types import SimpleNamespace
@@ -46,12 +46,18 @@ ATTACKS = [
 
 
 @pytest.fixture
-def native():
+def native(monkeypatch):
     """Create real native events inside the calling asynchronous test.
+
+    Args:
+        monkeypatch: Test-scoped isolation of the legacy group consultation route.
 
     Returns:
         Event and effective-profile context factory.
     """
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
+
+    monkeypatch.setattr(runtime, "open_service", None)
 
     def make(*, admin=False, private=True, account="11", text="业务咨询"):
         message = AstrBotMessage()
@@ -110,12 +116,7 @@ async def test_customer_jailbreak_cannot_invoke_any_action(native, text, tool_na
     assert len(results) == 1 and results[0].isError
     assert json.loads(results[0].content[0].text)["reason"] == "tool_not_authorized"
     handler.assert_not_awaited()
-    management = object.__new__(Main)
-    management.context = context
-    result = json.loads(
-        await management.private_management(event, "config_preview", "{}")
-    )
-    assert result["reason"] == "ai_management_retired"
+    assert not hasattr(Main, "private_management")
 
 
 @pytest.mark.asyncio
@@ -149,7 +150,7 @@ async def test_no_background_work_is_scheduled_for_customer(native, monkeypatch)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("revoke_during_query", [False, True])
-async def test_private_command_rechecks_authority_before_query_and_delivery(
+async def test_private_command_never_queries_or_delivers_even_for_admin(
     native, revoke_during_query
 ):
     event, context, profile = native(admin=revoke_during_query)
@@ -163,8 +164,9 @@ async def test_private_command_rechecks_authority_before_query_and_delivery(
     plugin.commands = SimpleNamespace(run=AsyncMock(side_effect=query))
     event.send = AsyncMock()
     await plugin.moderation_command(event, "群列表")
-    assert plugin.commands.run.await_count == int(revoke_during_query)
-    assert event.send.await_args.args[0].get_plain_text() == "无权限"
+    plugin.commands.run.assert_not_awaited()
+    event.send.assert_not_awaited()
+    assert event.is_stopped()
 
 
 @pytest.mark.asyncio
@@ -191,36 +193,45 @@ async def test_visibility_and_execution_agree_without_mutating_shared_tools(
     assert request.func_tool.tools == ([])
     assert shared.tools == [management, shell, knowledge]
     assert not event.authorize_ai_tool(management, context)
-    assert event.authorize_ai_tool(knowledge, context)
+    assert event.authorize_ai_tool(knowledge, context) is (not private)
     assert not event.authorize_ai_tool(shell, context)
+    assert event.is_stopped() is private
 
 
 @pytest.mark.asyncio
-async def test_admin_revocation_epoch_and_background_flags_fail_closed(native):
-    event, context, profile = native(admin=True)
+@pytest.mark.parametrize("private", [True, False])
+async def test_admin_revocation_epoch_and_background_flags_fail_closed(native, private):
+    event, context, profile = native(admin=True, private=private)
     tool = FunctionTool(
         name="wsl_private_management",
         description="",
         parameters={},
         handler_module_path=MODULE,
     )
-    assert event.authorize_ai_tool(tool, context)
+    assert not event.authorize_ai_tool(tool, context)
+    knowledge = KnowledgeBaseQueryTool()
+    assert event.authorize_ai_tool(knowledge, context) is (not private)
     tool.is_background_task = True
     assert not event.authorize_ai_tool(tool, context)
     tool.is_background_task = False
     tool.handler_module_path = "untrusted"
     assert not event.authorize_ai_tool(tool, context)
     tool.handler_module_path = MODULE
+    knowledge.is_background_task = True
+    assert not event.authorize_ai_tool(knowledge, context)
+    knowledge.is_background_task = False
     profile["admins_id"] = []
     assert not event.authorize_ai_tool(tool, context)
     profile["admins_id"] = ["22"]
+    assert not event.authorize_ai_tool(tool, context)
+    assert event.authorize_ai_tool(knowledge, context) is (not private)
     event.platform.config["_business_epoch"] = 2
     assert not event.authorize_ai_tool(tool, context)
     assert not event.authorize_ai_tool(KnowledgeBaseQueryTool(), context)
 
 
 @pytest.mark.asyncio
-async def test_authorized_management_reaches_executor_and_revocation_blocks_it(native):
+async def test_retired_management_never_reaches_executor_even_before_revocation(native):
     event, context, profile = native(admin=True)
     handler = AsyncMock(return_value='{"status":"query"}')
     tool = FunctionTool(
@@ -237,19 +248,47 @@ async def test_authorized_management_reaches_executor_and_revocation_blocks_it(n
         result
         async for result in FunctionToolExecutor.execute(tool, run, action="groups")
     ]
-    assert json.loads(results[0].content[0].text)["status"] == "query"
-    handler.assert_awaited_once_with(event, action="groups")
+    assert results[0].isError
+    assert json.loads(results[0].content[0].text)["reason"] == "tool_not_authorized"
+    handler.assert_not_awaited()
     profile["admins_id"] = []
     denied = [
         result
         async for result in FunctionToolExecutor.execute(tool, run, action="groups")
     ]
-    assert denied[0].isError and handler.await_count == 1
+    assert denied[0].isError
+    handler.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_role_history_is_separate_even_without_old_tool_calls(native):
-    event, context, profile = native(admin=True)
+@pytest.mark.parametrize("admin", [True, False])
+async def test_private_request_stops_before_conversation_storage(native, admin):
+    event, context, _ = native(admin=admin)
+    context.conversation_manager = SimpleNamespace(
+        get_curr_conversation_id=AsyncMock(),
+        new_conversation=AsyncMock(),
+        get_conversation=AsyncMock(),
+    )
+    plugin = object.__new__(Main)
+    plugin.context = context
+    request = SimpleNamespace(
+        func_tool=None,
+        system_prompt="Original persona",
+        contexts=[{"role": "assistant", "content": "PRIVATE_ADMIN_MARKER"}],
+        conversation=SimpleNamespace(user_id="legacy-admin"),
+    )
+    await plugin.plain_text_request(event, request)
+    assert event.is_stopped()
+    assert not request.func_tool.tools
+    assert event.get_extra("wsl_answer_nonce") is None
+    context.conversation_manager.get_curr_conversation_id.assert_not_awaited()
+    context.conversation_manager.new_conversation.assert_not_awaited()
+    context.conversation_manager.get_conversation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_group_history_never_selects_legacy_admin_history(native):
+    event, context, profile = native(admin=True, private=False)
     stored = {}
 
     async def current(origin):
@@ -269,21 +308,30 @@ async def test_role_history_is_separate_even_without_old_tool_calls(native):
     )
     context.conversation_manager = manager
     reply_address = event.session_id
-    admin = await _get_session_conv(event, context)
-    admin.history = '[{"role":"assistant","content":"PRIVATE_ADMIN_MARKER"}]'
-    profile["admins_id"] = []
+    legacy_origin = f"{event.unified_msg_origin}/wsl-ai/11/admin"
+    stored[legacy_origin] = SimpleNamespace(
+        cid=legacy_origin,
+        user_id=legacy_origin,
+        history='[{"role":"assistant","content":"PRIVATE_ADMIN_MARKER"}]',
+    )
     customer = await _get_session_conv(event, context)
-    assert customer.cid != admin.cid and "PRIVATE_ADMIN_MARKER" not in customer.history
+    assert customer.cid != legacy_origin
+    assert "PRIVATE_ADMIN_MARKER" not in customer.history
+    profile["admins_id"] = []
+    assert await _get_session_conv(event, context) is customer
     profile["admins_id"] = ["22"]
-    assert await _get_session_conv(event, context) is admin
+    assert await _get_session_conv(event, context) is customer
     assert event.session_id == reply_address
-    other, other_context, _ = native(admin=True, account="33")
-    assert other.get_ai_conversation_origin(other_context) != admin.cid
+    other, other_context, _ = native(admin=True, private=False, account="33")
+    assert other.get_ai_conversation_origin(other_context) != customer.cid
 
 
 @pytest.mark.asyncio
-async def test_builtin_knowledge_query_uses_only_configured_scope(native, monkeypatch):
-    event, context, _ = native()
+@pytest.mark.parametrize("private", [True, False])
+async def test_builtin_knowledge_query_uses_only_configured_scope(
+    native, monkeypatch, private
+):
+    event, context, _ = native(private=private)
     retrieve = AsyncMock(return_value="Public business knowledge")
     monkeypatch.setattr(
         "astrbot.core.tools.knowledge_base_tools.retrieve_knowledge_base", retrieve
@@ -292,7 +340,17 @@ async def test_builtin_knowledge_query_uses_only_configured_scope(native, monkey
         context=SimpleNamespace(event=event, context=context), tool_call_timeout=10
     )
     tool = KnowledgeBaseQueryTool()
-    assert event.authorize_ai_tool(tool, context)
+    assert event.authorize_ai_tool(tool, context) is (not private)
+    if private:
+        results = [
+            result
+            async for result in FunctionToolExecutor.execute(
+                tool, run, query="public", kb_names=["private"]
+            )
+        ]
+        assert results[0].isError
+        retrieve.assert_not_awaited()
+        return
     assert (
         await tool.call(run, query="公开业务", kb_names=["private"])
         == "Public business knowledge"
@@ -312,12 +370,13 @@ async def test_builtin_knowledge_query_uses_only_configured_scope(native, monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("private", [True, False])
 async def test_customer_does_not_inherit_administrator_knowledge_selection(
-    native, monkeypatch
+    native, monkeypatch, private
 ):
     from astrbot.core.tools import knowledge_base_tools as knowledge
 
-    event, context, profile = native()
+    event, context, profile = native(private=private)
     profile["kb_names"] = ["public"]
     public = SimpleNamespace(kb=SimpleNamespace(doc_count=1, chunk_count=1))
     context.kb_manager = SimpleNamespace(
@@ -337,6 +396,21 @@ async def test_customer_does_not_inherit_administrator_knowledge_selection(
 
     select = AsyncMock(side_effect=selection)
     monkeypatch.setattr(knowledge.sp, "session_get", select)
+    if private:
+        results = [
+            result
+            async for result in FunctionToolExecutor.execute(
+                knowledge.KnowledgeBaseQueryTool(),
+                SimpleNamespace(context=SimpleNamespace(event=event, context=context)),
+                query="业务",
+            )
+        ]
+        assert results[0].isError
+        select.assert_not_awaited()
+        context.kb_manager.get_kb.assert_not_awaited()
+        context.kb_manager.get_kb_by_name.assert_not_awaited()
+        context.kb_manager.retrieve.assert_not_awaited()
+        return
     assert (
         await knowledge.KnowledgeBaseQueryTool().call(
             SimpleNamespace(context=SimpleNamespace(event=event, context=context)),
@@ -353,26 +427,28 @@ async def test_customer_does_not_inherit_administrator_knowledge_selection(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "admin,text,scope,allowed",
+    "admin,text,scope",
     [
-        (True, "/new", "private_commands", True),
-        (True, "/stats", "private_commands", True),
-        (False, "/new", "private_commands", False),
-        (True, "/new argument", "private_commands", False),
-        (True, "/exec", "private_commands", False),
-        (True, "/new", "private_ai", False),
+        (True, "/new", "private_commands"),
+        (True, "/stats", "private_commands"),
+        (False, "/new", "private_commands"),
+        (True, "/new argument", "private_commands"),
+        (True, "/exec", "private_commands"),
+        (True, "/new", "private_ai"),
     ],
 )
-async def test_framework_result_marker_requires_exact_bounded_admin_command(
-    native, admin, text, scope, allowed
+async def test_framework_result_marker_rejects_all_legacy_private_scopes(
+    native, admin, text, scope
 ):
     event, context, _ = native(admin=admin, text=text)
     event.set_extra("wsl_test_scope", scope)
     event.send = AsyncMock()
     registry = SimpleNamespace(get_handlers_by_event_type=lambda *args: [])
-    await event.prepare_waking_check(context.get_config(), registry)
-    assert bool(event.get_extra("wsl_command_result")) is allowed
-    assert bool(event.get_extra("wsl_plain_command")) is allowed
+    assert not await event.prepare_waking_check(context.get_config(), registry)
+    assert event.is_stopped()
+    event.send.assert_not_awaited()
+    assert not event.get_extra("wsl_command_result")
+    assert not event.get_extra("wsl_plain_command")
 
 
 @pytest.mark.asyncio
@@ -406,6 +482,12 @@ async def test_new_conversation_changes_only_current_native_role_history(
     registry = SimpleNamespace(stop_all=lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "active_event_registry", registry)
     await ConversationCommands(context).new_conv(event)
+    if private:
+        context.conversation_manager.get_curr_conversation_id.assert_not_awaited()
+        context.conversation_manager.get_conversation.assert_not_awaited()
+        context.conversation_manager.new_conversation.assert_not_awaited()
+        assert event.get_result().get_plain_text() == "无权限"
+        return
     origin = event.get_ai_conversation_origin(context)
     context.conversation_manager.get_curr_conversation_id.assert_awaited_once_with(
         origin
@@ -425,48 +507,60 @@ async def test_conversation_stats_resolve_current_native_role_not_legacy(
         get_curr_conversation_id=AsyncMock(return_value=None)
     )
     await ConversationCommands(context).stats(event)
+    if private:
+        context.conversation_manager.get_curr_conversation_id.assert_not_awaited()
+        assert event.get_result().get_plain_text() == "无权限"
+        return
     context.conversation_manager.get_curr_conversation_id.assert_awaited_once_with(
         event.get_ai_conversation_origin(context)
     )
 
 
 @pytest.mark.asyncio
-async def test_management_handler_rechecks_api_key_role_policy(native):
+async def test_retired_management_handler_cannot_bypass_api_key_policy(native):
     event, context, _ = native(admin=True)
     event.set_extra("_api_key_allow_admin_role", False)
     plugin = object.__new__(Main)
     plugin.context = context
-    assert json.loads(await plugin.private_management(event, "groups")) == {
-        "status": "rejected",
-        "reason": "ai_management_retired",
-    }
+    plugin.commands = SimpleNamespace(run=AsyncMock())
+    assert not hasattr(plugin, "private_management")
+    await plugin.moderation_command(event, "黑名单列表")
+    plugin.commands.run.assert_not_awaited()
+    assert event.is_stopped()
 
 
 @pytest.mark.asyncio
-async def test_saved_configuration_uses_server_receipt_without_model_claim(native):
+async def test_retired_private_confirmation_never_saves_configuration(native):
     event, context, _ = native(admin=True)
     plugin = object.__new__(Main)
     plugin.context = context
     plugin.ai_config = SimpleNamespace(
         confirm=AsyncMock(return_value='{"status":"saved","changes":{}}')
     )
-    result = json.loads(
-        await plugin.private_management(event, "config_confirm", "token")
-    )
-    assert result == {"status": "rejected", "reason": "ai_management_retired"}
+    assert not hasattr(plugin, "private_management")
+    await plugin.moderation_command(event, "确认设置 token")
+    assert event.is_stopped()
     plugin.ai_config.confirm.assert_not_awaited()
     assert event.get_extra("wsl_config_display") is None
 
 
 @pytest.mark.asyncio
-async def test_final_envelope_discards_gateway_analysis_from_reply_and_history(native):
-    event, context, _ = native()
+@pytest.mark.parametrize("private", [True, False])
+async def test_final_envelope_discards_gateway_analysis_from_reply_and_history(
+    native, private
+):
+    event, context, _ = native(private=private)
     plugin = object.__new__(Main)
     plugin.context = context
     request = SimpleNamespace(func_tool=None, system_prompt="", contexts=[])
     await plugin.plain_text_request(event, request)
     nonce = event.get_extra("wsl_answer_nonce")
-    assert len(nonce) == 16 and nonce in request.system_prompt
+    if private:
+        assert nonce is None
+        assert event.is_stopped()
+        nonce = "a" * 16
+    else:
+        assert len(nonce) == 16 and nonce in request.system_prompt
     raw = (
         "Internal analysis: SECRET_MARKER, falsely claims a completed sanction.\n"
         "WSL_FINAL_" + nonce + '\n{"text":"我无法执行管理操作。"}'
@@ -478,6 +572,10 @@ async def test_final_envelope_discards_gateway_analysis_from_reply_and_history(n
         messages=[Message(role="assistant", content=[TextPart(text=raw)])]
     )
     await plugin.final_reply(event, run, response)
+    if private:
+        assert response.completion_text == ""
+        assert event.get_extra("wsl_final_reply") is None
+        return
     assert response.completion_text == "我无法执行管理操作。"
     assert response.reasoning_content is None
     assert run.messages[-1].content == [TextPart(text="我无法执行管理操作。")]
@@ -485,6 +583,7 @@ async def test_final_envelope_discards_gateway_analysis_from_reply_and_history(n
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("private", [True, False])
 @pytest.mark.parametrize(
     "prefix",
     [
@@ -493,8 +592,10 @@ async def test_final_envelope_discards_gateway_analysis_from_reply_and_history(n
         "WSL_FINAL_aaaaaaaaaaaaaaaa\nnot JSON, only analysis.\n",
     ],
 )
-async def test_analysis_marker_mentions_are_not_duplicate_final_answers(native, prefix):
-    event, context, _ = native()
+async def test_analysis_marker_mentions_are_not_duplicate_final_answers(
+    native, prefix, private
+):
+    event, context, _ = native(private=private)
     event.set_extra("wsl_answer_nonce", "a" * 16)
     plugin = object.__new__(Main)
     plugin.context = context
@@ -504,13 +605,20 @@ async def test_analysis_marker_mentions_are_not_duplicate_final_answers(native, 
         messages=[Message(role="assistant", content=[TextPart(text=raw)])]
     )
     await plugin.final_reply(event, run, response)
+    if private:
+        assert response.completion_text == "" and event.is_stopped()
+        assert event.get_extra("wsl_final_reply") is None
+        return
     assert response.completion_text == "我无法执行管理操作。"
     assert run.messages[-1].content == [TextPart(text=response.completion_text)]
 
 
 @pytest.mark.asyncio
-async def test_identical_final_envelopes_are_deduplicated_without_analysis(native):
-    event, context, _ = native()
+@pytest.mark.parametrize("private", [True, False])
+async def test_identical_final_envelopes_are_deduplicated_without_analysis(
+    native, private
+):
+    event, context, _ = native(private=private)
     event.set_extra("wsl_answer_nonce", "a" * 16)
     plugin = object.__new__(Main)
     plugin.context = context
@@ -521,11 +629,16 @@ async def test_identical_final_envelopes_are_deduplicated_without_analysis(nativ
         messages=[Message(role="assistant", content=[TextPart(text=raw)])]
     )
     await plugin.final_reply(event, run, response)
+    if private:
+        assert response.completion_text == "" and event.is_stopped()
+        assert event.get_extra("wsl_final_reply") is None
+        return
     assert response.completion_text == "无权限。"
     assert run.messages[-1].content == [TextPart(text="无权限。")]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("private", [True, False])
 @pytest.mark.parametrize(
     "raw",
     [
@@ -538,8 +651,8 @@ async def test_identical_final_envelopes_are_deduplicated_without_analysis(nativ
         'prefixWSL_FINAL_aaaaaaaaaaaaaaaa\n{"text":"secret"}',
     ],
 )
-async def test_invalid_or_forged_final_envelope_fails_closed(native, raw):
-    event, context, _ = native()
+async def test_invalid_or_forged_final_envelope_fails_closed(native, raw, private):
+    event, context, _ = native(private=private)
     event.set_extra("wsl_answer_nonce", "a" * 16)
     plugin = object.__new__(Main)
     plugin.context = context
@@ -548,13 +661,20 @@ async def test_invalid_or_forged_final_envelope_fails_closed(native, raw):
         messages=[Message(role="assistant", content=[TextPart(text=raw)])]
     )
     await plugin.final_reply(event, run, response)
+    if private:
+        assert response.completion_text == "" and event.is_stopped()
+        assert event.get_extra("wsl_final_reply") is None
+        return
     assert response.completion_text == CUSTOMER_OUTPUT_REJECTION
     assert run.messages[-1].content == [TextPart(text=response.completion_text)]
 
 
 @pytest.mark.asyncio
-async def test_only_terminal_nonce_envelope_is_delivered_not_earlier_drafts(native):
-    event, context, _ = native()
+@pytest.mark.parametrize("private", [True, False])
+async def test_only_terminal_nonce_envelope_is_delivered_not_earlier_drafts(
+    native, private
+):
+    event, context, _ = native(private=private)
     event.set_extra("wsl_answer_nonce", "a" * 16)
     plugin = object.__new__(Main)
     plugin.context = context
@@ -567,13 +687,18 @@ async def test_only_terminal_nonce_envelope_is_delivered_not_earlier_drafts(nati
         messages=[Message(role="assistant", content=[TextPart(text=raw)])]
     )
     await plugin.final_reply(event, run, response)
+    if private:
+        assert response.completion_text == "" and event.is_stopped()
+        assert event.get_extra("wsl_final_reply") is None
+        return
     assert response.completion_text == "无权限。"
     assert run.messages[-1].content == [TextPart(text="无权限。")]
 
 
 @pytest.mark.asyncio
-async def test_server_management_result_overrides_model_envelope(native):
-    event, context, _ = native(admin=True)
+@pytest.mark.parametrize("private", [True, False])
+async def test_server_management_result_cannot_reopen_private_delivery(native, private):
+    event, context, _ = native(admin=True, private=private)
     event.set_extra("wsl_answer_nonce", "a" * 16)
     event.set_extra("wsl_config_display", "参数已保存；未启动活动。")
     plugin = object.__new__(Main)
@@ -583,31 +708,36 @@ async def test_server_management_result_overrides_model_envelope(native):
         messages=[Message(role="assistant", content=[TextPart(text="已开启活动")])]
     )
     await plugin.final_reply(event, run, response)
+    if private:
+        assert response.completion_text == "" and event.is_stopped()
+        assert event.get_extra("wsl_final_reply") is None
+        return
     assert response.completion_text == "参数已保存；未启动活动。"
     assert run.messages[-1].content == [TextPart(text=response.completion_text)]
 
 
 @pytest.mark.asyncio
-async def test_management_query_receipts_override_unverified_model_text(native):
-    event, context, _ = native(admin=True)
+@pytest.mark.parametrize("private", [True, False])
+async def test_retired_management_queries_never_authorize_model_claims(native, private):
+    event, context, _ = native(admin=True, private=private)
     event.set_extra("wsl_answer_nonce", "a" * 16)
     plugin = object.__new__(Main)
     plugin.context = context
     plugin.commands = SimpleNamespace(
         execute=AsyncMock(side_effect=["抽奖：已开奖。", "定时：未启用。"])
     )
-    await plugin.private_management(event, "lottery_status")
-    await plugin.private_management(event, "schedule_status")
+    assert not hasattr(plugin, "private_management")
     response = LLMResponse(role="assistant", completion_text="已开启抽奖和定时。")
     run = SimpleNamespace(
         messages=[Message(role="assistant", content=[TextPart(text="incorrect")])]
     )
     await plugin.final_reply(event, run, response)
     plugin.commands.execute.assert_not_awaited()
-    assert (
-        response.completion_text == CUSTOMER_OUTPUT_REJECTION
-        or response.completion_text == "本次回复未通过格式校验，请重新提问。"
-    )
+    if private:
+        assert response.completion_text == "" and event.is_stopped()
+        assert event.get_extra("wsl_final_reply") is None
+        return
+    assert response.completion_text == CUSTOMER_OUTPUT_REJECTION
     assert run.messages[-1].content == [TextPart(text=response.completion_text)]
 
 
@@ -629,8 +759,11 @@ async def test_retired_activity_preview_has_no_display_or_confirmation(opening):
 
 
 @pytest.mark.asyncio
-async def test_mid_response_revocation_does_not_deliver_administrator_data(native):
-    event, context, profile = native(admin=True)
+@pytest.mark.parametrize("private", [True, False])
+async def test_mid_response_revocation_does_not_deliver_administrator_data(
+    native, private
+):
+    event, context, profile = native(admin=True, private=private)
     event.set_extra("wsl_answer_nonce", "a" * 16)
     event.set_extra("wsl_ai_role", "admin")
     event.set_extra("wsl_config_display", "PRIVATE_ADMIN_MARKER")
@@ -644,16 +777,19 @@ async def test_mid_response_revocation_does_not_deliver_administrator_data(nativ
     )
     profile["admins_id"] = []
     await plugin.final_reply(event, run, response)
+    if private:
+        assert response.completion_text == "" and event.is_stopped()
+        assert event.get_extra("wsl_final_reply") is None
+        return
     assert response.completion_text == "权限已变化，请重新发送请求。"
     assert run.messages[-1].content == [TextPart(text=response.completion_text)]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("private", [True, False])
 @pytest.mark.parametrize("tools", [None, [], ["wsl_private_management"]])
-async def test_reload_reacquires_native_tool_but_respects_persona_white_list(
-    native, tools
-):
-    event, context, _ = native(admin=True)
+async def test_reload_never_reacquires_retired_native_tool(native, tools, private):
+    event, context, _ = native(admin=True, private=private)
     tool = FunctionTool(
         name="wsl_private_management",
         description="",
@@ -671,11 +807,16 @@ async def test_reload_reacquires_native_tool_but_respects_persona_white_list(
     request = SimpleNamespace(func_tool=None, system_prompt="", contexts=[])
     await plugin.plain_text_request(event, request)
     assert not request.func_tool.tools
+    context.persona_manager.resolve_selected_persona.assert_not_awaited()
+    assert event.is_stopped() is private
 
 
 @pytest.mark.asyncio
-async def test_final_json_fence_is_parsed_without_accepting_trailing_text(native):
-    event, context, _ = native()
+@pytest.mark.parametrize("private", [True, False])
+async def test_final_json_fence_is_parsed_without_accepting_trailing_text(
+    native, private
+):
+    event, context, _ = native(private=private)
     event.set_extra("wsl_answer_nonce", "a" * 16)
     plugin = object.__new__(Main)
     plugin.context = context
@@ -685,4 +826,8 @@ async def test_final_json_fence_is_parsed_without_accepting_trailing_text(native
         messages=[Message(role="assistant", content=[TextPart(text=raw)])]
     )
     await plugin.final_reply(event, run, response)
+    if private:
+        assert response.completion_text == "" and event.is_stopped()
+        assert event.get_extra("wsl_final_reply") is None
+        return
     assert response.completion_text == "公开业务答复"

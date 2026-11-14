@@ -1,6 +1,7 @@
 """The three-account runner reads real roles and never grants implicitly."""
 
 import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -24,7 +25,7 @@ async def test_stale_cached_admin_cannot_trigger_or_pass_native_role_setup(
     backups.mkdir()
     monkeypatch.setattr(live, "ROOT", root)
     monkeypatch.setattr(live, "BACKUPS", backups)
-    monkeypatch.setattr(live.sys, "argv", ["test", "--apply", "--phase", "lottery"])
+    monkeypatch.setattr(sys, "argv", ["test", "--apply", "--phase", "lottery"])
     monkeypatch.setattr(live, "protected", lambda: "untouched")
     context = SimpleNamespace()
     context.__aenter__ = AsyncMock(return_value=context)

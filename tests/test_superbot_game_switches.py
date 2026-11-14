@@ -15,6 +15,7 @@ from data.plugins.astrbot_plugin_superbot.game_switches import (
     enable_group,
     snapshot,
 )
+from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
 from data.plugins.astrbot_plugin_superbot.group_game import GroupGame
 from data.plugins.astrbot_plugin_superbot.group_points import migrate
 from data.plugins.astrbot_plugin_superbot.k3 import K3
@@ -61,13 +62,15 @@ def private(uid=1):
     )
 
 
-def test_bulk_enable_preserves_globals_other_groups_limits_and_wallets(games):
+@pytest.mark.asyncio
+async def test_bulk_enable_preserves_globals_other_groups_limits_and_wallets(games):
     store = games.runtime.store
     before = snapshot(store, "-1001")
     other = snapshot(store, "-1002")
     modules = store.get("modules")
     wallets = list(store.db.execute("SELECT * FROM group_wallets"))
-    enable_group(store, "1", "-1001", before)
+    async with GroupAuthority(games.runtime).session("1", "-1001"):
+        enable_group(store, "1", "-1001", before)
     after = snapshot(store, "-1001")
     assert all(setting["enabled"] for setting in after["features"].values())
     assert after["rollout"]
@@ -84,12 +87,14 @@ def test_bulk_enable_preserves_globals_other_groups_limits_and_wallets(games):
     assert games.runtime.mines.check("-1001")
     assert games.runtime.k3.enabled("-1001")
     with pytest.raises(Rejected, match="已变化"):
-        enable_group(store, "1", "-1001", before)
+        async with GroupAuthority(games.runtime).session("1", "-1001"):
+            enable_group(store, "1", "-1001", before)
     assert store.get("games_v3_groups") == ["-1002", "-1001"]
 
 
 @pytest.mark.parametrize("changed", ["modules", "local", "group", "rollout"])
-def test_stale_confirmation_does_not_override_changes(games, changed):
+@pytest.mark.asyncio
+async def test_stale_confirmation_does_not_override_changes(games, changed):
     store = games.runtime.store
     expected = snapshot(store, "-1001")
     with store.tx() as db:
@@ -103,15 +108,18 @@ def test_stale_confirmation_does_not_override_changes(games, changed):
             store.put(db, "games_v3_groups", ["-1002", "-1001"])
     current = snapshot(store, "-1001")
     with pytest.raises(Rejected, match="已变化"):
-        enable_group(store, "1", "-1001", expected)
+        async with GroupAuthority(games.runtime).session("1", "-1001"):
+            enable_group(store, "1", "-1001", expected)
     assert snapshot(store, "-1001") == current
 
 
-def test_global_disable_is_not_overridden_and_new_groups_remain_off(games):
+@pytest.mark.asyncio
+async def test_global_disable_is_not_overridden_and_new_groups_remain_off(games):
     store = games.runtime.store
     with store.tx() as db:
         store.put(db, "modules", {**store.get("modules"), "game": False})
-    enable_group(store, "1", "-1001", snapshot(store, "-1001"))
+    async with GroupAuthority(games.runtime).session("1", "-1001"):
+        enable_group(store, "1", "-1001", snapshot(store, "-1001"))
     assert not store.get("modules")["game"]
     assert "玩法中心总开关已关闭" in blocker(store, "-1001", "wheel", True)
     store.db.execute("INSERT INTO mod_groups VALUES('-1003','New',1,1)")
@@ -121,26 +129,31 @@ def test_global_disable_is_not_overridden_and_new_groups_remain_off(games):
     assert "-1003" not in store.get("games_v3_groups")
 
 
-def test_other_group_rollout_change_is_preserved(games):
+@pytest.mark.asyncio
+async def test_other_group_rollout_change_is_preserved(games):
     store = games.runtime.store
     expected = snapshot(store, "-1001")
     with store.tx() as db:
         store.put(db, "games_v3_groups", ["-1002", "-1003"])
-    enable_group(store, "1", "-1001", expected)
+    async with GroupAuthority(games.runtime).session("1", "-1001"):
+        enable_group(store, "1", "-1001", expected)
     assert store.get("games_v3_groups") == ["-1002", "-1003", "-1001"]
 
 
-def test_group_points_missing_does_not_enable_anything(games):
+@pytest.mark.asyncio
+async def test_group_points_missing_does_not_enable_anything(games):
     store = games.runtime.store
     with store.tx() as db:
         store.put(db, "group_points_enabled", False)
     expected = snapshot(store, "-1001")
     with pytest.raises(Rejected, match="逐群积分"):
-        enable_group(store, "1", "-1001", expected)
+        async with GroupAuthority(games.runtime).session("1", "-1001"):
+            enable_group(store, "1", "-1001", expected)
     assert snapshot(store, "-1001") == expected
 
 
-def test_bulk_failure_rolls_back_partial_activation(games):
+@pytest.mark.asyncio
+async def test_bulk_failure_rolls_back_partial_activation(games):
     store = games.runtime.store
     before = snapshot(store, "-1001")
     store.db.execute(
@@ -148,7 +161,8 @@ def test_bulk_failure_rolls_back_partial_activation(games):
         "WHEN NEW.chat='-1001' BEGIN SELECT RAISE(ABORT,'test failure'); END"
     )
     with pytest.raises(Exception, match="test failure"):
-        enable_group(store, "1", "-1001", before)
+        async with GroupAuthority(games.runtime).session("1", "-1001"):
+            enable_group(store, "1", "-1001", before)
     assert snapshot(store, "-1001") == before
     assert not store.db.execute(
         "SELECT 1 FROM audit WHERE action='game_group_rollout'"
@@ -208,7 +222,7 @@ async def test_permission_scope_group_identity_and_private_only(games):
         (hashlib.sha256(token.encode()).hexdigest(), encode(["-1002"])),
     )
     ui.store.accept_grant("2", token)
-    with pytest.raises(Rejected, match="没有此群"):
+    with pytest.raises(Rejected, match="Telegram"):
         await action(
             ui, private(2), {"action": "games_group_enable_preview", "chat": "-1001"}
         )

@@ -1,12 +1,15 @@
 """Offline consent, privacy and rule-review regressions."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from superbot_authority import designate_admin
 from telegram import ChatPermissions
 
 from data.plugins.astrbot_plugin_superbot.ad_killer import AdKiller
+from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
 from data.plugins.astrbot_plugin_superbot.group_identity import group_label
 from data.plugins.astrbot_plugin_superbot.moderation import Moderation
 from data.plugins.astrbot_plugin_superbot.semantic_review import SemanticReview
@@ -14,6 +17,7 @@ from data.plugins.astrbot_plugin_superbot.semantic_review_ui import action, inpu
 from data.plugins.astrbot_plugin_superbot.store import Rejected, Store
 from data.plugins.astrbot_plugin_superbot.tenant_ui import _chat_label
 from data.plugins.astrbot_plugin_superbot.tenant_ui import action as tenant_action
+from data.plugins.astrbot_plugin_superbot.tenants import Tenants
 from data.plugins.astrbot_plugin_superbot.ui import UI
 
 
@@ -24,7 +28,7 @@ def setup(tmp_path):
     bot = SimpleNamespace(id=99, send_message=AsyncMock())
     bot.get_chat = AsyncMock(return_value=SimpleNamespace(type="supergroup"))
     members = {
-        1: SimpleNamespace(status="administrator"),
+        1: SimpleNamespace(status="creator"),
         2: SimpleNamespace(status="administrator"),
         3: SimpleNamespace(status="member"),
         99: SimpleNamespace(status="administrator"),
@@ -40,6 +44,9 @@ def setup(tmp_path):
     )
     runtime.ad_killer = AdKiller(runtime)
     runtime.semantic_review = SemanticReview(runtime)
+    runtime.tenants = Tenants(runtime)
+    asyncio.run(designate_admin(runtime, "2"))
+    bot.get_chat_member.reset_mock()
     with store.tx() as db:
         store.put(db, "modules", {"moderation": True})
     ui = SimpleNamespace(store=store, runtime=runtime, render=AsyncMock())
@@ -119,11 +126,10 @@ async def test_notice_sender_revoked_during_delivery_never_enables(setup):
 
 @pytest.mark.asyncio
 async def test_my_groups_lists_only_current_telegram_administrators(setup):
-    setup.runtime.tenants = SimpleNamespace()
     setup.runtime.merchant_ads = SimpleNamespace()
     await tenant_action(setup.ui, private(2), {"action": "tenant_home"})
     buttons = setup.ui.render.await_args.args[2]
-    assert ("Test", {"action": "semantic_group_menu", "chat": "-1001"}) in buttons
+    assert ("Test", {"action": "activity_group", "chat": "-1001"}) in buttons
     setup.members[2].status = "member"
     await tenant_action(setup.ui, private(2), {"action": "tenant_home"})
     assert all(label != "Test" for label, _ in setup.ui.render.await_args.args[2])
@@ -136,7 +142,6 @@ async def test_my_groups_checks_only_one_page_of_telegram_groups(setup):
         "INSERT INTO mod_groups(chat,title,enabled) VALUES(?,?,1)",
         [(str(-2000 - n), f"Other {n:02}") for n in range(40)],
     )
-    setup.runtime.tenants = SimpleNamespace()
     setup.runtime.merchant_ads = SimpleNamespace()
     await tenant_action(setup.ui, private(2), {"action": "tenant_home"})
     assert setup.runtime.bot.get_chat_member.await_count <= 16
@@ -156,7 +161,7 @@ async def test_old_game_group_selector_hides_foreign_groups_from_superadmin(setu
     async def membership(chat, uid):
         if str(chat) == "-1002" and uid == 1:
             return SimpleNamespace(status="member")
-        return SimpleNamespace(status="administrator")
+        return setup.members[uid]
 
     setup.runtime.bot.get_chat_member.side_effect = membership
     await games(setup.ui, private(1), {"action": "games_group_list"})
@@ -238,7 +243,8 @@ async def test_owner_draft_trial_publish_and_conflict(setup):
     policy = setup.runtime.ad_killer.policy("-1001")
     from data.plugins.astrbot_plugin_superbot.ad_killer import defaults
 
-    setup.runtime.ad_killer.save("-1001", "1", policy["version"], defaults(), False)
+    async with GroupAuthority(setup.runtime).session("1", "-1001"):
+        setup.runtime.ad_killer.save("-1001", "1", policy["version"], defaults(), False)
     with pytest.raises(Rejected, match="版本"):
         await review.adopt(key, "2")
 
@@ -293,7 +299,9 @@ def test_local_package_is_private_masked_and_expires(setup):
 async def test_clear_revokes_adopted_undo_without_changing_live_policy(setup):
     review, store = setup.runtime.semantic_review, setup.store
     review.start("-1001", "2", 0)
-    review.capture(event("推广 www.sample.org/path bare.example.net 请联系 +1 (202) 555-0123"))
+    review.capture(
+        event("推广 www.sample.org/path bare.example.net 请联系 +1 (202) 555-0123")
+    )
     key = review.draft("-1001", "1", "推广")
     review.trial(key, "1")
     review.submit(key, "1")
@@ -302,9 +310,11 @@ async def test_clear_revokes_adopted_undo_without_changing_live_policy(setup):
     package, _ = review.package("-1001", "1")
     from pathlib import Path
 
-    path = Path(store.db.execute(
-        "SELECT path FROM sr_packages WHERE id=?", (package,)
-    ).fetchone()["path"])
+    path = Path(
+        store.db.execute(
+            "SELECT path FROM sr_packages WHERE id=?", (package,)
+        ).fetchone()["path"]
+    )
     content = path.read_text()
     assert "sample.org" not in content
     assert "example.net" not in content
@@ -329,7 +339,8 @@ async def test_platform_rejoin_requires_original_creator_and_stale_button_fails(
     real_ui.render = AsyncMock()
     await real_ui.action(private(1), {"action": "mod_group", "chat": "-1001"})
     enable = next(
-        p for label, p in real_ui.render.await_args.args[2]
+        p
+        for label, p in real_ui.render.await_args.args[2]
         if label == "开启本群群管服务"
     )
     await real_ui.action(private(1), enable)
@@ -348,9 +359,12 @@ async def test_platform_rejoin_requires_original_creator_and_stale_button_fails(
         await action(ui, private(1), confirm)
     setup.members[1].status = "creator"
     await action(ui, private(1), confirm)
-    assert store.db.execute(
-        "SELECT enabled FROM mod_groups WHERE chat='-1001'"
-    ).fetchone()[0] == 1
+    assert (
+        store.db.execute(
+            "SELECT enabled FROM mod_groups WHERE chat='-1001'"
+        ).fetchone()[0]
+        == 1
+    )
     with pytest.raises(Rejected):
         await action(ui, private(1), confirm)
 
@@ -374,23 +388,31 @@ def test_cleanup_batches_old_drafts_and_scrubs_all_states(setup):
         "INSERT INTO sr_drafts(id,chat,actor,base_version,config,state,created,"
         "adopted_version,before_config,before_enabled) "
         "VALUES(?,'-1001','1',1,?,'adopted',?,2,?,1)",
-        [(str(n), '{"keywords":"secret"}', old, '{"keywords":"older"}')
-        for n in range(205)],
+        [
+            (str(n), '{"keywords":"secret"}', old, '{"keywords":"older"}')
+            for n in range(205)
+        ],
     )
     store.db.execute(
         "INSERT INTO sr_trials(id,draft,result,at) VALUES('late','204',?,?)",
         ('{"evidence":"secret"}', setup.now[0]),
     )
     assert not review.cleanup()
-    assert store.db.execute(
-        "SELECT count(*) FROM sr_drafts WHERE before_config IS NOT NULL"
-    ).fetchone()[0] == 5
+    assert (
+        store.db.execute(
+            "SELECT count(*) FROM sr_drafts WHERE before_config IS NOT NULL"
+        ).fetchone()[0]
+        == 5
+    )
     assert review.cleanup()
     assert not store.db.execute("SELECT 1 FROM sr_trials").fetchone()
-    assert store.db.execute(
-        "SELECT count(*) FROM sr_drafts WHERE state='revoked' AND config='{}' "
-        "AND before_config IS NULL"
-    ).fetchone()[0] == 205
+    assert (
+        store.db.execute(
+            "SELECT count(*) FROM sr_drafts WHERE state='revoked' AND config='{}' "
+            "AND before_config IS NULL"
+        ).fetchone()[0]
+        == 205
+    )
 
 
 @pytest.mark.asyncio

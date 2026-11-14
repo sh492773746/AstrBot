@@ -12,6 +12,30 @@ from data.plugins.astrbot_plugin_telethon_ai.native_pipeline import NativePipeli
 
 
 @pytest.mark.asyncio
+async def test_shared_collector_lock_fails_closed_on_unsupported_host(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(main.adapter, "fcntl", None)
+    monkeypatch.setattr(
+        main.adapter,
+        "credentials",
+        lambda _: ({"session": str(tmp_path / "account")}, None, tmp_path),
+    )
+    value = main.adapter.TelethonAdapter.__new__(main.adapter.TelethonAdapter)
+    value.config = {
+        "disclosure_confirmed": True,
+        "allowed_chats": [-1],
+        "allowed_senders": [1],
+        "cooldown_seconds": 30,
+    }
+    value.account = "fixture"
+    value.gate = SimpleNamespace(paused=lambda _: False)
+    with pytest.raises(RuntimeError, match="requires a POSIX host"):
+        await value.run()
+    assert not (tmp_path / "collector.lock").exists()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("existing", [False, True])
 async def test_bootstrap_only_creates_persona_for_new_profiles(monkeypatch, existing):
     monkeypatch.setattr(main.adapter, "ACCOUNTS", {"test": 123})

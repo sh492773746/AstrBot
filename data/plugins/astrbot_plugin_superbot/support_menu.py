@@ -3,7 +3,7 @@
 import re
 
 from .store import Rejected, encode
-from .tenants import binding, local_config
+from .tenants import binding, group_admin, local_config
 
 
 def contact_url(value):
@@ -108,57 +108,58 @@ async def action(ui, update, data):
         if owner and owner["tenant"] != "platform":
             if owner["owner"] != uid:
                 raise Rejected("仅本群经营群主可设置业务联系人。")
-            from .tenants import group_admin
-
-            async with group_admin(runtime, uid, chat):
+        async with group_admin(runtime, uid, chat):
+            if owner and owner["tenant"] != "platform":
                 verified = await runtime.tenants.verify(uid, chat)
-        else:
-            await runtime.moderation.check(uid, chat, action="view")
-            verified = binding(store, chat)
-            if not verified:
-                raise Rejected("本群归属尚未登记，请本BOT管理员核查。")
-        row = store.db.execute(
-            "SELECT version FROM tenant_settings WHERE chat=? AND key='business_contact'",
-            (chat,),
-        ).fetchone()
-        version = row[0] if row else 0
-        if name.endswith("edit"):
-            store.dialog(
-                uid,
-                {
-                    "form": "tenant_input",
-                    "kind": "business_contact",
-                    "payload": {
-                        "chat": chat,
-                        "version": version,
-                        "owner_version": verified["version"],
-                    },
-                },
-            )
-            return await ui.render(
-                update,
-                f"🏪 **正在管理：{title}**\n发送 @用户名 或 https://t.me/用户名。\n仅修改本群业务联系人；/cancel 取消。",
-                back,
-            )
-        value = contact_url(data["value"])
-        with store.tx() as db:
-            current = binding(store, chat, db)
-            row = db.execute(
+            else:
+                await runtime.moderation.check(uid, chat, action="view")
+                verified = binding(store, chat)
+                if not verified:
+                    raise Rejected("本群归属尚未登记，请本BOT管理员核查。")
+            row = store.db.execute(
                 "SELECT version FROM tenant_settings WHERE chat=? AND key='business_contact'",
                 (chat,),
             ).fetchone()
-            if (
-                not current
-                or current["version"] != data["owner_version"]
-                or (row[0] if row else 0) != data["version"]
-            ):
-                raise Rejected("群归属或配置已变化，请重新操作。")
-            store.require(uid, "moderation", db=db, chat=chat)
-            db.execute(
-                "INSERT INTO tenant_settings(chat,key,value) VALUES(?,'business_contact',?) ON CONFLICT(chat,key) DO UPDATE SET value=excluded.value,version=tenant_settings.version+1",
-                (chat, encode(value)),
-            )
-            store.audit(db, uid, "business_contact", {"chat": chat, "contact": value})
+            version = row[0] if row else 0
+            if name.endswith("edit"):
+                store.dialog(
+                    uid,
+                    {
+                        "form": "tenant_input",
+                        "kind": "business_contact",
+                        "payload": {
+                            "chat": chat,
+                            "version": version,
+                            "owner_version": verified["version"],
+                        },
+                    },
+                )
+                return await ui.render(
+                    update,
+                    f"🏪 **正在管理：{title}**\n发送 @用户名 或 https://t.me/用户名。\n仅修改本群业务联系人；/cancel 取消。",
+                    back,
+                )
+            value = contact_url(data["value"])
+            with store.tx() as db:
+                current = binding(store, chat, db)
+                row = db.execute(
+                    "SELECT version FROM tenant_settings WHERE chat=? AND key='business_contact'",
+                    (chat,),
+                ).fetchone()
+                if (
+                    not current
+                    or current["version"] != data["owner_version"]
+                    or (row[0] if row else 0) != data["version"]
+                ):
+                    raise Rejected("群归属或配置已变化，请重新操作。")
+                store.require(uid, "moderation", db=db, chat=chat)
+                db.execute(
+                    "INSERT INTO tenant_settings(chat,key,value) VALUES(?,'business_contact',?) ON CONFLICT(chat,key) DO UPDATE SET value=excluded.value,version=tenant_settings.version+1",
+                    (chat, encode(value)),
+                )
+                store.audit(
+                    db, uid, "business_contact", {"chat": chat, "contact": value}
+                )
         return await ui.render(
             update, f"已保存「{title}」业务联系人，仅本群生效。", back
         )

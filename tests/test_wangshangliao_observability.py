@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -39,6 +39,7 @@ def logs(monkeypatch):
 
 
 def event(*, admin=True, private=True):
+    extras = {}
     return SimpleNamespace(
         platform=SimpleNamespace(config={"id": "wangshangliao_test"}),
         get_platform_name=lambda: "wangshangliao",
@@ -49,7 +50,11 @@ def event(*, admin=True, private=True):
         unified_msg_origin="private-session-secret",
         message_obj=SimpleNamespace(message_id="private-message-secret"),
         message_str="credential=secret-body",
-        get_extra=lambda _: None,
+        get_extra=lambda key, default=None: extras.get(key, default),
+        set_extra=lambda key, value: extras.__setitem__(key, value),
+        stop_event=Mock(),
+        send=AsyncMock(),
+        plain_result=lambda text: MessageChain([Plain(text)]),
     )
 
 
@@ -274,20 +279,34 @@ def test_known_receive_failures_keep_distinct_safe_codes(logs, code):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "private,admin", [(True, False), (False, True), (False, False)]
+    "private,admin", [(True, True), (True, False), (False, True), (False, False)]
 )
-async def test_permission_rejection_is_logged_without_changing_result(
+async def test_private_retirement_and_group_permission_rejection_are_content_free(
     logs, private, admin
 ):
     plugin = object.__new__(Main)
-    result = await plugin.private_management(
-        event(admin=admin, private=private), "config_preview", "secret proposal"
-    )
-    assert json.loads(result)["reason"] == "ai_management_retired"
-    level, text = logs[-1]
+    plugin.commands = SimpleNamespace(run=AsyncMock(return_value="无权限"))
+    e = event(admin=admin, private=private)
+    assert not hasattr(plugin, "private_management")
+    await plugin.moderation_command(e, "黑名单列表")
+    if private:
+        e.stop_event.assert_called_once_with()
+        plugin.commands.run.assert_not_awaited()
+        e.send.assert_not_awaited()
+        assert logs == []
+        return
+    plugin.commands.run.assert_awaited_once_with(e, "黑名单列表")
+    assert "无权限" in e.send.await_args.args[0].get_plain_text()
+    permission_logs = [
+        (level, text)
+        for level, text in logs
+        if "stage=command outcome=permission_denied " in text
+    ]
+    assert len(permission_logs) == 1
+    level, text = permission_logs[0]
     assert level == logging.INFO
-    assert "outcome=rejected" in text and "error=permission_denied" in text
-    assert "secret proposal" not in text
+    assert "outcome=permission_denied" in text and "error=permission_denied" in text
+    assert all("secret-body" not in entry for _, entry in logs)
 
 
 @pytest.mark.asyncio
@@ -354,25 +373,33 @@ async def test_cancellation_is_preserved(logs):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "private,admin,route",
+    "private,admin",
     [
-        (True, True, "admin_private"),
-        (True, False, "customer_private"),
-        (False, True, "customer_group"),
-        (False, False, "customer_group"),
+        (True, True),
+        (True, False),
+        (False, True),
+        (False, False),
     ],
 )
-async def test_actual_ai_request_route_is_logged(logs, private, admin, route):
+async def test_only_group_ai_request_route_is_logged(logs, private, admin):
     plugin = object.__new__(Main)
     tools = SimpleNamespace(tools=["wsl_private_management"])
     tools.get_tool = Mock(return_value=True)
     tools.remove_tool = Mock()
     request = SimpleNamespace(func_tool=tools, contexts=[], system_prompt="")
-    await plugin.plain_text_request(event(admin=admin, private=private), request)
-    assert any(
-        f"route={'customer_private' if private else 'customer_group'} " in text
-        for _, text in logs
-    )
+    e = event(admin=admin, private=private)
+    await plugin.plain_text_request(e, request)
+    if private:
+        e.stop_event.assert_called_once_with()
+        assert request.system_prompt == ""
+        assert logs == []
+    else:
+        e.stop_event.assert_not_called()
+        assert any(
+            "stage=ai_route outcome=dialogue_only" in text
+            and "route=customer_group " in text
+            for _, text in logs
+        )
     assert request.func_tool.tools == []
     assert tools.tools == ["wsl_private_management"]
 
@@ -389,6 +416,7 @@ def test_structured_diagnostics_reach_astrbot_log_broker(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("private", [True, False])
 @pytest.mark.parametrize(
     "case,expected",
     [
@@ -399,24 +427,29 @@ def test_structured_diagnostics_reach_astrbot_log_broker(monkeypatch):
         ("empty", "empty_reply"),
     ],
 )
-async def test_reply_gate_logs_without_sending(logs, monkeypatch, case, expected):
-    from unittest.mock import AsyncMock
-
+async def test_reply_gate_logs_without_sending(
+    logs, monkeypatch, case, expected, private
+):
     monkeypatch.setattr(
         "astrbot.core.platform.sources.wangshangliao.event.is_managed_account",
         lambda _: case == "managed",
     )
     message = AstrBotMessage()
-    message.type = MessageType.FRIEND_MESSAGE
+    message.type = MessageType.FRIEND_MESSAGE if private else MessageType.GROUP_MESSAGE
     message.self_id = "1"
-    message.session_id = "1/private/2/peer"
-    message.group_id = ""
+    message.session_id = "1/private/2/peer" if private else "1/5"
+    message.group_id = "" if private else "5"
     message.message_id = "private-message-secret"
     message.sender = MessageMember("2", "private-name")
     message.message_str = "secret body"
     message.message = [Plain(message.message_str)]
     adapter = SimpleNamespace(
-        config={"id": "fixture", "reply_private": case != "disabled"},
+        account="1",
+        config={
+            "id": "fixture",
+            "reply_private": case != "disabled",
+            "reply_groups": {"5": case != "disabled"},
+        },
         meta=lambda: PlatformMetadata("wangshangliao", "test", id="test"),
         send_reply_text=AsyncMock(),
     )
@@ -425,7 +458,12 @@ async def test_reply_gate_logs_without_sending(logs, monkeypatch, case, expected
         e.processing_completion.cancel()
     await e.send(MessageChain([] if case == "empty" else [Plain("private response")]))
     adapter.send_reply_text.assert_not_awaited()
-    assert f"outcome={expected} " in logs[-1][1]
+    assert (
+        f"outcome={'private_messages_retired' if private else expected} " in logs[-1][1]
+    )
+    if private:
+        assert e.is_stopped()
+    assert e.get_extra("_wsl_native_reply_result") == "not_sent"
     assert "private-message-secret" not in logs[-1][1]
     assert "private response" not in logs[-1][1]
     e.processing_completion.cancel()

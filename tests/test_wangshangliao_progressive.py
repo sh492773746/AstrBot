@@ -254,8 +254,10 @@ async def test_mute_first_is_also_used_by_the_content_pipeline(bot):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", ["badword", "severeword", "加我vx:abc123456"])
+@pytest.mark.parametrize("text", ["badword", "severeword", "加我vx:abcwechat"])
 async def test_after_warnings_mutes_and_recalls_cap_without_legacy_kick(bot, text):
+    category = content_rules.content_category(payload(text), bot.config["moderation"])
+    assert category and category != "consecutive_digits"
     for mid in ("1", "1", "2", "3"):
         assert await policy.handle(bot, "5", mid, payload(text))
     calls = bot.execute_moderation.await_args_list
@@ -284,6 +286,15 @@ async def test_after_warnings_mutes_and_recalls_cap_without_legacy_kick(bot, tex
             ).fetchone()[0]
             == 4
         )
+
+
+def test_numeric_contact_takes_priority_over_ordinary_ad_progression(bot):
+    text = "加我vx:abc123456"
+    assert content_rules.classify(text)
+    assert (
+        content_rules.content_category(payload(text), bot.config["moderation"])
+        == "consecutive_digits"
+    )
 
 
 @pytest.mark.asyncio

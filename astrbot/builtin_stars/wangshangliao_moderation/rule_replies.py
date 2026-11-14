@@ -864,9 +864,9 @@ class RuleReplies:
         """Serialize account campaigns without holding the native message lock."""
         account = cursor["account"]
         async with self.ad_locks.setdefault(account, asyncio.Lock()):
-            await asyncio.sleep(
-                max(0, self.ad_ready_at.get(account, 0) - time.monotonic())
-            )
+            # Recheck the pacing deadline if the timer wakes early.
+            while (delay := self.ad_ready_at.get(account, 0) - time.monotonic()) > 0:  # noqa: ASYNC110
+                await asyncio.sleep(delay)
             try:
                 governance = getattr(self.service, "governance", None)
                 if governance is None or adapter is None:

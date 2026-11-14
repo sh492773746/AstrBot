@@ -2,6 +2,7 @@
 
 # ruff: noqa: F811
 
+import asyncio
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -18,6 +19,7 @@ from data.plugins.astrbot_plugin_superbot.game_schedule import (
     save,
     snapshot,
 )
+from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
 from data.plugins.astrbot_plugin_superbot.semantic_review import SemanticReview
 from data.plugins.astrbot_plugin_superbot.store import Rejected
 from data.plugins.astrbot_plugin_superbot.tenant_ui import FEATURES, find_ad_groups
@@ -48,6 +50,11 @@ def form(configured):
     runtime.bot.get_chat_member.side_effect = lookup
     runtime.bot.get_chat.return_value = SimpleNamespace(
         id=-1001, type="supergroup", title="目标测试群"
+    )
+    asyncio.run(
+        runtime.tenants.designate(
+            "10", "-1001", "40", True, runtime.moderation.row("-1001")["version"]
+        )
     )
     runtime.store.db.execute(
         "INSERT INTO mod_members VALUES('-1001','30','member','member30',0)"
@@ -157,7 +164,8 @@ async def test_gift_rechecks_member_and_balance_at_confirmation(form, change):
     elif change == "renamed":
         member.user = User(30, "Renamed", False, username="changed30")
     else:
-        ui.runtime.points.adjust("10", "30", -1, "fixture", "other", "-1001")
+        async with GroupAuthority(ui.runtime).session("10", "-1001"):
+            ui.runtime.points.adjust("10", "30", -1, "fixture", "other", "-1001")
     before = ui.store.balance("30", "-1001")
     with pytest.raises(Rejected):
         await ui.action(event, confirm)
@@ -211,17 +219,26 @@ async def test_group_admin_can_toggle_only_local_feature_with_brand_mode(form, f
 
 
 @pytest.mark.asyncio
-async def test_admin_has_no_financial_or_cross_group_authority(form):
+async def test_designated_admin_ad_management_is_local_not_global(form):
     ui, event, *_ = form
     event.effective_user.id = 40
+    with pytest.raises(Rejected):
+        await ui.action(event, {"action": "tenant_switches", "chat": "-1002"})
+    before = [
+        tuple(row) for row in ui.store.db.execute("SELECT * FROM merchant_addresses")
+    ]
     for data in (
-        {"action": "tenant_switches", "chat": "-1002"},
         {"action": "tenant_edit", "chat": "-1001", "field": "address"},
         {"action": "tenant_ads", "chat": "-1001"},
     ):
-        with pytest.raises(Rejected):
-            await ui.action(event, data)
+        await ui.action(event, data)
         assert ADMIN_CONTEXT.get() is None
+    assert not ui.store.allowed("40")
+    assert before == [
+        tuple(row) for row in ui.store.db.execute("SELECT * FROM merchant_addresses")
+    ]
+    with pytest.raises(Rejected):
+        ui.store.require("40", owner=True)
 
 
 @pytest.mark.parametrize("uid", [10, 40])
@@ -269,7 +286,7 @@ async def test_tenant_admin_without_restrict_permission_denied(form):
 
     ui.runtime.bot.get_chat_member.side_effect = member
     ui.runtime.bot.set_chat_permissions = AsyncMock()
-    with pytest.raises(Rejected, match="对应 Telegram"):
+    with pytest.raises(Rejected, match="对应Telegram"):
         await ui.action(
             event, {"action": "mod_form", "kind": "mute_all", "chat": "-1001"}
         )
@@ -303,8 +320,7 @@ async def test_tenant_admin_can_enable_disabled_group_from_moderation_page(form)
     assert binding(ui.store, "-1001")["version"] > 1
     await ui.action(event, {"action": "mod_group", "chat": "-1001"})
     disable = next(
-        p for label, p in ui.render.await_args.args[2]
-        if label == "关闭本群群管服务"
+        p for label, p in ui.render.await_args.args[2] if label == "关闭本群群管服务"
     )
     await ui.action(event, disable)
     disable_confirm = ui.render.await_args.args[2][0][1]
@@ -364,7 +380,12 @@ async def test_superadmin_who_is_group_owner_keeps_own_group_controls(form):
     assert any(p.get("chat") == "-1001" for _, p in ui.render.await_args.args[2])
     await ui.action(event, {"action": "tenant_group", "chat": "-1001"})
     actions = {p["action"] for _, p in ui.render.await_args.args[2]}
-    assert {"tenant_ads", "tenant_address", "tenant_resources", "tenant_status_preview"} <= actions
+    assert {
+        "tenant_ads",
+        "tenant_address",
+        "tenant_resources",
+        "tenant_status_preview",
+    } <= actions
 
 
 @pytest.mark.asyncio
@@ -373,8 +394,7 @@ async def test_group_admin_revocation_before_final_save_rejects(form):
     event.effective_user.id = 40
     await ui.action(event, {"action": "tenant_switches", "chat": "-1001"})
     payload = next(
-        p for _, p in ui.render.await_args.args[2]
-        if p.get("feature") == "chat"
+        p for _, p in ui.render.await_args.args[2] if p.get("feature") == "chat"
     )
     await ui.action(event, payload)
     confirm = ui.render.await_args.args[2][0][1]
@@ -453,9 +473,11 @@ async def test_daily_schedule_steps_admin_save_and_boundaries(form, game):
         ([1320, 120], 2, True),
     ],
 )
-def test_full_day_and_overnight_schedule(form, window, hour, closed):
+@pytest.mark.asyncio
+async def test_full_day_and_overnight_schedule(form, window, hour, closed):
     ui, _, clock, *_ = form
-    save(ui.store, "10", "-1001", "canada", *window, 0)
+    async with GroupAuthority(ui.runtime).session("10", "-1001"):
+        save(ui.store, "10", "-1001", "canada", *window, 0)
     clock[0] = datetime(2026, 10, 4, hour, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
     assert bool(reason(ui.store, "-1001", "canada")) is closed
 
@@ -475,43 +497,51 @@ def test_retired_group_schedule_does_not_block_rewards_or_ads(form):
     assert ui.store.db.execute("SELECT COUNT(*) FROM ads").fetchone()[0] == 1
 
 
-def test_disabled_rewards_do_not_accrue_but_manual_gift_still_works(form):
+@pytest.mark.asyncio
+async def test_disabled_rewards_do_not_accrue_but_manual_gift_still_works(form):
     ui, *_ = form
-    ui.runtime.tenants.switch(
-        "10", "-1001", "points", False, binding(ui.store, "-1001")["version"]
-    )
+    async with GroupAuthority(ui.runtime).session("10", "-1001"):
+        ui.runtime.tenants.switch(
+            "10", "-1001", "points", False, binding(ui.store, "-1001")["version"]
+        )
     with pytest.raises(Rejected, match="奖励已关闭"):
         ui.runtime.points.checkin("30", "-1001")
     assert not ui.runtime.points.chat("30", "-1001", 1, "这是新的有效群消息")
-    ui.runtime.points.adjust(
-        "10", "30", 5, "群员积分派送", "manual", "-1001", notify="@member30"
-    )
+    async with GroupAuthority(ui.runtime).session("10", "-1001"):
+        ui.runtime.points.adjust(
+            "10", "30", 5, "群员积分派送", "manual", "-1001", notify="@member30"
+        )
     assert ui.store.balance("30", "-1001") == 105
 
 
 @pytest.mark.parametrize("resource", ["chat", "avatar"])
-def test_default_shared_service_preserves_switch_and_ignores_retired_schedule(
+@pytest.mark.asyncio
+async def test_default_shared_service_preserves_switch_and_ignores_retired_schedule(
     form, resource
 ):
     ui, _, clock, *_ = form
     runtime = ui.runtime
-    runtime.tenants.switch(
-        "10", "-1001", resource, True, binding(ui.store, "-1001")["version"]
-    )
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.switch(
+            "10", "-1001", resource, True, binding(ui.store, "-1001")["version"]
+        )
     assert runtime.tenants.resource_allowed("30", "-1001", resource)
     runtime.store.db.execute(
         "INSERT INTO roles(uid,scopes,expires) VALUES(?,?,?)",
         ("10", '["superadmin"]', runtime.store.clock() + 7200),
     )
-    runtime.tenants.resource_grant("10", "-1001", resource, 2, 0)
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.resource_grant("10", "-1001", resource, 2, 0)
     assert runtime.tenants.resource_allowed("30", "-1001", resource)
-    runtime.tenants.switch(
-        "10", "-1001", resource, False, binding(ui.store, "-1001")["version"]
-    )
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.switch(
+            "10", "-1001", resource, False, binding(ui.store, "-1001")["version"]
+        )
     assert not runtime.tenants.resource_allowed("30", "-1001", resource)
-    runtime.tenants.switch(
-        "10", "-1001", resource, True, binding(ui.store, "-1001")["version"]
-    )
+    async with GroupAuthority(runtime).session("10", "-1001"):
+        runtime.tenants.switch(
+            "10", "-1001", resource, True, binding(ui.store, "-1001")["version"]
+        )
     with pytest.raises(Rejected):
         save(ui.store, "10", "-1001", resource, 540, 1080, 0)
     clock[0] = datetime(2026, 10, 4, 8, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp()
@@ -521,7 +551,8 @@ def test_default_shared_service_preserves_switch_and_ignores_retired_schedule(
     assert runtime.tenants.resource_allowed("30", "-1002", resource)
 
 
-def test_notice_failure_rolls_back_gift_and_audit(form):
+@pytest.mark.asyncio
+async def test_notice_failure_rolls_back_gift_and_audit(form):
     import sqlite3
 
     ui, *_ = form
@@ -529,9 +560,10 @@ def test_notice_failure_rolls_back_gift_and_audit(form):
         "CREATE TRIGGER reject_notice BEFORE INSERT ON notices BEGIN SELECT RAISE(ABORT,'fixture'); END"
     )
     with pytest.raises(sqlite3.IntegrityError):
-        ui.runtime.points.adjust(
-            "10", "30", 10, "群员积分派送", "atomic", "-1001", notify="@member30"
-        )
+        async with GroupAuthority(ui.runtime).session("10", "-1001"):
+            ui.runtime.points.adjust(
+                "10", "30", 10, "群员积分派送", "atomic", "-1001", notify="@member30"
+            )
     assert ui.store.balance("30", "-1001") == 100
     assert ui.store.db.execute("SELECT COUNT(*) FROM notices").fetchone()[0] == 0
 
@@ -567,9 +599,10 @@ async def test_gift_notification_worker_sends_once_without_recredit(
     from data.plugins.astrbot_plugin_superbot.main import Main
 
     ui, *_ = form
-    ui.runtime.points.adjust(
-        "10", "30", 10, "群员积分派送", "notify", "-1001", notify="@member30"
-    )
+    async with GroupAuthority(ui.runtime).session("10", "-1001"):
+        ui.runtime.points.adjust(
+            "10", "30", 10, "群员积分派送", "notify", "-1001", notify="@member30"
+        )
     worker = object.__new__(Main)
     worker.store = ui.store
     worker.application = SimpleNamespace(running=True, bot=ui.runtime.bot)

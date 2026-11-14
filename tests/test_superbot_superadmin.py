@@ -91,14 +91,14 @@ def test_grant_wizard_exposes_distinct_superadmin_role():
     assert parse_form("grant", "@target 超管 365", {})["scopes"] == ["superadmin"]
 
 
-def test_bottom_keyboard_follows_current_role_and_scoped_manager(authority):
+def test_bottom_keyboard_stays_public_across_role_changes(authority):
     store, clock = authority
     ui = UI(SimpleNamespace(store=store))
 
     def labels(uid):
         return [key.text for row in ui.keyboard(uid).keyboard for key in row]
 
-    assert labels("4") == ["我的群", "客服", "帮助"]
+    assert labels("4") == ["我的群", "帮助", "客服"]
     with store.tx() as db:
         db.execute(
             "INSERT INTO roles(uid,scopes,expires) VALUES(?,?,?)",
@@ -108,9 +108,9 @@ def test_bottom_keyboard_follows_current_role_and_scoped_manager(authority):
             "INSERT INTO roles(uid,scopes,expires) VALUES(?,?,?)",
             ("3", '["game"]', clock[0] + 100),
         )
-    assert "本BOT总控" in labels("1")
-    assert "本BOT总控" in labels("2")
-    assert "本BOT总控" in labels("3")
+    assert store.is_superadmin("1") and store.is_superadmin("2")
+    assert store.allowed("3", "game")
+    assert labels("1") == labels("2") == labels("3") == labels("4")
     clock[0] += 101
     assert labels("2") == labels("4")
     assert labels("3") == labels("4")
