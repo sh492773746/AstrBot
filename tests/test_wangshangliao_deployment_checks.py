@@ -17,7 +17,12 @@ def migration(tmp_path, monkeypatch):
     backup = tmp_path / "backup"
     backup.mkdir()
     transport = {"id": "fixture", "type": "wangshangliao", "account_id": "1"}
-    policy = {"enabled_groups": ["5"], "reply_private": True}
+    policy = {
+        "enabled_groups": ["5"],
+        "reply_groups": {"5": True},
+        "ai_routes": {"groups": {"5": "group-model"}},
+        "moderation": {"enabled": True, "permissions": {"5": ["mute", "recall"]}},
+    }
     (backup / "cmd_config.json").write_text(
         json.dumps({"platform": [{**transport, **policy}]}), encoding="utf-8"
     )
@@ -36,9 +41,21 @@ def migration(tmp_path, monkeypatch):
     return {"platform": [transport]}, backup, root
 
 
-def test_migration_preserves_policy_and_historical_comparison(migration):
-    config, backup, _ = migration
+def test_migration_preserves_policy_and_historical_comparison(migration, capsys):
+    config, backup, root = migration
+    original = json.loads((backup / "cmd_config.json").read_text())["platform"][0]
     checks.verify_migration(config, backup)
+    with closing(sqlite3.connect(root / "settings.sqlite3")) as db:
+        account, payload = db.execute(
+            "SELECT account,payload FROM policies WHERE instance='fixture'"
+        ).fetchone()
+    assert account == "1"
+    assert json.loads(payload) == {
+        key: original[key] for key in checks.BUSINESS_FIELDS if key in original
+    }
+    output = capsys.readouterr().out
+    assert "PASS policy migration: fixture" in output
+    assert "PASS historical baseline/credit/payment rows preserved: 1" in output
 
 
 @pytest.mark.parametrize("change", ["none", "account", "policy", "missing"])

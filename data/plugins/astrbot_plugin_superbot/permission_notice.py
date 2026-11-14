@@ -1,7 +1,7 @@
 """Rate-limited permission guidance for Telegram membership updates."""
 
 
-async def notify(runtime, chat, member):
+async def notify(runtime, chat, member, *, old_status=None, event=None):
     """Explain missing permissions without repeatedly messaging a chat.
 
     Args:
@@ -9,6 +9,14 @@ async def notify(runtime, chat, member):
         chat: Group or channel receiving a membership update.
         member: Telegram's current bot membership record.
     """
+    if (
+        chat.type in {"group", "supergroup"}
+        and getattr(runtime, "ui", None)
+        and getattr(runtime.ui, "onboarding", None)
+    ):
+        return await runtime.ui.onboarding.group(
+            chat, member, old_status=old_status, event=event
+        )
     if member.status in {"left", "kicked"}:
         return
     required = (

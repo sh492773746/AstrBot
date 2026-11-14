@@ -79,8 +79,8 @@ async def action(ui, update, payload, token=""):
             "先把一个群调好，再保存为模板，进入其他已启用群一键套用。\n"
             f"我的模板：{'已保存，版本' + str(revision) if saved else '尚未保存'}\n"
             "内置模板开启举报、欢迎、群规、常用说明和人工警告入口；"
-            "不改变广告杀手。全局模块未开启时对应功能仍不可用。\n"
-            "我的模板另外复制广告杀手开关、检测项、处罚和关键词；套用前逐项预览。\n"
+            "不改变执行开关。全局模块未开启时对应功能仍不可用。\n"
+            "我的模板另外复制执行开关、检测项、处罚和关键词；套用前逐项预览。\n"
             "不复制管理员授权、白名单、日志频道、入群验证、自动审理、定时禁言或任何资金设置。",
             buttons,
         )
@@ -128,9 +128,9 @@ async def action(ui, update, payload, token=""):
             killer["config"][name] = local[name]
         validate(killer["config"])
         if type(killer["enabled"]) is not bool:
-            raise Rejected("模板广告杀手开关无效")
+            raise Rejected("模板执行开关无效")
         if killer["enabled"] and ak["error"]:
-            raise Rejected("广告杀手存在待核查故障，请先处理，模板不能清除故障")
+            raise Rejected("执行开关存在待核查故障，请先处理，模板不能清除故障")
     if op in {"mod_tpl_details", "mod_tpl_preview"}:
         if op == "mod_tpl_details":
             return await ui.render(
@@ -162,10 +162,10 @@ async def action(ui, update, payload, token=""):
             + ("保存到模板。" if mode == "capture" else "按模板替换，可随后逐群更改。"),
         ]
         if killer is None:
-            lines += ["广告杀手：保持目标群现状。"]
+            lines += ["执行开关：保持目标群现状。"]
         else:
             cfg = killer["config"]
-            lines += [f"广告杀手总开关：{'开' if killer['enabled'] else '关'}"]
+            lines += [f"执行开关：{'开' if killer['enabled'] else '关'}"]
             lines += [
                 f"{RULES[k]}：{'开' if r['enabled'] else '关'} · {ACTIONS[r['action']]}"
                 for k, r in cfg["rules"].items()
@@ -246,7 +246,7 @@ async def action(ui, update, payload, token=""):
                     and killer["enabled"]
                     and runtime.ad_killer.policy(chat)["error"]
                 ):
-                    raise Rejected("广告杀手有待核查故障")
+                    raise Rejected("执行开关有待核查故障")
                 if not db.execute(
                     "UPDATE callbacks SET used=1 WHERE token=? AND uid=? AND chat=? AND used=0 AND expires>?",
                     (token, uid, str(update.effective_chat.id), store.clock()),

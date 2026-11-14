@@ -20,6 +20,7 @@ from astrbot.core.agent.message import (
     TextPart,
     dump_messages_with_checkpoints,
 )
+from astrbot.core.agent.tool import ToolSet
 from astrbot.core.config.default import DEFAULT_CONFIG
 from astrbot.core.message.components import Image, Plain, Reply
 from astrbot.core.pipeline.preprocess_stage import stage as preprocess
@@ -104,6 +105,7 @@ def harness(tmp_path, monkeypatch):
     )
     context.persona_manager.personas_v3 = []
     context.subagent_orchestrator = None
+    context.get_llm_tool_manager.return_value.get_full_tool_set.return_value = ToolSet()
     context.get_llm_tool_manager.return_value.get_builtin_tool.side_effect = (
         lambda cls, **kwargs: cls(**kwargs)
     )

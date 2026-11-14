@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import inspect
+import json
 import re
 import time
 from types import SimpleNamespace
@@ -15,6 +16,11 @@ from astrbot.core.platform.sources.wangshangliao.group_scope import GroupAdapter
 from astrbot.core.platform.sources.wangshangliao.test_window import TestWindow
 
 from .activity_store import database
+from .lottery_rules import (
+    packet_plan,
+    validate_entry_phrase,
+    validate_luckiest_bonus,
+)
 from .open_store import OpenError
 
 GROUP, RECEIVER, SENDER, OWNER = "1459282", "43506527", "23691273", "31846829"
@@ -241,7 +247,7 @@ async def control_lottery(service, actor, payload):
                 )
                 active = await db.fetchone(
                     "SELECT * FROM lotteries WHERE account=? AND group_id=? AND status "
-                    "IN ('announcing','open','blocked','drawing')",
+                    "IN ('scheduled','schedule_blocked','announcing','open','blocked','drawing')",
                     (RECEIVER, GROUP),
                 )
                 if action == "start":
@@ -254,20 +260,51 @@ async def control_lottery(service, actor, payload):
                     binding = getattr(receiver, "_lottery_test_fixture", None)
                     if active or historical or binding and binding[1] is window:
                         raise OpenError("test_lottery_existing")
+                    if settings:
+                        try:
+                            validate_luckiest_bonus(
+                                settings["luckiest_bonus"], settings["packet_mode"]
+                            )
+                        except ValueError:
+                            raise OpenError("test_lottery_settings") from None
                     if (
                         not settings
                         or not settings["prize"].startswith(operation)
-                        or settings["packet_mode"] not in {"prize", "ordinary", "lucky"}
+                        or settings["packet_mode"]
+                        not in {"prize", "ordinary", "lucky", "tiered"}
                         or settings["winners"]
-                        != (1 if settings["packet_mode"] == "prize" else 2)
+                        != (
+                            1
+                            if settings["packet_mode"] == "prize"
+                            else 30
+                            if settings["packet_mode"] == "tiered"
+                            else 2
+                        )
                         or settings["packet_mode"] != "prize"
-                        and not 2 <= settings["total_amount"] <= 100
-                        or settings["capacity"] != 2
+                        and not 2
+                        <= settings["total_amount"]
+                        <= 100 - settings["luckiest_bonus"]
+                        or settings["capacity"]
+                        != (30 if settings["packet_mode"] == "tiered" else 2)
                         or settings["invite_gate"] != 0
+                        or settings["start_at"]
                         or not 60 <= settings["duration"] <= 300
                         or not settings["contact"]
                     ):
                         raise OpenError("test_lottery_settings")
+                    phrase = validate_entry_phrase(settings["entry_phrase"])
+                    if phrase != "参与玩家福利抽奖" and not phrase.startswith(
+                        "WSL_TEST_"
+                    ):
+                        raise OpenError("test_lottery_settings")
+                    if settings["packet_mode"] != "prize":
+                        packet_plan(
+                            settings["total_amount"],
+                            settings["capacity"],
+                            settings["packet_mode"],
+                            json.loads(settings["prize_tiers"]),
+                            generate=False,
+                        )
                 else:
                     if (
                         not active
@@ -336,4 +373,14 @@ async def control_lottery(service, actor, payload):
             "status": receipt["status"] if receipt else "unknown",
         }
         state["results"][action] = result
+        if action == "start" and result["status"] == "accepted":
+            async with AsyncDatabase(lambda: database(adapter), guard=guard) as db:
+                lottery = await db.fetchone(
+                    "SELECT entry_phrase FROM lotteries WHERE id=?",
+                    (state["fixture_id"],),
+                )
+            guard()
+            window._lottery_entry = (state["fixture_id"], lottery["entry_phrase"])
+        else:
+            window._lottery_entry = None
         return dict(result)

@@ -3,11 +3,14 @@
 import asyncio
 import base64
 import json
+import struct
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import aiohttp
+import lz4.block
+import nacl.bindings
 import pytest
 from aiohttp import web
 from nacl.public import PrivateKey, SealedBox
@@ -115,6 +118,28 @@ def deployment():
         app_key="fixture",
         device_id="fixture",
     )
+
+
+def incoming_message(message, *, key=bytes(32)):
+    """Build received fixtures independently of the group-only sending contract."""
+    sealed = nacl.bindings.crypto_aead_chacha20poly1305_encrypt(
+        lz4.block.compress(message.SerializeToString(), store_size=True),
+        struct.pack("<Q", 2),
+        struct.pack("<Q", 1),
+        key,
+    )
+    envelope = wire.Envelope(
+        header=message.sender.id << 34
+        | message.target.id << 4
+        | message.session << 2
+        | message.device,
+        timestamp=3,
+        nonce=1,
+        aad=2,
+        body=sealed[:-16],
+        tag=sealed[-16:],
+    )
+    return json.dumps({"b": wire.b64(envelope.SerializeToString())})
 
 
 @pytest.mark.parametrize(
@@ -586,45 +611,52 @@ async def test_ingest_decodes_authenticated_body_only_once(
             settings={"paused": False},
             integrated=False,
             admit_candidate=candidate,
-            chat_tasks={},
-            chat_users=set(),
         ),
     )
     private = route == "private"
     activation = route.endswith("candidate")
-    inner = wire.ApplicationMessage(
-        sender={"id": 13},
-        target={"id": 12 if private else 34},
-        session=1 if private else 2,
-        device=1,
-        format=0,
-        content={"data": "开通" if activation else "hello"},
-    )
+    encoded = "opaque-private-body-canary"
+    if not private:
+        inner = wire.ApplicationMessage(
+            sender={"id": 13},
+            target={"id": 34},
+            session=2,
+            device=1,
+            format=0,
+            content={"data": "开通" if activation else "hello"},
+        )
+        encoded = wire.seal_message(bytes(32), inner, 1, 2, 3)
     outer = {
         0: "0" if private else "1",
         1: "self-nim" if private else "1005",
         2: "1001",
         7: "123",
         8: "100",
-        10: wire.seal_message(bytes(32), inner, 1, 2, 3),
+        10: encoded,
         12: "55",
     }
     decode = Mock(wraps=wire.open_message)
     monkeypatch.setattr(wire, "open_message", decode)
     try:
         await adapter.ingest(outer)
-        decode.assert_called_once_with(bytes(32), outer[10])
+        if private:
+            decode.assert_not_called()
+        else:
+            decode.assert_called_once_with(bytes(32), outer[10])
         adapter.nim.acknowledge.assert_awaited_once_with(int(outer[0]), "55")
         assert candidate.call_count == int(activation)
         async with adapter.ledger.db.execute(
             "SELECT state,payload FROM inbox"
         ) as cursor:
             rows = await cursor.fetchall()
-        if activation:
+        if activation or private:
             assert rows == []
         else:
             assert len(rows) == 1 and rows[0][0] == "pending"
             assert json.loads(rows[0][1])["sender"] == "13"
+        if private:
+            assert adapter._event_queue.empty()
+            assert not adapter.dispatch_wakeup.is_set()
     finally:
         await adapter.ledger.close()
 
@@ -634,16 +666,19 @@ async def test_ingest_decodes_authenticated_body_only_once(
 @pytest.mark.parametrize("spoof", [False, True])
 @pytest.mark.parametrize(
     ("format_id", "kind"),
-    [(1, "image"), (3, "video"), (9, "forward"), (2, None), (6, None), (13, None)],
+    [
+        (1, "image"),
+        (3, "video"),
+        (9, "forward"),
+        (39, "game"),
+        (2, None),
+        (6, None),
+        (13, None),
+    ],
 )
 async def test_native_images_enter_group_flood_ingress_only_with_trusted_identity(
     tmp_path, deployment, monkeypatch, private, spoof, format_id, kind
 ):
-    import struct
-
-    import lz4.block
-    import nacl.bindings
-
     from astrbot.builtin_stars.wangshangliao_moderation import feature_image
     from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
 
@@ -670,28 +705,11 @@ async def test_native_images_enter_group_flood_ingress_only_with_trusted_identit
         device=1,
         format=format_id,
         image={
-            "asset": {"uri": next(iter(feature_image.REVIEWED_ASSETS.values()))},
+            "asset": {"uri": "1234567890123456789"},
             "width": 1024,
             "height": 1024,
             "size": 1000,
         },
-    )
-    sealed = nacl.bindings.crypto_aead_chacha20poly1305_encrypt(
-        lz4.block.compress(message.SerializeToString(), store_size=True),
-        struct.pack("<Q", 2),
-        struct.pack("<Q", 1),
-        bytes(32),
-    )
-    envelope = wire.Envelope(
-        header=message.sender.id << 34
-        | message.target.id << 4
-        | message.session << 2
-        | 1,
-        timestamp=3,
-        nonce=1,
-        aad=2,
-        body=sealed[:-16],
-        tag=sealed[-16:],
     )
     outer = {
         0: "0" if private else "1",
@@ -699,35 +717,45 @@ async def test_native_images_enter_group_flood_ingress_only_with_trusted_identit
         2: "forged-peer" if spoof else "1001",
         7: str(int(time.time() * 1000)),
         8: "100",
-        10: json.dumps({"b": wire.b64(envelope.SerializeToString())}),
+        10: incoming_message(message),
         11: "image-client",
         12: "55",
     }
+    decode = Mock(wraps=wire.open_message)
+    monkeypatch.setattr(wire, "open_message", decode)
     try:
         await adapter.ingest(outer)
         async with adapter.ledger.db.execute("SELECT state,payload FROM inbox") as c:
             rows = await c.fetchall()
-        assert len(rows) == 1
-        state, encoded = rows[0]
-        if not private and not spoof and kind:
-            payload = json.loads(encoded)
-            assert state == "pending"
-            assert payload["kind"] == kind and payload["text"] == ""
-            assert payload["sender"] == "13"
-            assert payload["recall_route"]["peer"] == "1001"
-            assert payload["mentions"] == []
-            observer.assert_called_once()
-        elif private and not spoof and kind == "image":
-            payload = json.loads(encoded)
-            assert state == "pending"
-            assert payload["kind"] == "image" and payload["text"] == ""
-            assert payload["sender"] == "13" and payload["transport_peer"] == "1001"
-            assert payload["image"]["asset"] == message.image.asset.uri
-            assert payload["mentions"] == []
-            observer.assert_called_once()
-        else:
-            assert state != "pending"
+        if private:
+            decode.assert_not_called()
+            assert rows == []
+            assert adapter._event_queue.empty()
+            assert not adapter.dispatch_wakeup.is_set()
+            adapter.refresh_member_mapping.assert_not_awaited()
             observer.assert_not_called()
+        else:
+            decode.assert_called_once_with(bytes(32), outer[10])
+            assert len(rows) == 1
+            state, encoded = rows[0]
+            if not spoof and kind:
+                payload = json.loads(encoded)
+                assert state == "pending"
+                assert payload["kind"] == kind and payload["text"] == ""
+                assert payload["sender"] == "13"
+                assert payload["recall_route"]["peer"] == "1001"
+                assert payload["mentions"] == []
+                if kind == "image":
+                    assert payload["image"] == {
+                        "asset": "1234567890123456789",
+                        "width": 1024,
+                        "height": 1024,
+                        "size": 1000,
+                    }
+                observer.assert_called_once()
+            else:
+                assert state != "pending"
+                observer.assert_not_called()
         adapter.nim.acknowledge.assert_awaited_once_with(int(outer[0]), "55")
     finally:
         await adapter.ledger.close()
@@ -779,30 +807,129 @@ async def test_ingest_decode_reuse_keeps_identity_and_cipher_checks(
         1: "self-nim" if private else "1005",
         2: "forged-peer" if fault == "peer" else "1001",
         8: "100",
-        10: wire.seal_message(
-            bytes([1]) * 32 if fault == "cipher" else bytes(32), inner, 1, 2, 3
+        10: incoming_message(
+            inner, key=bytes([1]) * 32 if fault == "cipher" else bytes(32)
         ),
         12: "55",
     }
     decode = Mock(wraps=wire.open_message)
     monkeypatch.setattr(wire, "open_message", decode)
     try:
-        if private and fault != "cipher":
-            with pytest.raises(wire.ProtocolError, match="private_message_identity"):
-                await adapter.ingest(outer)
-            adapter.nim.acknowledge.assert_not_awaited()
+        await adapter.ingest(outer)
+        adapter.nim.acknowledge.assert_awaited_once_with(int(outer[0]), "55")
+        if private:
+            decode.assert_not_called()
         else:
-            await adapter.ingest(outer)
-            adapter.nim.acknowledge.assert_awaited_once_with(int(outer[0]), "55")
-        decode.assert_called_once()
+            decode.assert_called_once_with(bytes(32), outer[10])
         async with adapter.ledger.db.execute("SELECT state FROM inbox") as cursor:
             rows = await cursor.fetchall()
         assert rows == (
             []
-            if private and fault != "cipher"
+            if private
             else [("unsupported" if fault == "cipher" else "rejected_identity",)]
         )
         assert adapter._event_queue.empty()
+        if private:
+            assert not adapter.dispatch_wakeup.is_set()
+            adapter.refresh_member_mapping.assert_not_awaited()
+    finally:
+        await adapter.ledger.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("encoding", "format_id"),
+    [("cipher", 0), ("plaintext", 0), ("plaintext", 7), ("plaintext", 8)],
+)
+@pytest.mark.parametrize(
+    "transport", ["own", "other-recipient", "self-sender", "missing-own-account"]
+)
+async def test_private_decode_failures_never_archive_even_unverified_metadata(
+    tmp_path, deployment, monkeypatch, encoding, format_id, transport
+):
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
+
+    observe = Mock()
+    monkeypatch.setattr(runtime, "observe", observe)
+    adapter = WangshangliaoAdapter(
+        {"id": "private-no-archive", "account_id": "12", "enabled_groups": ["34"]},
+        {},
+        asyncio.Queue(),
+    )
+    adapter.ledger = Ledger(tmp_path / "private-no-archive.sqlite3")
+    await adapter.ledger.open()
+    adapter.ledger.ingest = AsyncMock(wraps=adapter.ledger.ingest)
+    adapter.business = SimpleNamespace(deployment=deployment)
+    adapter.groups = {"34": "1005"}
+    adapter.nim_account = "" if transport == "missing-own-account" else "self-nim"
+    adapter.nim = SimpleNamespace(acknowledge=AsyncMock(), request=AsyncMock())
+    adapter.diagnostics.emit = Mock()
+    inner = wire.ApplicationMessage(
+        sender={"id": 13},
+        target={"id": 12},
+        session=1,
+        device=1,
+        format=format_id,
+        content={"data": "private-no-archive-canary"},
+    )
+    encoded = (
+        incoming_message(inner, key=bytes([1]) * 32)
+        if encoding == "cipher"
+        else wire.b64(
+            wire.Envelope(
+                header=13 << 34 | 12 << 4 | 1 << 2 | 1,
+                body=inner.SerializeToString(),
+            ).SerializeToString()
+        )
+    )
+    outer = {
+        0: "0",
+        1: "other-account" if transport == "other-recipient" else "self-nim",
+        2: "self-nim" if transport == "self-sender" else "peer-nim",
+        8: "100",
+        10: encoded,
+        12: "55",
+    }
+    changes = adapter.ledger.db.total_changes
+    try:
+        with pytest.raises(wire.ProtocolError, match="^message_decode$") as caught:
+            wire.open_message(bytes(32), encoded)
+        assert caught.value.reason == (
+            "authentication" if encoding == "cipher" else "envelope"
+        )
+        assert caught.value.unverified == (
+            {}
+            if encoding == "cipher"
+            else {"reason": "unsigned_plaintext", "format": format_id}
+        )
+        decode = Mock(side_effect=AssertionError("Private body must not be decoded"))
+        monkeypatch.setattr(wire, "open_message", decode)
+        await adapter.ingest(outer)
+        await adapter.ingest(outer)
+        decode.assert_not_called()
+        if transport == "own":
+            assert adapter.nim.acknowledge.await_count == 2
+            adapter.nim.acknowledge.assert_awaited_with(0, "55")
+            assert adapter.diagnostics.emit.call_count == 2
+            adapter.diagnostics.emit.assert_called_with(
+                "receive", "private_retired", "55"
+            )
+        else:
+            adapter.nim.acknowledge.assert_not_awaited()
+            adapter.diagnostics.emit.assert_not_called()
+        adapter.ledger.ingest.assert_not_awaited()
+        assert adapter.ledger.db.total_changes == changes
+        async with adapter.ledger.db.execute(
+            "SELECT (SELECT COUNT(*) FROM inbox),(SELECT COUNT(*) FROM outbox)"
+        ) as cursor:
+            assert await cursor.fetchone() == (0, 0)
+        assert adapter._event_queue.empty()
+        assert not adapter.dispatch_wakeup.is_set()
+        assert not adapter.workers
+        observe.assert_not_called()
+        adapter.nim.request.assert_not_awaited()
+        assert adapter.unverified_formats == {}
+        assert adapter.unsupported_pushes == 0
     finally:
         await adapter.ledger.close()
 
@@ -844,41 +971,60 @@ async def test_ingest_wakeup_requires_admission_but_recovers_ack_retry(
         nonlocal ack_attempts
         ack_attempts += 1
         assert not adapter.dispatch_wakeup.is_set()
-        # The ACK sees the committed admission result, never speculative state.
+        # Retired DMs never enter admission; group ACKs follow committed state.
         async with adapter.ledger.db.execute(
             "SELECT state FROM inbox WHERE account='12' AND team=? AND message=?",
             (team, mid),
         ) as cursor:
-            assert await cursor.fetchone() == ("queue_full" if rejected else "pending",)
+            assert await cursor.fetchone() == (
+                None if private else ("queue_full" if rejected else "pending",)
+            )
         if disposition == "ack-retry" and ack_attempts == 1:
             raise OSError("offline ACK failure")
 
     adapter.nim = SimpleNamespace(acknowledge=AsyncMock(side_effect=acknowledge))
-    inner = wire.ApplicationMessage(
-        sender={"id": 13},
-        target={"id": 12 if private else 34},
-        session=1 if private else 2,
-        device=1,
-        format=0,
-        content={"data": "hello"},
-    )
+    encoded = "opaque-private-body-canary"
+    if not private:
+        inner = wire.ApplicationMessage(
+            sender={"id": 13},
+            target={"id": 34},
+            session=2,
+            device=1,
+            format=0,
+            content={"data": "hello"},
+        )
+        encoded = wire.seal_message(bytes(32), inner, 1, 2, 3)
     outer = {
         0: "0" if private else "1",
         1: "self-nim" if private else "1005",
         2: "1001",
         8: "100",
-        10: wire.seal_message(bytes(32), inner, 1, 2, 3),
+        10: encoded,
         12: "55",
     }
+    decode = Mock(wraps=wire.open_message)
+    monkeypatch.setattr(wire, "open_message", decode)
+    changes = adapter.ledger.db.total_changes
     try:
         if disposition == "ack-retry":
             with pytest.raises(OSError, match="ACK failure"):
                 await adapter.ingest(outer)
             assert not adapter.dispatch_wakeup.is_set()
         await adapter.ingest(outer)
-        assert adapter.dispatch_wakeup.is_set() is not rejected
-        assert observe.call_count == int(not rejected)
+        admitted = not private and not rejected
+        assert adapter.dispatch_wakeup.is_set() is admitted
+        assert observe.call_count == int(admitted)
         assert ack_attempts == (2 if disposition == "ack-retry" else 1)
+        if private:
+            decode.assert_not_called()
+            assert adapter.ledger.db.total_changes == changes
+            assert adapter._event_queue.empty()
+            async with adapter.ledger.db.execute(
+                "SELECT COUNT(*) FROM inbox WHERE message='55'"
+            ) as cursor:
+                assert (await cursor.fetchone())[0] == 0
+        else:
+            assert decode.call_count == ack_attempts
     finally:
         await adapter.ledger.close()
 
@@ -1192,17 +1338,6 @@ async def test_registration_strict_input_and_missing_deployment(monkeypatch, tmp
         ("/v1/group/get-group-apply-list", {"groupId": 34, "v": "0"}),
         ("/v1/group/get-apply-logs", {}),
         ("/v1/group/get-apply-logs", {"lastId": "0"}),
-        ("/v1/friend/friend-apply-list", {"lastId": 0}),
-        (
-            "/v1/friend/friend-apply-handler",
-            {
-                "flId": 123456789012,
-                "state": "FRIENDLOG_STATE_AGREE",
-                "nickName": "",
-                "classId": 0,
-                "friendCircle": {"notSeeMe": False, "notSeeHim": True},
-            },
-        ),
     ],
 )
 async def test_http_signed_encrypted_exchange(deployment, route, params):
@@ -1265,6 +1400,30 @@ async def test_http_signed_encrypted_exchange(deployment, route, params):
         assert seen == [route]
     finally:
         await runner.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authenticated", [False, True])
+@pytest.mark.parametrize(
+    "route", ["/v1/friend/friend-apply-list", "/v1/friend/friend-apply-handler"]
+)
+async def test_retired_friend_routes_reject_before_shared_lock_or_http(
+    deployment, monkeypatch, authenticated, route
+):
+    post = AsyncMock(side_effect=AssertionError("Unexpected friend request"))
+    monkeypatch.setattr(aiohttp.ClientSession, "post", post)
+    async with aiohttp.ClientSession() as http:
+        client = BusinessClient(deployment, http)
+        client.jwt = "fixture-session" if authenticated else ""
+        await client.lock.acquire()
+        try:
+            with pytest.raises(BusinessError, match="^unsupported_route$"):
+                await asyncio.wait_for(client.request(route, {}), 1)
+        finally:
+            client.lock.release()
+        assert client.last_request == 0
+        assert client.jwt == ("fixture-session" if authenticated else "")
+    post.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1510,10 +1669,13 @@ async def test_native_lifecycle_reconnect_cursor_and_stop(
 
 
 @pytest.mark.asyncio
-async def test_private_message_reply_dedup_and_identity(tmp_path, deployment):
-    from astrbot.api.event import MessageChain
-    from astrbot.api.message_components import Plain
-    from astrbot.api.platform import MessageType
+async def test_private_message_duplicate_ack_only_and_identity(
+    tmp_path, deployment, monkeypatch
+):
+    from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
+
+    observe = Mock()
+    monkeypatch.setattr(runtime, "observe", observe)
 
     adapter = WangshangliaoAdapter(
         {"id": "private-fixture", "account_id": "12", "enabled_groups": []},
@@ -1522,7 +1684,6 @@ async def test_private_message_reply_dedup_and_identity(tmp_path, deployment):
     )
     adapter.ledger = Ledger(tmp_path / "private.sqlite")
     await adapter.ledger.open()
-    dispatcher = asyncio.create_task(adapter.dispatch_pending())
     adapter.business = SimpleNamespace(deployment=deployment)
     adapter.nim_account = "self-nim"
     adapter.connection_state = "online"
@@ -1532,55 +1693,48 @@ async def test_private_message_reply_dedup_and_identity(tmp_path, deployment):
             return_value=(200, wire.properties([(7, b"100"), (12, b"200")]))
         ),
     )
-    inner = wire.ApplicationMessage(
-        sender=wire.Source(id=13),
-        target=wire.Source(id=12),
-        session=1,
-        device=1,
-        format=0,
-        content=wire.Content(data="你好"),
-    )
     outer = {
         0: "0",
         1: "self-nim",
         2: "peer-nim",
         7: "100",
         8: "100",
-        10: wire.seal_message(bytes(32), inner, 5, 6, 7),
+        10: "opaque-private-body-canary",
         12: "55",
     }
+    decode = Mock(side_effect=AssertionError("Private body must not be decoded"))
+    monkeypatch.setattr(wire, "open_message", decode)
+    changes = adapter.ledger.db.total_changes
     try:
         await adapter.ingest(outer)
-        event = await asyncio.wait_for(adapter._event_queue.get(), 1)
-        assert event.message_obj.type == MessageType.FRIEND_MESSAGE
-        assert event.get_extra("wangshangliao_payload")["created_at"] == 100
-        assert event.get_group_id() == ""
-        assert event.eligible and "private/13/" in event.session_id
-        await event.send(MessageChain([Plain("私信回复")]))
-        args = adapter.nim.request.call_args.args
-        assert args[:2] == (7, 1)
-        fields, _ = wire.read_properties(args[2])
-        assert fields[0] == b"0" and fields[1] == b"peer-nim"
-        sent = wire.open_message(bytes(32), fields[10].decode())
-        assert sent.session == 1 and sent.target.id == 13
-        event.processing_completion.set_result(None)
         await adapter.ingest(outer)
-        await asyncio.sleep(0.05)
-        assert adapter._event_queue.empty()
+        assert adapter.nim.acknowledge.await_count == 2
         adapter.nim.acknowledge.assert_awaited_with(0, "55")
-        inner.target.id = 99
-        wrong = {**outer, 10: wire.seal_message(bytes(32), inner, 8, 9, 10)}
-        with pytest.raises(wire.ProtocolError, match="private_message_identity"):
-            await adapter.ingest(wrong)
-        await adapter.ingest({**outer, 1: "other-account"})
+        header_only = {key: value for key, value in outer.items() if key != 10}
+        await adapter.ingest({**header_only, 12: "56"})
+        adapter.nim.acknowledge.assert_awaited_with(0, "56")
+        for invalid in (
+            {1: "other-account"},
+            {2: "self-nim"},
+            {2: ""},
+            {2: None},
+            {2: "x" * 1025},
+        ):
+            await adapter.ingest({**outer, **invalid})
+        assert adapter.nim.acknowledge.await_count == 3
+        decode.assert_not_called()
+        assert adapter.ledger.db.total_changes == changes
         assert adapter._event_queue.empty()
+        assert not adapter.dispatch_wakeup.is_set()
+        assert not adapter.workers
+        observe.assert_not_called()
+        adapter.nim.request.assert_not_awaited()
+        async with adapter.ledger.db.execute("SELECT COUNT(*) FROM inbox") as cursor:
+            assert (await cursor.fetchone())[0] == 0
+        async with adapter.ledger.db.execute("SELECT COUNT(*) FROM outbox") as cursor:
+            assert (await cursor.fetchone())[0] == 0
     finally:
         adapter.stopping.set()
-        dispatcher.cancel()
-        await asyncio.gather(dispatcher, return_exceptions=True)
-        for task in adapter.workers.values():
-            task.cancel()
-        await asyncio.gather(*adapter.workers.values(), return_exceptions=True)
         await adapter.ledger.close()
 
 
@@ -1678,6 +1832,8 @@ async def test_authenticated_group_selection(deployment):
     ],
 )
 async def test_provider_error_classification(deployment, status, code, retry, label):
+    from astrbot.core.platform.sources.wangshangliao.diagnostics import Diagnostics
+
     calls = []
 
     async def handler(request):
@@ -1702,6 +1858,7 @@ async def test_provider_error_classification(deployment, status, code, retry, la
     try:
         async with aiohttp.ClientSession() as http:
             client = BusinessClient(fixture, http)
+            client.diagnostics = Diagnostics("offline-business-errors")
             client.jwt = "fixture"
             with pytest.raises(BusinessError, match=label) as raised:
                 await client.request("/v1/user/RefreshToken", {})
@@ -1716,6 +1873,10 @@ async def test_provider_error_classification(deployment, status, code, retry, la
             if status == 429:
                 assert raised.value.retry_after == (12 if retry == "12" else 30)
         assert len(calls) == 1
+        timings = client.diagnostics.snapshot()["timings"]
+        assert timings["business_http"]["samples"] == 1
+        assert timings["business_lock_wait"]["samples"] >= 1
+        assert "mute_http" not in timings
     finally:
         await runner.cleanup()
 
@@ -1739,7 +1900,46 @@ async def test_waiting_request_rechecks_invalidated_credentials(deployment):
 
 
 @pytest.mark.asyncio
-async def test_friend_request_guard_checked_after_shared_http_lock(deployment):
+async def test_mute_http_timing_is_separate_from_shared_lock_wait(deployment):
+    from astrbot.core.platform.sources.wangshangliao.diagnostics import Diagnostics
+
+    class Response:
+        status = 200
+        headers = {}
+
+        def __init__(self):
+            self.content = self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def iter_chunked(self, size):
+            yield b'{"code":0,"data":{}}'
+
+    http = SimpleNamespace(post=Mock(return_value=Response()))
+    client = BusinessClient(deployment, http)
+    client.jwt = "offline-fixture"
+    client.diagnostics = Diagnostics("offline-mute-timings")
+    await client.lock.acquire()
+    pending = asyncio.create_task(client.request("/v1/group/set-member-mute", {}))
+    try:
+        await asyncio.sleep(0.02)
+        assert not pending.done()
+    finally:
+        client.lock.release()
+    assert await pending == {}
+    timings = client.diagnostics.snapshot()["timings"]
+    assert timings["business_lock_wait"]["p50_ms"] >= 10
+    assert timings["mute_http"] == timings["business_http"]
+    assert timings["mute_http"]["samples"] == 1
+    http.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_group_request_guard_checked_after_shared_http_lock(deployment):
     from astrbot.core.platform.sources.wangshangliao.business_http import (
         request_business,
     )
@@ -1748,7 +1948,7 @@ async def test_friend_request_guard_checked_after_shared_http_lock(deployment):
 
     def guard():
         if not authorized:
-            raise wire.ProtocolError("friend_approval_authority_changed")
+            raise wire.ProtocolError("group_authority_changed")
 
     async with aiohttp.ClientSession() as http:
         client = BusinessClient(deployment, http)
@@ -1756,7 +1956,10 @@ async def test_friend_request_guard_checked_after_shared_http_lock(deployment):
         await client.lock.acquire()
         pending = asyncio.create_task(
             request_business(
-                client, "/v1/friend/friend-apply-handler", {}, authorize=guard
+                client,
+                "/v1/group/get-group-apply-list",
+                {"groupId": 34, "v": "0"},
+                authorize=guard,
             )
         )
         try:
@@ -2155,9 +2358,11 @@ async def test_managed_bot_messages_never_dispatch(tmp_path, monkeypatch, group)
     adapter.ledger = Ledger(tmp_path / "bot-exclusion.sqlite")
     await adapter.ledger.open()
     adapter.connection_state = "online"
+    adapter.nim = SimpleNamespace(request=AsyncMock())
+    worker = None
     try:
-        await adapter.ledger.ingest("12", group, "bot", {"sender": "13"})
-        await adapter.ledger.ingest(
+        bot_admitted = await adapter.ledger.ingest("12", group, "bot", {"sender": "13"})
+        human_admitted = await adapter.ledger.ingest(
             "12",
             group,
             "human",
@@ -2169,22 +2374,38 @@ async def test_managed_bot_messages_never_dispatch(tmp_path, monkeypatch, group)
                 "mentions": [],
             },
         )
-        worker = asyncio.create_task(adapter.process_group(group))
-        event = await asyncio.wait_for(adapter._event_queue.get(), 2)
-        assert event.get_sender_id() == "99"
-        async with adapter.ledger.db.execute(
-            "SELECT state FROM inbox WHERE message='bot'"
-        ) as cursor:
-            assert (await cursor.fetchone())[0] == "ignored_bot"
-        event.processing_completion.set_result(None)
-        adapter.stopping.set()
-        await asyncio.wait_for(worker, 2)
-        with pytest.raises(wire.ProtocolError, match="managed_bot_peer"):
+        if group.startswith("private/"):
+            assert not bot_admitted and not human_admitted
+            await adapter.process_group(group)
+            assert adapter._event_queue.empty()
+            assert not adapter.dispatch_wakeup.is_set()
+            assert not adapter.workers
+            async with adapter.ledger.db.execute(
+                "SELECT message,state FROM inbox ORDER BY message"
+            ) as cursor:
+                assert await cursor.fetchall() == []
+        else:
+            worker = asyncio.create_task(adapter.process_group(group))
+            event = await asyncio.wait_for(adapter._event_queue.get(), 2)
+            assert event.get_sender_id() == "99"
+            async with adapter.ledger.db.execute(
+                "SELECT state FROM inbox WHERE message='bot'"
+            ) as cursor:
+                assert (await cursor.fetchone())[0] == "ignored_bot"
+            event.processing_completion.set_result(None)
+            adapter.stopping.set()
+            await asyncio.wait_for(worker, 2)
+        with pytest.raises(wire.ProtocolError, match="private_messages_retired"):
             adapter.stopping.clear()
             await adapter.send_text("private/13/cGVlcg==", "no-send", "hello")
+        adapter.nim.request.assert_not_awaited()
+        assert await adapter.ledger.receipt("no-send") is None
     finally:
         adapter.stopping.set()
-        await adapter.ledger.db.close()
+        if worker is not None:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+        await adapter.ledger.close()
 
 
 @pytest.mark.asyncio
@@ -2266,7 +2487,6 @@ async def test_reply_and_proactive_settings_survive_save_reload(tmp_path, monkey
         setting = {
             **service.get_bot("persist")["bot"],
             "enabled_groups": ["34", "35"],
-            "reply_private": enabled,
             "reply_groups": {"34": enabled, "35": False},
             "proactive_send": {"enabled": enabled},
             "moderation": {"enabled": enabled, "permissions": {"34": ["mute"]}},
@@ -2279,9 +2499,10 @@ async def test_reply_and_proactive_settings_survive_save_reload(tmp_path, monkey
         expected = {
             **setting,
             "proactive_send": {"enabled": enabled, "targets": []},
-            "ai_routes": {"admin_provider_id": "", "groups": {}},
+            "ai_routes": {"groups": {}},
         }
         assert fresh.get_bot("persist")["bot"] == expected
+        assert "reply_private" not in expected
         assert manager.load_platform.call_args.args[0] == {
             key: value
             for key, value in expected.items()

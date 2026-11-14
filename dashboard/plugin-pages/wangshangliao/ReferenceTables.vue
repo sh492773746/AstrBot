@@ -14,7 +14,6 @@ const access = (value: string) => {
   const labels: Record<string, string[]> = {
     allowed: ["允许", "Allowed"],
     denied: ["无权限", "Denied"],
-    "private-only": ["群内静默", "Silent in groups"],
     "group-only": ["仅群内", "Group only"],
     unavailable: ["未提供", "Not available"],
     verified: ["须开通核验", "Activation checks required"],
@@ -123,12 +122,6 @@ const access = (value: string) => {
                 {{ t("本群管理 · 群内", "Group manager · group") }}
               </th>
               <th scope="col">
-                {{ t("普通用户 · 私聊", "Member · private") }}
-              </th>
-              <th scope="col">
-                {{ t("本群管理 · 私聊", "Group manager · private") }}
-              </th>
-              <th scope="col">
                 {{ t("动作所需已保存授权", "Required saved action grants") }}
               </th>
               <th scope="col">{{ t("执行条件", "Execution conditions") }}</th>
@@ -175,16 +168,8 @@ const access = (value: string) => {
                     }}
                   </span>
                 </span>
-                <span v-if="'proactive' in row && row.proactive">
-                  {{
-                    t(
-                      "主动发送：群管页核验",
-                      "Proactive sending: verify in management",
-                    )
-                  }}
-                </span>
-                <span v-else-if="!row.grants.length">{{
-                  t("无处罚动作要求", "No sanction grant required")
+                <span v-if="!row.grants.length">{{
+                  t("按具体执行动作核验", "Check the executed action")
                 }}</span>
               </td>
               <td>{{ text(row.rule) }}</td>

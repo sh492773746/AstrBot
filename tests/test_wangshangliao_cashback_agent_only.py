@@ -11,11 +11,11 @@ from test_wangshangliao_cashback_qualification import (
     scenario as qualification_scenario,
 )
 
+from astrbot.builtin_stars.wangshangliao_moderation.cashback_models import GroupRule
 from astrbot.builtin_stars.wangshangliao_moderation.cashback_store import (
     CashbackError,
     CashbackStore,
 )
-from astrbot.builtin_stars.wangshangliao_moderation.cashback_models import GroupRule
 from scripts.enable_wsl_agent_only import enable_agent_only
 
 scenario = qualification_scenario
@@ -61,12 +61,10 @@ def test_new_ordinary_rewards_stopped_without_hidden_invites(scenario):
     result = store.invitation_summary("5", "1")
     assert result["total"] == 1 and result["no_reward"] == 1
     assert result["verifying"] == result["pending"] == 0
-    summary = store.private_invitation_summaries(
-        "1", "bot", "99", ["5"], detail_group="5"
-    )[0]
-    assert summary["agent_only"] == summary["no_reward"] == 1
-    assert summary["verifying"] == summary["hold_pending"] == 0
-    assert summary["items"][0]["pricing_status"] == "no_reward"
+    assert result["agent_only"] == result["no_reward"] == 1
+    assert result["verifying"] == result["hold_pending"] == 0
+    assert result["items"][0]["pricing_status"] == "no_reward"
+    assert not hasattr(store, "private_invitation_summaries")
 
 
 @pytest.mark.parametrize("operation", ["pay", "exception"])

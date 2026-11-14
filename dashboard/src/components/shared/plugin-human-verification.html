@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!-- The official SDK requires eval; this policy applies only to this fixed document. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://*.126.net https://*.163.com https://*.163yun.com https://*.127.net; style-src 'unsafe-inline'; img-src data: blob: https://*.126.net https://*.163.com https://*.163yun.com https://*.127.net; connect-src https://*.126.net https://*.163.com https://*.163yun.com https://*.127.net; frame-src https://*.126.net https://*.163.com https://*.163yun.com https://*.127.net; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <style>
+    body { margin: 0; background: white; }
+    #captcha { margin: 12px auto; width: 320px; max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div id="captcha"></div>
+  <script>
+    const requestKey = "__REQUEST_KEY__";
+    let instance;
+    let finished = false;
+    const notify = (kind, payload = {}) => {
+      if (finished) return;
+      if (kind === "verified" || kind === "failed") finished = true;
+      parent.postMessage({
+        channel: "astrbot-human-verification", requestKey, kind, ...payload,
+      }, parent.location.origin);
+    };
+    const timer = setTimeout(() => notify("failed", {
+      reason: "verification_init_timeout",
+    }), 25000);
+    window.addEventListener("error", () => {
+      clearTimeout(timer);
+      notify("failed", { reason: "verification_script_error" });
+    });
+    const sdk = document.createElement("script");
+    sdk.src = "https://cstaticdun.126.net/load.min.js";
+    sdk.onerror = () => {
+      clearTimeout(timer);
+      notify("failed", { reason: "verification_sdk_load_failed" });
+    };
+    sdk.onload = () => {
+      try {
+        window.initNECaptcha({
+          captchaId: "cf8f9f6cefcd4fbab3a68e0bb52324b7",
+          element: "#captcha", mode: "embed", width: "320px", apiVersion: 2,
+          onVerify(error, data) {
+            if (!error && typeof data?.validate === "string" &&
+                data.validate.length > 0 && data.validate.length <= 4096) {
+              notify("verified", { validate: data.validate });
+            }
+          },
+        }, value => {
+          instance = value;
+          clearTimeout(timer);
+          notify("ready");
+        }, () => {
+          clearTimeout(timer);
+          notify("failed", { reason: "verification_service_unavailable" });
+        });
+      } catch {
+        clearTimeout(timer);
+        notify("failed", { reason: "verification_script_error" });
+      }
+    };
+    document.head.append(sdk);
+    window.addEventListener("pagehide", () => {
+      clearTimeout(timer);
+      instance?.destroy();
+    });
+  </script>
+</body>
+</html>

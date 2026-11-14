@@ -2,14 +2,22 @@
 
 ## Current Implementation
 
-Updated October 20, 2026 for the AI, knowledge and quota audit. Existing AstrBot accounts run integrated public mode;
+This source batch retires every private menu, group selector, friend approval/
+welcome, personal knowledge, support, private AI/admin guidance, finance chat and
+image intake. It is not deployed. Retain fixed group controls, native mention/
+reply lists, and existing authorized Dashboard operators' rules, images,
+activities and Invitation Settlement, without global login grants for ordinary
+group admins. See [the mapping](wangshangliao-start.md).
+Historical data/ledgers remain, not migrated to group AI. Mute-first and raid
+changes await loading and complete live acceptance; raid defense defaults off.
+Existing AstrBot accounts run integrated public mode;
 no separate public worker is active. See
 [current architecture and permissions](wangshangliao-architecture-permissions.md)
 and [current acceptance](wangshangliao-acceptance-20261015.md).
-All chat model tools are retired and private `/chat` is explanatory only.
+All chat management tools and private `/chat` are retired.
 Native @ replies, autonomous conversation and idle topics are separately opted in,
 off by default at the group master switch, tool-free and exact-binding budget-gated;
-they never restore old group-agent routes. Private use and consented groups share
+they never restore old group-agent routes. Consented groups share
 one payer's plan and cost pool; legacy manager daily increases do not replace those limits.
 Activation requires the genuine inviter's current
 native owner/admin role; codes do not bypass it. Public grants use platform,
@@ -47,14 +55,13 @@ obsolete one-off scripts are removed. Retained maintenance/test tools are
   checks are separate, using two fixtures of one and two, not complete escalation
   or phone acceptance; see [scoped evidence](wangshangliao-membership-testing.md).
 
-## AI, Knowledge and Quota Audit: October 20
+## Historical AI, Knowledge And Quota Audit: October 20, 2026
 
 ### Routes and Profiles
 
-- Private `/chat` starts read-only consultation; `/exit`, cancellation or fifteen idle
-  minutes end it. Account, authenticated sender and consultation role are scoped.
-  Administrators have no AI action tools either. A new session is intended to exclude
-  previous context, but the rejected-first-question gap below prevents an unconditional guarantee.
+- The old private consultation had a rejected-first-question isolation gap,
+  preserved below as a historical finding. That route is now retired; its
+  entry/exit/menu procedures are no longer provided.
 - Native @, autonomous replies and idle topics all resolve
   `profiles.resolve("group", account, group)`, never private `consultation`.
   They share the group persona, not members' mention histories.
@@ -63,8 +70,8 @@ obsolete one-off scripts are removed. Retained maintenance/test tools are
   knowledge references does not enable AI. Factory master/autonomous/idle switches are off;
   mentions are on behind the master switch. Default hours are 09:00-23:00 Beijing;
   equal start/end hours mean all day.
-- Models and personas are independent selections. Total control owns separate consultation
-  and group defaults; account/group overrides apply only to the group profile.
+- Models and personas are independent selections. Server operators maintain group
+  defaults and account/group overrides; the old consultation editor is removed.
   Referenced AstrBot configurations supply allowlisted model, persona, sampling, output
   and history options, not tools, skills, arbitrary request bodies or external agent runners.
   Persona example exchanges are style samples, not actual experiences or user history.
@@ -75,7 +82,7 @@ obsolete one-off scripts are removed. Retained maintenance/test tools are
 - Autonomous input keeps at most twelve messages for 120 seconds, coalesced over two seconds.
   Commands, consumed violations, unverified identities and recognized financial/private
   text are excluded. Lexical filters and redaction are limited safeguards, not semantic
-  privacy proof. Private and group calls share two service-level slots with no model wait
+  privacy proof. Group calls retain two service-level slots with no model wait
   queue; each payer pool permits only one in-flight reservation.
 - Autonomous calls request `response_format={"type":"json_object"}` and validate silence
   or an exact candidate number, quote boolean and text. Only complete `json` or unlabelled
@@ -84,8 +91,8 @@ obsolete one-off scripts are removed. Retained maintenance/test tools are
   Outcome logs contain a request digest, mode, state and reason, not message bodies.
   `completed` can mean `model_silent`, not a delivered group message.
 - All group output is plain text without `【群聊AI】` or `【客服咨询】` prefixes.
-  Private read-only AI is unchanged; group personas, member histories and legacy
-  group-consultation content never become private context.
+  Private AI is retired; personal knowledge and legacy consultation content are
+  not migrated to group AI.
 
 ### Existing Runtime Evidence
 
@@ -122,7 +129,7 @@ test posts, restarts or runtime configuration/database/session changes.
   Total control previews and confirms actual CNY income; paid-cycle model-cost budgets
   are 70% of that receipt. Personal trial cost is capped at CNY 3/calendar month.
   Daily counts are ceilings, not a promise that cost budgets permit every listed call.
-- Verified identity links private use and all self-consented groups to one pool.
+- Verified identity links all self-consented groups to one pool.
   Controller nomination is not payer consent; the payer must remain a current group manager
   in the same membership generation. An additional group cap is a stricter limit;
   zero means no additional cap, not unlimited free calls. Exemption bypasses personal/site
@@ -142,15 +149,14 @@ test posts, restarts or runtime configuration/database/session changes.
 - Only provably unsent calls release reservations. HTTP errors, timeouts or unknown
   results do not imply free usage. Silence, invalid autonomous JSON and filtered output can
   still incur model cost. Unknown group calls/deliveries block automatic replay until
-  reviewed and explicitly resumed. Quota notices go privately to the payer, not the group.
+  reviewed and explicitly resumed. No quota DMs remain; personal balances are not published to groups.
 
 ### Knowledge, History and Statistics
 
-- Personal text belongs to the authenticated transport principal and is used only in
-  that person's private consultation. Group text is exact-account/group scoped, excluding
-  managers' personal spaces and other groups. Menu 8 -> 5 edits personal knowledge;
-  9 -> 7 requires current group management. Writes use caller-owned preview confirmation,
-  scope/version checks and revocation-aware authority.
+- Personal text remains historical and is no longer used in private consultation.
+  Group text is exact-account/group scoped, excluding managers' personal spaces
+  and other groups. Server-owned group-knowledge writes retain version/authority
+  checks; personal/group knowledge menus and chat-write procedures are removed.
 - Saving/indexing makes no model call. Incremental FTS5 retrieval supplies at most five
   snippets and 2400 source characters. Each space permits 100 entries/1 MiB, each entry
   8 KiB for title plus body; site limits are 64 MiB/10000 entries.

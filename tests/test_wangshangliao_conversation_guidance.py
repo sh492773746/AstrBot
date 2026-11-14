@@ -1,14 +1,20 @@
 """Authenticated capability introductions and outgoing privacy boundaries."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from astrbot.builtin_stars.wangshangliao_moderation.command_capabilities import (
+    COMMAND_SPECS,
+    command_help,
+)
 from astrbot.builtin_stars.wangshangliao_moderation.conversation_guidance import (
     COMMON_GUIDANCE,
+    GUIDANCE_REPLY_CONTRACT,
+    MANUAL_PREFIX,
     READ_ONLY_GUIDANCE,
-    consultation_prompt,
+    admin_manual_documents,
     guidance,
 )
 from astrbot.builtin_stars.wangshangliao_moderation.main import Main
@@ -54,11 +60,17 @@ async def test_guidance_is_scoped_by_verified_role_not_claims(
         platform=SimpleNamespace(config={"id": "fixture", "credential": "SECRET"}),
         get_extra=lambda _: None,
         message_str=question,
+        stop_event=Mock(),
     )
     await plugin.plain_text_request(event, request)
-    assert READ_ONLY_GUIDANCE in request.system_prompt
-    assert COMMON_GUIDANCE in request.system_prompt
-    assert request.system_prompt.startswith("Existing persona")
+    if private:
+        event.stop_event.assert_called_once_with()
+        assert request.system_prompt == "Existing persona"
+    else:
+        event.stop_event.assert_not_called()
+        assert READ_ONLY_GUIDANCE in request.system_prompt
+        assert COMMON_GUIDANCE in request.system_prompt
+        assert request.system_prompt.startswith("Existing persona")
     assert request.extra_user_content_parts == ["Business knowledge"]
     assert "SECRET" not in request.system_prompt
     assert not request.func_tool.tools
@@ -120,12 +132,15 @@ def test_read_only_guidance_explains_navigation_and_verified_permission_limits(
     text = guidance(
         authorized=authorized, tool_available=tool_available, private=private
     )
-    assert "0只返回上一级" in text
-    assert "取消退出菜单" in text
-    assert "菜单可见不等于拥有管理权限" in text
-    assert "身份未核验时不能查询财务数据或管理群" in text
-    assert "私聊AI咨询" in text and "不能代替固定命令执行" in text
-    assert "私聊发送取消也会结束AI咨询" in text
+    assert GUIDANCE_REPLY_CONTRACT in text
+    assert "私信功能已移除" in text
+    assert "不能执行、保存、代确认" in text
+    assert "普通群管理员不自动获得AstrBot全局后台权限" in text
+    assert "群聊会话、群知识、账本、付款及审计保留" in text
+    assert "结果未知暂停核对，不自动重试" in text
+    for obsolete in ("0只返回上一级", "取消退出菜单", "菜单8", "选择群 1"):
+        assert obsolete not in text
+    assert ("【群内规则命令】" in text) is not private
 
 
 def test_guidance_does_not_recommend_retired_manual_mute_commands():
@@ -136,25 +151,95 @@ def test_guidance_does_not_recommend_retired_manual_mute_commands():
     assert "自动广告处罚、防刷屏和每日定时禁言、解除仍按设置运行" in READ_ONLY_GUIDANCE
 
 
-def test_consultation_prompt_distinguishes_menu_visibility_and_management():
-    text = consultation_prompt("Fixture current menu")
-    assert "Fixture current menu" in text
-    assert "只用简体中文回答" in text
-    assert "不输出英文思考" in text
-    assert "普通用户：菜单、我的套餐、套餐说明" in text
-    assert "仅获授权群管理：群列表、选择群" in text
-    assert "中奖名单、抽奖记录" in text
-    assert "移出成员仍须固定命令和本人确认" in text
-    assert "不要求先加好友" in text
-    assert "同时受成本预算保护" in text
+def test_group_help_preserves_lists_schedule_and_native_authority():
+    text = command_help("group", {"group_manager"}, include_server=True)
+    for fragment in (
+        "无需搜索、选择或确认",
+        "加入后立即按本群时长禁言",
+        "后台添加只登记",
+        "移出名单并解禁，分别反馈",
+        "范围1—41760整分钟",
+        "普通禁言24小时上限不变",
+        "定时禁言 23:00 08:00",
+        "本人本群授权及机器人原生群管理权限",
+        "未知结果暂停核对，不自动重试",
+        "不向普通群管理授予全局后台登录",
+    ):
+        assert fragment in text
+    assert "选择群" not in text
+    assert "确认客服" not in text
 
 
-def test_consultation_separates_activation_native_role_and_scheduled_mute():
-    text = consultation_prompt("Fixture current menu")
-    assert "开通登记可以先完成" in text
-    assert "管理功能暂停" in text
-    assert "管理 群列表" in text
-    assert "管理 选择群 1" in text
-    assert "管理 定时禁言 23:00 08:00" in text
-    assert "按机器人预览提示确认" in text
-    assert "不能把定时禁言、定时解除说成只能在App操作" in text
+def test_active_declarations_exclude_all_private_commands_and_aliases():
+    from astrbot.builtin_stars.wangshangliao_moderation import command_capabilities
+
+    assert not hasattr(command_capabilities, "RETIRED_DM_COMMANDS")
+    removed = {"菜单", "完整菜单", "群帮助", "我的权限", "客服设置", "/chat", "/exit"}
+    assert not (removed & COMMAND_SPECS.keys())
+    for spec in COMMAND_SPECS.values():
+        assert "private" not in spec.locations
+        assert not (removed & set(spec.aliases))
+        assert not spec.retired
+        assert spec.locations == (() if spec.role == "server" else ("group",))
+    for command in (
+        "黑名单",
+        "白名单",
+        "移除黑名单",
+        "选择白名单",
+        "确认白名单",
+        "关键词回复",
+        "定时广告",
+        "我的邀请",
+    ):
+        assert command in COMMAND_SPECS
+    assert "解除黑名单" in COMMAND_SPECS["移除黑名单"].aliases
+    assert "定时发言" in COMMAND_SPECS["定时广告"].aliases
+    assert "黑名单禁言时长" not in COMMAND_SPECS
+
+
+def test_group_manual_preserves_thresholds_priorities_and_pending_release():
+    documents = admin_manual_documents()
+    assert len(documents) > 10
+    assert all(title.startswith(MANUAL_PREFIX) for title in documents)
+    text = "\n".join(documents.values())
+    for fragment in (
+        "3秒5条",
+        "10秒15条",
+        "30秒5条",
+        "1、3、10分钟",
+        "前20名",
+        "至少101条",
+        "7天",
+        "不从第21名补位",
+        "黑名单优先",
+        "先核权、保存意图并提交禁言，再独立撤回",
+        "缺省关闭",
+        "尚未发布或完整实群验收",
+        "3秒3条",
+        "10秒5条",
+        "60秒两个不同新人",
+        "防护15分钟",
+        "只给其后真实新入群的非豁免成员禁言1分钟",
+        "手机直接解禁事件仍待核验",
+        "不自动重试",
+        "不自动付款",
+        "已有相应后台权限",
+        "活动与财务→邀请记账／结账",
+        "所有图片只走WebUI",
+        "每计划最多3张",
+        "先图后文",
+    ):
+        assert fragment in text
+    for obsolete in (
+        "管理 选择群",
+        "菜单8",
+        "菜单9",
+        "发送/chat",
+        "发送 /chat",
+        "客服话术 正文",
+        "广告图片 计划序号",
+    ):
+        assert obsolete not in text
+    public_only = command_help("group")
+    assert "所有人" in public_only and "本群授权管理：" not in public_only
+    assert "平台受理不等于手机显示或未来到期已经验证" in GUIDANCE_REPLY_CONTRACT

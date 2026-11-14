@@ -14,8 +14,8 @@ from data.plugins.astrbot_plugin_superbot.k3 import K3
 from data.plugins.astrbot_plugin_superbot.mines import Mines
 from data.plugins.astrbot_plugin_superbot.points import DEFAULT
 from data.plugins.astrbot_plugin_superbot.slots import Slots, group_stakes
-from data.plugins.astrbot_plugin_superbot.store import Rejected
-from data.plugins.astrbot_plugin_superbot.tenants import binding, local_config
+from data.plugins.astrbot_plugin_superbot.store import Rejected, Store
+from data.plugins.astrbot_plugin_superbot.tenants import Tenants, binding, local_config
 from data.plugins.astrbot_plugin_superbot.ui import UI
 from data.plugins.astrbot_plugin_superbot.wheel import Wheel
 from data.plugins.astrbot_plugin_superbot.wheel_admin import action as wheel_action
@@ -99,6 +99,25 @@ def test_local_operating_values_and_replay(configured, key, value):
         runtime.tenants.operating("10", "-1001", key, value, 0)
     with pytest.raises(Rejected):
         runtime.tenants.operating("20", "-1001", key, value, 1)
+
+
+def test_local_settings_survive_reopen_and_reject_stale_save(configured):
+    runtime, _, _ = configured
+    runtime.tenants.operating("10", "-1001", "slots_stakes", [100, 300], 0)
+    reopened = Store(runtime.store.path, "1", runtime.store.clock)
+    try:
+        service = Tenants(SimpleNamespace(store=reopened))
+        assert group_stakes(reopened, "-1001", "slots") == [100, 300]
+        with pytest.raises(Rejected):
+            service.operating("10", "-1001", "slots_stakes", [300], 0)
+        with pytest.raises(Rejected):
+            service.operating("20", "-1001", "slots_stakes", [300], 1)
+        assert group_stakes(reopened, "-1001", "slots") == [100, 300]
+        service.operating("10", "-1001", "slots_stakes", [300], 1)
+        assert group_stakes(reopened, "-1001", "slots") == [300]
+        assert local_config(reopened, "-1002", "slots_stakes", None) is None
+    finally:
+        reopened.close()
 
 
 def test_canada_reader_uses_group_limits_without_changing_odds(configured):
@@ -374,8 +393,16 @@ async def test_game_subpage_switch_accepts_scoped_owner(configured, game):
             "version": 0,
         },
     )
+    assert "功能状态" in ui.render.await_args.args[1]
+    assert not runtime.store.db.execute(
+        f"SELECT 1 FROM {game}_groups WHERE chat='-1001'"
+    ).fetchone()
+    payload = next(
+        p for _, p in ui.render.await_args.args[2] if p.get("feature") == game
+    )
+    await ui.action(event, payload)
     payload = ui.render.await_args.args[2][0][1]
-    await action(ui, event, payload)
+    await ui.action(event, payload)
     assert (
         runtime.store.db.execute(
             f"SELECT enabled FROM {game}_groups WHERE chat='-1001'"
@@ -384,4 +411,4 @@ async def test_game_subpage_switch_accepts_scoped_owner(configured, game):
     )
     event.effective_user.id = 20
     with pytest.raises(Rejected):
-        await action(ui, event, {**payload, "enabled": False, "version": 1})
+        await ui.action(event, {**payload, "enabled": False, "version": 1})

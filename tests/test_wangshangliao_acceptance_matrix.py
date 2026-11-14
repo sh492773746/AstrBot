@@ -44,7 +44,14 @@ def test_all_action_authorization_combinations(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "private,enabled,mentioned",
-    [(True, False, True), (False, False, True), (False, True, False)],
+    [
+        (True, False, False),
+        (True, False, True),
+        (True, True, False),
+        (True, True, True),
+        (False, False, True),
+        (False, True, False),
+    ],
 )
 async def test_disabled_message_model_entry_count_zero(
     monkeypatch, private, enabled, mentioned
@@ -84,8 +91,15 @@ async def test_disabled_message_model_entry_count_zero(
     async for _ in process.process(event):
         pass
     counter.assert_not_awaited()
-    # Positive control proves the counter is attached to the model entry.
+    # Private events remain terminal even if an obsolete wake flag is restored.
+    if private:
+        assert event.is_stopped()
     event.is_at_or_wake_command = True
     async for _ in process.process(event):
         pass
-    counter.assert_awaited_once()
+    if private:
+        counter.assert_not_awaited()
+    else:
+        # Positive control proves the group counter reaches the model entry.
+        counter.assert_awaited_once()
+    event.processing_completion.cancel()

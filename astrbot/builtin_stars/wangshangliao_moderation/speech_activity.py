@@ -1,4 +1,4 @@
-"""Two-day, content-free activity statistics from authenticated inbox records."""
+"""Two-day statistics and authorized, transient history reads from native records."""
 
 import asyncio
 import json
@@ -71,6 +71,8 @@ class SpeechActivity:
             CREATE INDEX IF NOT EXISTS speech_day_member
                 ON speech_messages(account,group_id,day,member);
             CREATE INDEX IF NOT EXISTS speech_retention ON speech_messages(day);
+            CREATE INDEX IF NOT EXISTS speech_member_recent
+                ON speech_messages(account,group_id,member,stamp DESC,message);
             CREATE TABLE IF NOT EXISTS speech_cursors(
                 account TEXT NOT NULL, group_id TEXT NOT NULL,
                 received REAL NOT NULL, inbox_row INTEGER NOT NULL,
@@ -240,7 +242,8 @@ class SpeechActivity:
                             row[0]
                             for row in audit.execute(
                                 "SELECT message FROM content_violations WHERE account=? AND group_id=? AND observed>=? "
-                                "AND status IN ('claimed','warned','recalled','muted','kicked','unknown')",
+                                "AND status IN ('observed','claimed','warned','recalled','muted','kicked','unknown',"
+                                "'preflight_failed','execution_rejected','review_only','identity_unverified')",
                                 (account, group, yesterday),
                             )
                         )
@@ -397,6 +400,143 @@ class SpeechActivity:
                 else None,
             }
 
+    def history(
+        self,
+        instance,
+        account,
+        group,
+        ledger_path,
+        members,
+        *,
+        period="recent",
+        query="",
+        now=None,
+    ):
+        """Project recent effective text without copying bodies into statistics.
+
+        Args:
+            instance: Authorized native instance ID.
+            account: Frozen robot account.
+            group: Frozen enabled group.
+            ledger_path: That adapter's authenticated inbox path.
+            members: Up to five server-resolved whitelist member identities.
+            period: The retained two-day window, today or yesterday.
+            query: Optional literal content substring, not SQL or a regex.
+            now: Optional deterministic clock for tests.
+
+        Returns:
+            Per-member effective text totals and up to 100 matching messages.
+            Missing source bodies are explicitly counted instead of fabricated.
+
+        Raises:
+            ValueError: If the scope, period or native ledger is unavailable.
+            sqlite3.Error: If an isolated bounded database operation fails.
+        """
+        if (
+            period not in {"recent", "today", "yesterday"}
+            or not isinstance(query, str)
+            or len(query) > 64
+            or not 1 <= len(members) <= 5
+            or len({row["id"] for row in members}) != len(members)
+        ):
+            raise ValueError("member_whitelist_history_arguments")
+        now = time.time() if now is None else now
+        yesterday, today, tomorrow = day_window(now)
+        start = today if period == "today" else yesterday
+        end = today if period == "yesterday" else tomorrow
+        ledger_path = Path(ledger_path)
+        if not ledger_path.is_file() or ledger_path.is_symlink():
+            raise ValueError("member_whitelist_history_unavailable")
+        # Reuse moderation reconciliation so late recalls cannot inflate exports.
+        self.collect(instance, account, group, ledger_path, now)
+        statistics = instance_dir(instance) / "speech_activity.sqlite3"
+        result = []
+        with closing(
+            sqlite3.connect(ledger_path.as_uri() + "?mode=ro", uri=True, timeout=1)
+        ) as db:
+            db.row_factory = sqlite3.Row
+            db.execute(
+                "ATTACH DATABASE ? AS statistics",
+                (statistics.resolve().as_uri() + "?mode=ro",),
+            )
+            db.execute("BEGIN")
+            cursor = db.execute(
+                "SELECT updated,catching_up FROM statistics.speech_cursors "
+                "WHERE account=? AND group_id=?",
+                (account, group),
+            ).fetchone()
+            for member in members:
+                scope = (account, group, member["id"], start, end)
+                count = db.execute(
+                    "SELECT COUNT(*) FROM statistics.speech_messages "
+                    "WHERE account=? AND group_id=? AND member=? AND day>=? "
+                    "AND day<? AND kind='text'",
+                    scope,
+                ).fetchone()[0]
+                source = (
+                    " FROM statistics.speech_messages s JOIN inbox i "
+                    "ON i.account=s.account AND i.team=s.group_id AND i.message=s.message "
+                    "WHERE s.account=? AND s.group_id=? AND s.member=? AND s.day>=? "
+                    "AND s.day<? AND s.kind='text' "
+                    "AND i.state IN ('pending','processing','processed') "
+                    "AND json_valid(i.payload) "
+                    "AND json_extract(i.payload,'$.sender')=s.member "
+                    "AND COALESCE(json_extract(i.payload,'$.kind'),'text')='text' "
+                    "AND json_type(i.payload,'$.text')='text' "
+                    "AND length(json_extract(i.payload,'$.text')) BETWEEN 1 AND 16384"
+                )
+                available = db.execute("SELECT COUNT(*)" + source, scope).fetchone()[0]
+                filtered = source + (
+                    " AND instr(lower(json_extract(i.payload,'$.text')),lower(?))>0"
+                    if query
+                    else ""
+                )
+                args = (*scope, query) if query else scope
+                matched = (
+                    db.execute("SELECT COUNT(*)" + filtered, args).fetchone()[0]
+                    if query
+                    else available
+                )
+                rows = db.execute(
+                    "SELECT s.message,s.stamp,json_extract(i.payload,'$.text') text"
+                    + filtered
+                    + " ORDER BY s.stamp DESC,s.message DESC LIMIT 100",
+                    args,
+                ).fetchall()
+                result.append(
+                    {
+                        "id": member["id"],
+                        "name": member["name"],
+                        "count": count,
+                        "matched_count": matched,
+                        "unavailable": max(0, count - available),
+                        "messages": [
+                            {
+                                "message": row["message"],
+                                "stamp": row["stamp"],
+                                "text": "".join(
+                                    char
+                                    for char in row["text"]
+                                    if char in "\n\t"
+                                    or unicodedata.category(char)
+                                    not in {"Cc", "Cf", "Zl", "Zp"}
+                                ),
+                            }
+                            for row in reversed(rows)
+                        ],
+                    }
+                )
+        return {
+            "members": result,
+            "period": period,
+            "query": query,
+            "from_date": datetime.fromtimestamp(start, ZONE).date().isoformat(),
+            "to_date": datetime.fromtimestamp(end - 1, ZONE).date().isoformat(),
+            "timezone": "Asia/Shanghai",
+            "updated_at": cursor["updated"] if cursor else 0,
+            "catching_up": bool(cursor["catching_up"]) if cursor else True,
+        }
+
     @staticmethod
     def report_config(instance, account):
         """Read a bounded, account-specific report definition, not chat history.
@@ -459,7 +599,7 @@ class SpeechActivity:
             now: Optional test clock.
 
         Returns:
-            Today's and yesterday's text-only member/group totals and freshness.
+            Today's and yesterday's text-only member/group hourly totals and freshness.
         """
         now = time.time() if now is None else now
         yesterday, today, tomorrow = day_window(now)
@@ -474,16 +614,19 @@ class SpeechActivity:
             )
             db.execute("DELETE FROM speech_cursors WHERE updated<?", (yesterday,))
             rows = db.execute(
-                f"SELECT day,group_id,member,COUNT(*) count FROM speech_messages "
+                f"SELECT day,group_id,member,CAST((stamp-day)/3600 AS INTEGER) hour,"
+                f"COUNT(*) count FROM speech_messages "
                 f"WHERE account=? AND group_id IN ({group_slots}) "
                 f"AND member IN ({member_slots}) AND kind='text' AND day>=? AND day<? "
-                "GROUP BY day,group_id,member",
+                "GROUP BY day,group_id,member,hour",
                 (account, *groups, *members, yesterday, tomorrow),
             ).fetchall()
-            counts = {
-                (row["day"], row["group_id"], row["member"]): row["count"]
-                for row in rows
-            }
+            counts = {}
+            hourly = {}
+            for row in rows:
+                key = (row["day"], row["group_id"], row["member"])
+                counts[key] = counts.get(key, 0) + row["count"]
+                hourly[(*key, row["hour"])] = row["count"]
             cursors = db.execute(
                 f"SELECT group_id,updated,catching_up FROM speech_cursors WHERE account=? AND group_id IN ({group_slots})",
                 (account, *groups),
@@ -495,7 +638,20 @@ class SpeechActivity:
                 values = [
                     counts.get((start, group, member["id"]), 0) for group in groups
                 ]
-                people.append({**member, "counts": values, "total": sum(values)})
+                people.append(
+                    {
+                        **member,
+                        "counts": values,
+                        "total": sum(values),
+                        "hours": [
+                            [
+                                hourly.get((start, group, member["id"], hour), 0)
+                                for group in groups
+                            ]
+                            for hour in range(24)
+                        ],
+                    }
+                )
             totals = [
                 sum(row["counts"][index] for row in people)
                 for index in range(len(groups))

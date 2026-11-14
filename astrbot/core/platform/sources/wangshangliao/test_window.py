@@ -17,15 +17,14 @@ class TestWindow:
             or type(budget) is not int
             or not 1 <= budget <= 10
             or not isinstance(groups, list)
-            or any(not isinstance(g, str) for g in groups)
+            or not groups
+            or any(not isinstance(g, str) or g.startswith("private/") for g in groups)
             or not set(groups) <= set(receiver.enabled_groups)
             or not isinstance(scopes, list)
             or not scopes
             or any(not isinstance(s, str) for s in scopes)
             or not set(scopes)
             <= {
-                "private_commands",
-                "private_ai",
                 "group_commands",
                 "group_ai",
                 "group_rules",
@@ -37,7 +36,6 @@ class TestWindow:
                 for w in keywords
             )
             or ("group_rules" in scopes and not keywords)
-            or (any(s.startswith("group_") for s in scopes) and not groups)
         ):
             raise ProtocolError("test_window_arguments")
         self.receiver, self.sender = receiver, sender
@@ -82,7 +80,7 @@ class TestWindow:
         """Reserve one ingress budget for an exact native message.
 
         Args:
-            group: Native session key or business group ID.
+            group: Business group ID.
             mid: Stable inbound message ID.
             payload: Authenticated native payload.
 
@@ -90,20 +88,13 @@ class TestWindow:
             Accepted scope or an empty string.
         """
         key = (group, mid)
-        if not self.active() or str(payload.get("sender")) != self.sender.account:
+        if (
+            group.startswith("private/")
+            or group not in self.groups
+            or not self.active()
+            or str(payload.get("sender")) != self.sender.account
+        ):
             return ""
-        if group.startswith("private/"):
-            from .wire import b64
-
-            peer = str(getattr(self.sender, "nim_account", "") or "")
-            if (
-                not peer.isascii()
-                or not peer.isdecimal()
-                or not 0 < int(peer) < 1 << 32
-                or payload.get("transport_peer") != peer
-                or group != f"private/{self.sender.account}/{b64(peer.encode())}"
-            ):
-                return ""
         if key in self.accepted:
             return self.accepted[key]
         if self.remaining <= 0:
@@ -126,23 +117,10 @@ class TestWindow:
                     break
         from .runtime_policy import runtime
 
-        command = bool(runtime.recognize(text))
-        if group.startswith("private/") and text in {
-            "/help",
-            "/帮助",
-            "/new",
-            "/stats",
-        }:
-            command = True
-        scope = "private_commands" if group.startswith("private/") else "group_commands"
-        if not group.startswith("private/") and group not in self.groups:
-            return ""
+        command = bool(runtime.recognize(text)) or self.lottery_command(group, text)
+        scope = "group_commands"
         if not command:
-            if group.startswith("private/"):
-                if not text or text.startswith("/"):
-                    return ""
-                scope = "private_ai"
-            elif (
+            if (
                 "group_ai" in self.scopes
                 and str(getattr(self.receiver, "nim_account", ""))
                 in payload.get("mentions", [])
@@ -160,6 +138,38 @@ class TestWindow:
         self.accepted[key] = scope
         return scope
 
+    def lottery_command(self, group, text):
+        """Match only the phrase frozen by the dedicated controlled draw.
+
+        Args:
+            group: Native business group ID.
+            text: Complete message text.
+
+        Returns:
+            Whether this exact phrase belongs to the original bounded fixture.
+        """
+        binding = getattr(self, "_lottery_entry", None)
+        return bool(
+            self.active()
+            and self.receiver.account == "43506527"
+            and self.sender.account == "23691273"
+            and group == "1459282"
+            and self.groups == [group]
+            and self.scopes == ["group_commands"]
+            and getattr(self.receiver, "test_window", None) is self
+            and isinstance(binding, tuple)
+            and len(binding) == 2
+            and isinstance(binding[0], str)
+            and binding[0]
+            and isinstance(binding[1], str)
+            and binding[1].startswith("WSL_TEST_")
+            and 1 <= len(binding[1]) <= 32
+            and isinstance(text, str)
+            and text.strip() == binding[1]
+            and getattr(self.receiver, "_lottery_test_fixture", None)
+            == (binding[0], self)
+        )
+
     def reply(self, group, mid, operation=None):
         """Consume the single result reply associated with an admitted command.
 
@@ -172,13 +182,14 @@ class TestWindow:
         """
         key = (group, mid)
         if (
-            not self.active()
+            group.startswith("private/")
+            or group not in self.groups
+            or not self.active()
             or (
                 key in self.replies
                 and (operation is None or self.replies[key] != operation)
             )
-            or self.accepted.get(key)
-            not in {"private_commands", "private_ai", "group_commands", "group_ai"}
+            or self.accepted.get(key) not in {"group_commands", "group_ai"}
         ):
             return False
         self.replies[key] = operation
@@ -194,59 +205,3 @@ class TestWindow:
             "groups": self.groups,
             "scopes": self.scopes,
         }
-
-    def send_command(self, sender, target, text, key, *, consume=False):
-        """Allow bounded private commands toward the window's receiver only.
-
-        Args:
-            sender: Original sending adapter instance.
-            target: Native private session key including verified NIM identity.
-            text: Complete outgoing command.
-            key: Persistent outbox operation key.
-            consume: Reserve one attempt before transport.
-
-        Returns:
-            Whether this exact command attempt is permitted.
-        """
-        from .runtime_policy import runtime
-        from .wire import b64
-
-        expected = f"private/{self.receiver.account}/{b64(str(self.receiver.nim_account).encode())}"
-        command = text.strip()
-        if (
-            sender is not self.sender
-            or getattr(self.receiver, "test_window", None) is not self
-            or not self.active()
-            or target != expected
-            or not (
-                (
-                    "private_commands" in self.scopes
-                    and (
-                        runtime.recognize(command)
-                        or command
-                        in {
-                            "/群管",
-                            "/群管帮助",
-                            "/help",
-                            "/帮助",
-                            "/new",
-                            "/stats",
-                        }
-                        or command.startswith("/群管 ")
-                    )
-                )
-                or (
-                    "private_ai" in self.scopes
-                    and command
-                    and not command.startswith("/")
-                    and not runtime.recognize(command)
-                )
-            )
-            or self.remaining <= 0
-            or (key not in self.outbound_keys and self.outbound_remaining <= 0)
-        ):
-            return False
-        if consume and key not in self.outbound_keys:
-            self.outbound_keys.add(key)
-            self.outbound_remaining -= 1
-        return True

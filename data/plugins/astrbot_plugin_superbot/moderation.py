@@ -3,7 +3,8 @@
 import asyncio
 import json
 import re
-from contextlib import nullcontext
+from contextlib import asynccontextmanager, nullcontext
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -12,6 +13,30 @@ from telegram import ChatPermissions
 from .store import Rejected, encode
 
 TZ = ZoneInfo("Asia/Shanghai")
+GROUP_MOD_CONTEXT = ContextVar("superbot_moderation_request", default=None)
+
+
+def scoped_moderator(store, uid, chat):
+    """Only a Telegram-verified group request may waive legacy business ACL."""
+    return GROUP_MOD_CONTEXT.get() == (id(store), str(uid), str(chat))
+
+
+@asynccontextmanager
+async def moderation_request(runtime, uid, chat):
+    """Bind one verified group request, including private input steps."""
+    from .group_authority import GroupAuthority
+
+    if not chat:
+        yield
+        return
+    async with GroupAuthority(runtime).session(uid, chat, allow_paused=True):
+        marker = GROUP_MOD_CONTEXT.set((id(runtime.store), str(uid), str(chat)))
+        try:
+            yield
+        finally:
+            GROUP_MOD_CONTEXT.reset(marker)
+
+
 SEND = tuple(
     k
     for k in ChatPermissions.__slots__
@@ -99,79 +124,38 @@ class Moderation:
         )
 
     async def check(self, uid, chat, action="mute", enabled=True):
-        from .tenants import platform_group
+        from .tenants import Tenants
 
-        if not platform_group(self.store, chat):
-            if not self.store.get("modules", {}).get("moderation"):
-                raise Rejected("群管模块尚未开启")
-            permission = (
-                None
-                if action == "view"
-                else (
-                    "can_delete_messages"
-                    if action == "delete"
-                    else "can_restrict_members"
-                )
-            )
-            await self.runtime.tenants.verify(uid, chat, "moderation", permission)
-            if not self.store.get("modules", {}).get("moderation"):
-                raise Rejected("群管模块已关闭")
-            if enabled and not self.row(chat)["enabled"]:
-                raise Rejected("此群未启用")
-            info = await self.runtime.bot.get_chat(chat)
-            return info, []
-        self.store.require(uid, "moderation", chat=chat)
         if not self.store.get("modules", {}).get("moderation"):
             raise Rejected("群管模块尚未开启")
-        group = self.row(chat)
-        if enabled and not group["enabled"]:
-            raise Rejected("此群未启用")
         if (
-            not self.store.allowed(uid, "manager")
-            and not self.store.db.execute(
-                "SELECT 1 FROM mod_acl WHERE uid=? AND chat=?", (str(uid), str(chat))
-            ).fetchone()
+            not getattr(self.runtime, "application", None)
+            or not self.runtime.application.running
         ):
-            raise Rejected("没有此群的授权")
-        if not self.runtime.application or not self.runtime.application.running:
             raise Rejected("机器人离线")
-        bot = self.runtime.bot
-        info = await bot.get_chat(chat)
-        if info.type != "supergroup":
-            raise Rejected("首期仅支持 Telegram 超级群")
-        members = [
-            await bot.get_chat_member(chat, int(uid)),
-            await bot.get_chat_member(chat, bot.id),
-        ]
+        if not getattr(self.runtime, "tenants", None):
+            self.runtime.tenants = Tenants(self.runtime)
         permission = (
-            "can_delete_messages" if action == "delete" else "can_restrict_members"
+            None
+            if action == "view"
+            else (
+                "can_delete_messages" if action == "delete" else "can_restrict_members"
+            )
         )
-        for index, member in enumerate(members):
-            if member.status != "creator" and (
-                member.status != "administrator"
-                or (action != "view" and not getattr(member, permission, False))
-            ):
-                if index == 1:
-                    label = (
-                        "删除消息" if action == "delete" else "封禁成员（含禁言、踢出）"
-                    )
-                    raise Rejected("请把我设置为管理员，并赋予相关权限：" + label)
-                raise Rejected("你在目标群缺少对应 Telegram 管理权限")
-        # Recheck local revocation after network awaits.
-        self.store.require(uid, "moderation")
-        latest = self.row(chat)
-        if latest["version"] != group["version"] or not self.store.get(
-            "modules", {}
-        ).get("moderation"):
-            raise Rejected("群配置已变化，请重新预览")
+        await self.runtime.tenants.verify(
+            uid, chat, "moderation", permission, allow_paused=not enabled
+        )
+        actor = await self.runtime.bot.get_chat_member(chat, int(uid))
         if (
-            not self.store.allowed(uid, "manager")
-            and not self.store.db.execute(
-                "SELECT 1 FROM mod_acl WHERE uid=? AND chat=?", (str(uid), str(chat))
-            ).fetchone()
+            permission
+            and actor.status != "creator"
+            and not getattr(actor, permission, False)
         ):
-            raise Rejected("群授权已撤销")
-        return info, [m.to_dict() for m in members]
+            raise Rejected("你在目标群缺少对应Telegram管理权限。")
+        self.store.require(uid, "moderation", chat=chat)
+        if enabled and not self.row(chat)["enabled"]:
+            raise Rejected("此群未启用")
+        return await self.runtime.bot.get_chat(chat), []
 
     async def preview(self, uid, chat, action, target="", minutes=0):
         info, rights = await self.check(uid, chat, action)
@@ -251,6 +235,7 @@ class Moderation:
         return payload
 
     async def execute(self, uid, payload, op_id, scheduled=False, locked=False):
+
         chat, action = payload["chat"], payload["op"]
         async with (
             nullcontext() if locked else self.locks.setdefault(chat, asyncio.Lock())
@@ -261,24 +246,15 @@ class Moderation:
                 raise Rejected("操作已提交，请查看审计")
             if payload["version"] != self.row(chat)["version"]:
                 raise Rejected("群配置已变化，请重新预览")
-            if not scheduled and action in {"mute_all", "unmute_all"}:
-                self.pause(chat, "manual_override")
             current = await self.preview(
                 uid, chat, action, payload.get("target", ""), payload.get("minutes", 0)
             )
-            self.store.require(uid, "moderation")
+            self.store.require(uid, "moderation", chat=chat)
             if (
                 not self.store.get("modules", {}).get("moderation")
                 or self.row(chat)["version"] != payload["version"]
             ):
                 raise Rejected("群配置已变化")
-            if (
-                not self.store.allowed(uid, "manager")
-                and not self.store.db.execute(
-                    "SELECT 1 FROM mod_acl WHERE uid=? AND chat=?", (str(uid), chat)
-                ).fetchone()
-            ):
-                raise Rejected("群授权已撤销")
             if scheduled:
                 rule = self.store.db.execute(
                     "SELECT * FROM mod_schedules WHERE chat=?", (chat,)
@@ -322,6 +298,8 @@ class Moderation:
                     or not json.loads(content["config"])["enabled"]["reports"]
                 ):
                     raise Rejected("自动审理或群规已变化，停止处罚")
+            if not scheduled and action in {"mute_all", "unmute_all"}:
+                self.pause(chat, "manual_override")
             self.store.db.execute(
                 "INSERT INTO mod_ops(id,chat,actor,action,payload,status,step,at) VALUES(?,?,?,?,?,'executing','submitted',?)",
                 (op_id, chat, str(uid), action, encode(current), self.store.clock()),
@@ -357,6 +335,8 @@ class Moderation:
                     await bot.unban_chat_member(chat, target, only_if_banned=True)
                 elif action == "delete":
                     await bot.delete_message(chat, target)
+                    if getattr(self.runtime, "activities", None):
+                        self.runtime.activities.retract(chat, target)
                 else:
                     permissions = dict(current["permissions"])
                     for key in SEND:
@@ -425,19 +405,20 @@ class Moderation:
                     continue
                 if self.store.clock() - row["next"] > 15:
                     raise Rejected("missed_boundary")
-                payload = await self.preview(row["actor"], chat, row["action"])
-                payload["schedule_version"] = row["version"]
-                fresh = self.store.db.execute(
-                    "SELECT * FROM mod_schedules WHERE chat=?", (chat,)
-                ).fetchone()
-                if not fresh["enabled"] or fresh["version"] != row["version"]:
-                    continue
-                await self.execute(
-                    row["actor"],
-                    payload,
-                    f"schedule:{chat}:{row['version']}:{row['next']}:{row['action']}",
-                    scheduled=True,
-                )
+                async with moderation_request(self.runtime, row["actor"], chat):
+                    payload = await self.preview(row["actor"], chat, row["action"])
+                    payload["schedule_version"] = row["version"]
+                    fresh = self.store.db.execute(
+                        "SELECT * FROM mod_schedules WHERE chat=?", (chat,)
+                    ).fetchone()
+                    if not fresh["enabled"] or fresh["version"] != row["version"]:
+                        continue
+                    await self.execute(
+                        row["actor"],
+                        payload,
+                        f"schedule:{chat}:{row['version']}:{row['next']}:{row['action']}",
+                        scheduled=True,
+                    )
                 stamp, action = boundary(row["start"], row["end"], self.store.clock())
                 self.store.db.execute(
                     "UPDATE mod_schedules SET next=?,action=?,error='' WHERE chat=? AND version=? AND enabled=1",

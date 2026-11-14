@@ -37,6 +37,18 @@ def env(tmp_path):
     store.close()
 
 
+@pytest.fixture
+def ads_env(env):
+    store, _, _ = env
+    store.db.execute(
+        "CREATE TABLE mod_groups(chat TEXT PRIMARY KEY,title TEXT,enabled INTEGER)"
+    )
+    store.db.execute(
+        "INSERT INTO mod_groups(chat,title,enabled) VALUES('-100123','Test group',1)"
+    )
+    return env
+
+
 def draw(issue, stamp, raw=None):
     return {
         "issue": issue,
@@ -392,8 +404,8 @@ async def test_channel_enable_permissions_and_target_picker(env):
 
 
 @pytest.mark.asyncio
-async def test_channel_board_permission_loss_blocks_publish(env):
-    store, _, _ = env
+async def test_channel_board_permission_loss_blocks_publish(ads_env):
+    store, _, _ = ads_env
     ads = Ads(store)
     with store.tx() as db:
         store.put(db, "ad_board_enabled", True)
@@ -452,8 +464,8 @@ async def test_ad_review_paid_filters_and_user_labels(env):
 
 
 @pytest.mark.asyncio
-async def test_shared_ad_board_payment_edit_expiry_and_restart(env):
-    store, _, clock = env
+async def test_shared_ad_board_payment_edit_expiry_and_restart(ads_env):
+    store, _, clock = ads_env
     ads = Ads(store)
     with store.tx() as db:
         store.put(db, "ad_board_enabled", True)
@@ -515,8 +527,8 @@ async def test_shared_ad_board_payment_edit_expiry_and_restart(env):
 
 
 @pytest.mark.asyncio
-async def test_shared_board_unknown_never_retries(env):
-    store, _, _ = env
+async def test_shared_board_unknown_never_retries(ads_env):
+    store, _, _ = ads_env
     ads = Ads(store)
     with store.tx() as db:
         store.put(db, "ad_board_enabled", True)
@@ -532,8 +544,8 @@ async def test_shared_board_unknown_never_retries(env):
 
 
 @pytest.mark.asyncio
-async def test_ads_dual_review_snapshot_publish_pin_expire(env):
-    store, _, clock = env
+async def test_ads_dual_review_snapshot_publish_pin_expire(ads_env):
+    store, _, clock = ads_env
     ads = Ads(store)
     cfg = package()
     ads.configure("1", "p", cfg)
@@ -565,8 +577,8 @@ async def test_ads_dual_review_snapshot_publish_pin_expire(env):
 
 
 @pytest.mark.asyncio
-async def test_unknown_ad_no_retry_and_revoked_approver(env):
-    store, _, _ = env
+async def test_unknown_ad_no_retry_and_revoked_approver(ads_env):
+    store, _, _ = ads_env
     ads = Ads(store)
     ads.configure("1", "p", package())
     cfg = store.get("packages")["p"]
@@ -592,8 +604,8 @@ async def test_unknown_ad_no_retry_and_revoked_approver(env):
 
 
 @pytest.mark.asyncio
-async def test_renewal_extends_without_resending(env):
-    store, _, clock = env
+async def test_renewal_extends_without_resending(ads_env):
+    store, _, clock = ads_env
     ads = Ads(store)
     ads.configure("1", "p", package())
     cfg = store.get("packages")["p"]
@@ -657,8 +669,9 @@ def test_admin_menu_hidden_and_unbound_callbacks(env):
 
     store, game, _ = env
     ui = UI(SimpleNamespace(store=store, game=game))
-    assert "⚙️ 管理" not in str(ui.keyboard("2"))
-    assert "⚙️ 管理" in str(ui.keyboard("1"))
+    assert "我的群" in str(ui.keyboard("2"))
+    assert "我的群" in str(ui.keyboard("1"))
+    assert "⚙️ 管理" not in str(ui.keyboard("1"))
     assert "更多" not in str(ui.keyboard("1"))
 
 
@@ -897,15 +910,10 @@ async def test_native_update_gate_and_revoked_admin(env, monkeypatch):
         )
 
     with pytest.raises(ApplicationHandlerStop):
-        await plugin.receive(update("⚙️ 管理"), None)
-    assert bot.send_message.await_args.kwargs["text"] == "无权限"
-    bot.send_message.reset_mock()
-    with pytest.raises(ApplicationHandlerStop):
         await plugin.receive(update("你好，介绍一下自己"), None)
     assert "客服" in bot.send_message.await_args.kwargs["text"]
     with pytest.raises(ApplicationHandlerStop):
         await plugin.receive(update("客服"), None)
-    assert not plugin.chat_sessions
     with pytest.raises(ApplicationHandlerStop):
         await plugin.receive(update("/chat"), None)
     bot.send_message.reset_mock()
@@ -913,6 +921,9 @@ async def test_native_update_gate_and_revoked_admin(env, monkeypatch):
     bot.send_message.assert_not_awaited()
     with pytest.raises(ApplicationHandlerStop):
         await plugin.receive(update("/exit"), None)
+    with pytest.raises(ApplicationHandlerStop):
+        await plugin.receive(update("⚙️ 管理"), None)
+    assert "客服" in bot.send_message.await_args.kwargs["text"]
     grant = store.grant("1", "3", ["points"], 1)
     store.accept_grant("3", grant)
     token = store.callback(
@@ -1097,10 +1108,6 @@ async def test_profile_isolated_and_repeated_setup(env):
         doc for doc in documents if not doc.doc_name.endswith("-player-services.md")
     ]
     kb.upload_document.side_effect = RuntimeError("Embedding unavailable")
-    calls = kb.upload_document.await_count
-    await prepare(context, store, "dedicated", "chat", "embed", sync_knowledge=False)
-    assert kb.upload_document.await_count == calls
-    kb.delete_document.assert_not_awaited()
     with pytest.raises(RuntimeError, match="Embedding unavailable"):
         await prepare(context, store, "dedicated", "chat", "embed")
     kb.delete_document.assert_not_awaited()

@@ -1,5 +1,6 @@
 """Readable advertising settings with scoped, single-field confirmation."""
 
+import json
 import secrets
 
 from .store import Rejected
@@ -24,6 +25,26 @@ CHOICES = {
 }
 
 
+async def visible_packages(ui, uid, packages):
+    """Hide registered group configuration from unrelated maintenance roles."""
+    rows = ui.store.db.execute(
+        "SELECT chat FROM tenant_groups WHERE chat IN "
+        "(SELECT json_extract(value,'$.target') FROM json_each(?))",
+        (json.dumps(packages),),
+    ).fetchall()
+    if not rows:
+        return packages
+    from .group_visibility import visible_groups
+
+    allowed = {row["chat"] for row in await visible_groups(ui.runtime, uid, rows)}
+    registered = {row["chat"] for row in rows}
+    return {
+        key: package
+        for key, package in packages.items()
+        if package["target"] not in registered or package["target"] in allowed
+    }
+
+
 async def action(ui, update, payload):
     """Display data as text and choose one field via permission-bound callbacks.
 
@@ -37,14 +58,18 @@ async def action(ui, update, payload):
         raise Rejected("请在私聊管理广告。")
     ui.store.require(uid, "ads")
     kind = payload["action"]
-    packages = ui.store.get("packages", {})
+    packages = await visible_packages(ui, uid, ui.store.get("packages", {}))
     back = [("⬅️ 广告管理", {"action": "admin_ads"})]
     if kind in {"ap_home", "ap_list"}:
         ui.store.clear_dialog(uid)
     if kind == "ap_home":
         counts = dict(
             ui.store.db.execute(
-                "SELECT status,COUNT(*) FROM platform_ads GROUP BY status"
+                "SELECT status,COUNT(*) FROM platform_ads a WHERE NOT EXISTS("
+                "SELECT 1 FROM tenant_groups g WHERE g.chat=json_extract(a.package,'$.target')) "
+                "OR json_extract(a.package,'$.target') IN "
+                "(SELECT json_extract(value,'$.target') FROM json_each(?)) GROUP BY status",
+                (json.dumps(packages),),
             ).fetchall()
         )
         text = (
@@ -64,7 +89,7 @@ async def action(ui, update, payload):
                 ("🧱 广告栏容量", {"action": "ad_capacities"}),
                 ("⚠️ 广告异常", {"action": "ad_recovery"}),
                 ("💳 充值核查", {"action": "ad_chain_review"}),
-                ("⬅️ 管理中心", {"action": "admin"}),
+                ("返回本BOT总控", {"action": "bot_control"}),
             ],
             fold_sections=True,
         )
@@ -160,6 +185,21 @@ async def action(ui, update, payload):
             rows = ui.store.db.execute(
                 "SELECT chat,title FROM platform_mod_groups WHERE enabled=1 UNION SELECT chat,title FROM ad_channels WHERE enabled=1 ORDER BY chat"
             ).fetchall()
+            from .group_visibility import visible_groups
+
+            bound = {
+                row["chat"]
+                for row in ui.store.db.execute("SELECT chat FROM tenant_groups")
+            }
+            local = await visible_groups(
+                ui.runtime, uid, [row for row in rows if row["chat"] in bound]
+            )
+            allowed = {row["chat"] for row in local}
+            rows = [
+                row
+                for row in rows
+                if row["chat"] not in bound or row["chat"] in allowed
+            ]
             page = min(
                 max(0, int(payload.get("page", 0))), max(0, (len(rows) - 1) // 8)
             )

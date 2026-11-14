@@ -646,6 +646,9 @@ class Community:
                 .replace("{name}", user.full_name[:60])
                 .replace("{group}", title[:100])[:3000]
             )
+        review = getattr(self.runtime, "semantic_review", None)
+        if review and (consent := review.consent(chat)) and consent["enabled"]:
+            text += "\n本群已开启机器人可见文字的人工语义复核记录（普通正文7天，选存30天）。"
         rows = []
         for kind, label in (("rules", "查看群规"), ("notes", "常用说明")):
             if config["enabled"][kind]:

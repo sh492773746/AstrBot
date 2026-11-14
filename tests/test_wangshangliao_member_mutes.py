@@ -14,7 +14,10 @@ from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
 
 
 @pytest_asyncio.fixture
-async def scope(rpc_scope):
+async def scope(rpc_scope, monkeypatch, tmp_path):
+    from astrbot.core.platform.sources.wangshangliao import blacklist
+
+    monkeypatch.setattr(blacklist, "instance_dir", lambda _: tmp_path)
     value, adapter, rows = rpc_scope
     adapter.groups = {"5": "1005", "6": "1006"}
     muted = {"1002"}

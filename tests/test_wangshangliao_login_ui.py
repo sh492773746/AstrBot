@@ -1452,7 +1452,16 @@ async def test_reauthentication_save_excludes_runtime_and_managed_policy(
             await page.route(base + "/**", lambda route: route.continue_())
             await page.route(base + "/api/**", api)
             url = base + "/tests/fixtures/wangshangliao.html?existing=1"
-            await page.goto(url + ("&integrated=1" if integrated == "managed" else ""))
+            await page.goto(
+                url
+                + "&retired=1"
+                + ("&integrated=1" if integrated == "managed" else "")
+            )
+            assert not re.search(
+                r"私聊|私信|好友|private (texts|messages|replies)|friend",
+                await page.locator("form").inner_text(),
+                re.IGNORECASE,
+            )
             await page.get_by_role(
                 "button", name=re.compile("^(重新登录|Log in again)$")
             ).click()
@@ -1489,6 +1498,7 @@ async def test_reauthentication_save_excludes_runtime_and_managed_policy(
             assert saved["account_id"] == "42"
             assert saved["enable"] is False
             assert not any(key.startswith("_") for key in saved)
+            assert "reply_private" not in saved
             business = {
                 "enabled_groups",
                 "reply_private",
@@ -1502,6 +1512,17 @@ async def test_reauthentication_save_excludes_runtime_and_managed_policy(
                 assert not business.intersection(saved)
             else:
                 assert saved["enabled_groups"] == []
+                assert saved["reply_groups"] == {"34": True, "35": False}
+                assert saved["ai_routes"] == {"groups": {"34": "group-model"}}
+                assert saved["proactive_send"] == {"enabled": True, "targets": ["34"]}
+                assert saved["developer_test"] == {
+                    "groups": ["34"],
+                    "scopes": ["group_rules"],
+                }
+                assert saved["moderation"] == {
+                    "enabled": True,
+                    "permissions": {"34": ["mute", "recall", "unmute"]},
+                }
             assert actions.count("verify_security_code") == 1
         finally:
             await browser.close()

@@ -1,10 +1,8 @@
 """Allowlisted in-process control plane for the integrated public bot."""
 
 import asyncio
-import re
 import sqlite3
 import time
-import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -22,6 +20,24 @@ from .open_store import OpenError
 SOCKET = "/run/astrbot-open/control.sock"
 
 
+def require_group_call(call):
+    """Keep profile selection and page schemas bound to group capabilities.
+
+    Args:
+        call: Validated control-plane request.
+
+    Raises:
+        OpenError: If a request selects a non-group profile or unknown page.
+    """
+    if (
+        call.action == "ai_profile"
+        and call.payload.get("kind") != "group"
+        or call.action == "page_schema"
+        and call.payload.get("name") != "business_rules"
+    ):
+        raise OpenError("group_control_scope")
+
+
 class OpenCall(BaseModel):
     """Keep the bridge versioned and reject generic proxy or method invocation."""
 
@@ -31,15 +47,12 @@ class OpenCall(BaseModel):
         "status",
         "login",
         "login_save",
-        "activation_code",
         "tenant",
         "tenant_preview",
         "rules_provision_preview",
         "rules_provision",
         "ai_admission_preview",
         "ai_admission",
-        "guidance_trial_preview",
-        "guidance_trial",
         "tenant_members",
         "limits",
         "model",
@@ -48,14 +61,14 @@ class OpenCall(BaseModel):
         "manager_quota",
         "group_ai",
         "ai_profile",
-        "support_settings",
-        "support_editor",
-        "owner_support",
         "business_rules",
+        "group_welcome",
         "member_whitelist",
         "member_blacklist",
+        "raid_defense",
+        "test_raid_preflight",
         "member_mutes",
-        "provision_profiles",
+        "message_recalls",
         "group_knowledge",
         "command_capabilities",
         "component_policy",
@@ -68,12 +81,8 @@ class OpenCall(BaseModel):
         "plan_grant",
         "payer_nominate",
         "finance_status",
-        "finance_members",
-        "finance_grant",
-        "finance_test",
         "test_probe",
         "test_quotes",
-        "test_guides",
         "test_lottery",
         "test_advertising",
         "test_flood",
@@ -93,8 +102,6 @@ class OpenRPC:
         self.runner = None
         self.inode = None
         self.lock = asyncio.Lock()
-        self.finance_test_lock = asyncio.Lock()
-        self.test_guides_lock = asyncio.Lock()
         self.test_quotes_lock = asyncio.Lock()
 
     def control_guard(self, adapter, tenant, members):
@@ -139,6 +146,7 @@ class OpenRPC:
 
     async def dispatch(self, call):
         """Preserve the whitelist while governing only the server canary."""
+        require_group_call(call)
         service = self.service
         governance = getattr(service, "governance", None)
         if governance is not None:
@@ -204,7 +212,6 @@ class OpenRPC:
             if call.action == "page_schema":
                 if set(call.payload) != {"name"} or call.payload["name"] not in {
                     "business_rules",
-                    "support_settings",
                 }:
                     raise OpenError("component_page_invalid")
                 return governance.page(call.payload["name"])
@@ -223,6 +230,7 @@ class OpenRPC:
 
     async def _dispatch(self, call):
         """Expose only explicit public-service administrative operations."""
+        require_group_call(call)
         service, payload = self.service, call.payload
         if not service.integrated and call.action != "status":
             raise OpenError("isolated_mode_retired")
@@ -234,6 +242,16 @@ class OpenRPC:
             from .member_mutes import member_mutes
 
             return await member_mutes(self, call)
+        if call.action == "raid_defense":
+            return await service.raid_defense.control(self, call)
+        if call.action == "test_raid_preflight":
+            from .test_raid import preflight
+
+            if call.payload:
+                raise OpenError("raid_arguments")
+            return await preflight(service, call.actor)
+        if call.action == "message_recalls":
+            return await service.message_recalls.handle(self, call)
         if call.action == "member_whitelist":
             from .member_whitelist import REQUEST
 
@@ -245,6 +263,8 @@ class OpenRPC:
             if adapter is None:
                 raise OpenError("account_unavailable")
             operation = data.pop("operation")
+            if operation == "history":
+                data["history_query"] = data.pop("query")
             return await service.member_whitelist.run(
                 adapter,
                 group,
@@ -272,146 +292,6 @@ class OpenRPC:
                 session=("dashboard", call.actor, account, group),
                 **data,
             )
-        if call.action == "owner_support":
-            from .owner_support import TEMPLATE
-
-            caller = asyncio.current_task()
-
-            def owner_guard():
-                if (
-                    not service.active
-                    or service.capacity_paused
-                    or caller is not None
-                    and caller.cancelling()
-                ):
-                    raise OpenError("operation_revoked")
-
-            owner_guard()
-            operation = payload.get("operation")
-            if operation == "list" and set(payload) in (
-                {"operation"},
-                {"operation", "account"},
-            ):
-                owners = service.owner_support.rows()
-                if "account" in payload:
-                    account = payload["account"]
-                    if not isinstance(account, str) or not any(
-                        str(adapter.account) == account
-                        for adapter in service.adapters()
-                    ):
-                        raise OpenError("account_unavailable")
-                    with service.store.connect() as db:
-                        ids = {
-                            row["uid"]
-                            for row in db.execute(
-                                "SELECT b.uid FROM support_group_owners b JOIN tenants t "
-                                "ON t.account=b.account AND t.group_id=b.group_id "
-                                "WHERE b.account=? AND b.epoch=t.epoch AND t.present=1",
-                                (account,),
-                            )
-                        }
-                    owners = [row for row in owners if row["uid"] in ids]
-                return {"owners": owners}
-            uid = payload.get("uid")
-            if (
-                not isinstance(uid, str)
-                or uid
-                and (not uid.isascii() or not uid.isdigit() or len(uid) > 32)
-            ):
-                raise OpenError("support_owner_invalid")
-            owner = next(
-                (row for row in service.owner_support.rows() if row["uid"] == uid), None
-            )
-            if uid and not owner:
-                raise OpenError("support_owner_unavailable")
-            scope = "owner:" + uid if uid else TEMPLATE
-            common = {"operation", "uid"}
-            if operation == "read" and set(payload) == common:
-                return await asyncio.to_thread(service.support.read, scope)
-            if operation == "preview" and set(payload) == common | {
-                "version",
-                "config",
-            }:
-                if type(payload["version"]) is not int:
-                    raise OpenError("support_settings_invalid")
-                return await asyncio.to_thread(
-                    service.support.preview,
-                    scope,
-                    payload["version"],
-                    payload["config"],
-                    call.actor,
-                    "dashboard/" + call.actor,
-                    guard=owner_guard,
-                )
-            if operation == "commit" and set(payload) == common | {"token"}:
-                return await asyncio.to_thread(
-                    service.support.commit,
-                    scope,
-                    payload["token"],
-                    call.actor,
-                    "dashboard/" + call.actor,
-                    guard=owner_guard,
-                )
-            if uid and operation == "provision" and set(payload) == common:
-                return await service.owner_support.ensure_profile(
-                    uid, call.actor, guard=owner_guard
-                )
-            if (
-                uid
-                and operation == "profile"
-                and set(payload) == common | {"version", "selection"}
-            ):
-                if not owner["active"]:
-                    raise OpenError("support_owner_unavailable")
-                if not any(
-                    row["kind"] == "consultation"
-                    and row["account"] == scope
-                    and not row["group_id"]
-                    and row["selection"]
-                    for row in service.profiles.rows()
-                ):
-                    raise OpenError("ai_profile_missing")
-
-                def profile_guard():
-                    owner_guard()
-                    if (
-                        next(
-                            (
-                                row
-                                for row in service.owner_support.rows()
-                                if row["uid"] == uid
-                            ),
-                            None,
-                        )
-                        != owner
-                    ):
-                        raise OpenError("support_owner_changed")
-
-                await asyncio.to_thread(
-                    service.profiles.save,
-                    "consultation",
-                    scope,
-                    "",
-                    payload["version"],
-                    payload["selection"],
-                    call.actor,
-                    guard=profile_guard,
-                )
-                return {"saved": True}
-            if (
-                uid
-                and operation == "state"
-                and set(payload) == common | {"version", "active"}
-            ):
-                return await asyncio.to_thread(
-                    service.owner_support.state,
-                    uid,
-                    payload["version"],
-                    payload["active"],
-                    call.actor,
-                    guard=owner_guard,
-                )
-            raise OpenError("support_owner_invalid")
         if call.action in {"rules_provision_preview", "rules_provision"}:
             from .rules_provisioning import provision_rules
 
@@ -420,10 +300,6 @@ class OpenRPC:
             from .ai_admission import upgrade_ai_admission
 
             return await upgrade_ai_admission(self, call)
-        if call.action in {"guidance_trial_preview", "guidance_trial"}:
-            from .guidance_trial import provision_trial
-
-            return await provision_trial(self, call)
         if call.action == "command_capabilities":
             from .command_capabilities import CAPABILITIES
 
@@ -443,11 +319,6 @@ class OpenRPC:
 
             async with self.test_quotes_lock:
                 return await control_quotes(service, call.actor, payload)
-        if call.action == "test_guides":
-            from .test_probe import send_guides
-
-            async with self.test_guides_lock:
-                return await send_guides(service, call.actor, payload)
         if call.action == "test_lottery":
             from .test_lottery import control_lottery
 
@@ -464,24 +335,9 @@ class OpenRPC:
             from .test_group_ai import control_group_ai
 
             return await control_group_ai(service, call.actor, payload)
-        if call.action == "finance_test":
-            # Dashboard calls already hold the outer control-plane lock.
-            async with self.finance_test_lock:
-                return await self.finance_control(call)
         if call.action.startswith("finance_"):
             return await self.finance_control(call)
-        if call.action in {
-            "support_settings",
-            "support_editor",
-            "business_rules",
-            "provision_profiles",
-            "group_knowledge",
-        } or (
-            call.action == "ai_profile"
-            and payload.get("kind") == "consultation"
-            and payload.get("account")
-            and not payload.get("group_id")
-        ):
+        if call.action in {"business_rules", "group_knowledge", "group_welcome"}:
             account = payload.get("account")
             if (
                 not isinstance(account, str)
@@ -492,110 +348,12 @@ class OpenRPC:
             adapter = next(
                 (a for a in service.adapters() if str(a.account) == account), None
             )
-            if adapter is None and not (
-                call.action == "provision_profiles" and account == ""
-            ):
+            if adapter is None:
                 raise OpenError("account_unavailable")
-            caller = asyncio.current_task()
-
-            def global_guard():
-                if (
-                    not service.active
-                    or service.capacity_paused
-                    or caller is not None
-                    and caller.cancelling()
-                ):
-                    raise OpenError("operation_revoked")
-
-            guard = service.write_guard(adapter) if adapter else global_guard
+            guard = service.write_guard(adapter)
             guard()
-            if call.action == "provision_profiles":
-                if set(payload) != {"account"}:
-                    raise OpenError("profile_provision_invalid")
-                return await service.support.provision(account, call.actor, guard=guard)
-            if call.action == "ai_profile":
-                if set(payload) != {
-                    "kind",
-                    "account",
-                    "group_id",
-                    "version",
-                    "selection",
-                }:
-                    raise OpenError("ai_profile_invalid")
-                if not any(
-                    row["kind"] == "consultation"
-                    and row["account"] == account
-                    and not row["group_id"]
-                    and row["selection"]
-                    for row in service.profiles.rows()
-                ):
-                    raise OpenError("ai_profile_missing")
-                await asyncio.to_thread(
-                    service.profiles.save,
-                    "consultation",
-                    account,
-                    "",
-                    payload["version"],
-                    payload["selection"],
-                    call.actor,
-                    guard=guard,
-                )
-                return {"saved": True}
             operation = payload.get("operation", "read")
             session = "dashboard/" + call.actor
-            if call.action == "support_editor":
-                if operation == "read" and set(payload) == {"account", "operation"}:
-                    return {"editors": service.support.editors(account)}
-                if operation != "save" or set(payload) != {
-                    "account",
-                    "operation",
-                    "uid",
-                    "peer",
-                    "version",
-                    "active",
-                }:
-                    raise OpenError("support_grant_invalid")
-                return await asyncio.to_thread(
-                    service.support.grant,
-                    account,
-                    payload["uid"],
-                    payload["peer"],
-                    payload["version"],
-                    payload["active"],
-                    call.actor,
-                    guard=guard,
-                )
-            if call.action == "support_settings":
-                if operation == "read" and set(payload) == {"account", "operation"}:
-                    return await asyncio.to_thread(service.support.read, account)
-                if (
-                    operation == "preview"
-                    and set(payload) == {"account", "operation", "version", "config"}
-                    and type(payload["version"]) is int
-                ):
-                    return await asyncio.to_thread(
-                        service.support.preview,
-                        account,
-                        payload["version"],
-                        payload["config"],
-                        call.actor,
-                        session,
-                        guard=guard,
-                    )
-                if operation == "commit" and set(payload) == {
-                    "account",
-                    "operation",
-                    "token",
-                }:
-                    return await asyncio.to_thread(
-                        service.support.commit,
-                        account,
-                        payload["token"],
-                        call.actor,
-                        session,
-                        guard=guard,
-                    )
-                raise OpenError("support_settings_invalid")
             group = payload.get("group_id")
             if not isinstance(group, str) or not group.isascii() or not group.isdigit():
                 raise OpenError("group_invalid")
@@ -607,6 +365,15 @@ class OpenRPC:
             guard = self.control_guard(adapter, tenant, members)
             guard()
             common = {"account", "group_id", "tenant_version", "operation"}
+            if call.action == "group_welcome":
+                return await asyncio.to_thread(
+                    service.welcome.control,
+                    payload,
+                    call.actor,
+                    session,
+                    tenant,
+                    guard,
+                )
             if call.action == "group_knowledge":
                 from .knowledge_store import KnowledgeScope
 
@@ -639,6 +406,14 @@ class OpenRPC:
                     service.rule_replies.read, account, group
                 )
                 with service.store.connect() as db:
+                    replacement = db.execute(
+                        "SELECT operation,previous,state,error,updated FROM business_ad_heads "
+                        "WHERE account=? AND group_id=?",
+                        (account, group),
+                    ).fetchone()
+                    result["ad_replacement"] = (
+                        dict(replacement) if replacement else None
+                    )
                     result["schedules"] = [
                         dict(row)
                         for row in db.execute(
@@ -713,9 +488,34 @@ class OpenRPC:
                     )
                 except (ValueError, OpenError):
                     budget["confirmed"] = False
+            media = getattr(service.plugin, "media_moderation", None)
+            media_inspection = None
+            if media is not None:
+                from .media_moderation import (
+                    MAX_ACCOUNT_PENDING_IMAGES,
+                    MAX_GROUP_PENDING_IMAGES,
+                    MAX_MEDIA_WORKERS,
+                    MAX_PENDING_IMAGES,
+                )
+
+                media_inspection = {
+                    **media.counts,
+                    "pending": media.queued,
+                    "running": len(media.running),
+                    "capacity": MAX_PENDING_IMAGES,
+                    "account_capacity": MAX_ACCOUNT_PENDING_IMAGES,
+                    "group_capacity": MAX_GROUP_PENDING_IMAGES,
+                    "workers": MAX_MEDIA_WORKERS,
+                }
             return {
                 "version": 1,
                 "mode": "integrated" if service.integrated else "isolated",
+                "features": {
+                    "group_welcome": all(
+                        getattr(a, "supports_welcome_recall", False) is True
+                        for a in service.adapters()
+                    ),
+                },
                 "settings": service.settings,
                 "ai_budget": {
                     key: budget[key]
@@ -753,6 +553,7 @@ class OpenRPC:
                     if getattr(a, "diagnostics", None) is not None
                     and getattr(a, "ledger", None) is not None
                 ],
+                "media_inspection": media_inspection,
                 "usage": await asyncio.to_thread(service.store.usage),
                 "billing": await self.billing_status(),
                 "manager_quotas": await asyncio.to_thread(service.store.manager_quotas),
@@ -830,11 +631,12 @@ class OpenRPC:
                 if service.integrated
                 else [],
                 "model_configured": bool(service.model),
-                "ai_profiles": await asyncio.to_thread(service.profiles.rows),
+                "ai_profiles": [
+                    row
+                    for row in await asyncio.to_thread(service.profiles.rows)
+                    if row["kind"] == "group"
+                ],
                 "ai_choices": service.profiles.inventory(),
-                "guidance_status": await asyncio.to_thread(
-                    service.support.guidance_status
-                ),
                 "audit": [
                     {
                         k: row[k]
@@ -1100,22 +902,6 @@ class OpenRPC:
                     )
                 ],
             }
-        if call.action == "activation_code":
-            if set(payload) != {"account", "group_id"}:
-                raise OpenError("activation_arguments")
-            tenant = await asyncio.to_thread(
-                service.store.tenant, payload["account"], payload["group_id"]
-            )
-            if (
-                not tenant
-                or tenant.get("admission", "legacy") != "verified"
-                or tenant["cleanup_epoch"] > tenant["cleanup_done"]
-            ):
-                raise OpenError("inviter_unproven")
-            token = await asyncio.to_thread(
-                service.store.mint, payload["account"], payload["group_id"], call.actor
-            )
-            return {"code": token, "expires_in": 600}
         if (
             call.action == "ai_profile"
             and not payload.get("account")
@@ -1373,261 +1159,41 @@ class OpenRPC:
         return result
 
     async def finance_control(self, call):
-        """Manage scoped chat financial grants from authenticated total control.
+        """Read historical chat finance grants without granting retired access.
 
         Args:
             call: Allowlisted dashboard request, never a chat or model request.
 
         Returns:
-            Financial status, verified members or an idempotent grant result.
+            Historical grants and accounting group metadata.
         """
-        from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
-
-        from .cashback_store import WRITE_GUARD
-
+        require_group_call(call)
         owner, payload = self.service, call.payload
         domain = getattr(getattr(owner.plugin, "cashback", None), "service", None)
         if not call.actor.startswith("dashboard/") or domain is None:
             raise OpenError("finance_unavailable")
-        try:
-            if call.action == "finance_test":
-                from .finance_chat import FinanceChat
-                from .finance_sandbox import (
-                    TEST_ACCOUNT,
-                    TEST_GROUP,
-                    TEST_MANAGER,
-                    FinanceSandboxService,
-                )
-
-                if (
-                    set(payload) != {"active", "version", "request_id"}
-                    or type(payload["active"]) is not bool
-                    or type(payload["version"]) is not int
-                    or payload["version"] < 0
-                    or not isinstance(payload["request_id"], str)
-                    or not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", payload["request_id"])
-                ):
-                    raise OpenError("finance_arguments")
-                finance = getattr(owner, "finance_chat", None)
-                if finance is None:
-                    owner.finance_chat = finance = FinanceChat(owner, domain)
-                request_key = (call.actor, payload["request_id"])
-                previous = finance.test_requests.get(request_key)
-                if previous:
-                    if previous[0] != payload:
-                        raise OpenError("finance_test_changed")
-                    return previous[1]
-                if payload["version"] != getattr(finance, "test_version", 0):
-                    raise OpenError("finance_test_changed")
-                if not payload["active"]:
-                    finance.test_until = 0
-                    finance.test_version = payload["version"] + 1
-                    result = {"status": "closed", "version": finance.test_version}
-                    with owner.store.connect(write=True) as db:
-                        owner.store.log(
-                            db,
-                            call.actor,
-                            TEST_ACCOUNT,
-                            TEST_GROUP,
-                            "chat_finance_test_closed",
-                            {"version": finance.test_version},
-                        )
-                    finance.test_requests[request_key] = (dict(payload), result)
-                    if len(finance.test_requests) > 128:
-                        finance.test_requests.popitem(last=False)
-                    return result
-                adapter = next(
-                    (a for a in owner.adapters() if str(a.account) == TEST_ACCOUNT),
-                    None,
-                )
-                window = getattr(adapter, "test_window", None)
-                if (
-                    adapter is None
-                    or window is None
-                    or not window.active()
-                    or str(window.sender.account) != TEST_MANAGER
-                    or TEST_GROUP not in window.groups
-                    or "private_commands" not in window.scopes
-                    or finance.test_until > time.time()
-                ):
-                    raise OpenError("finance_test_window_required")
-                roster = await owner.roster(adapter, TEST_GROUP)
-                manager = roster.get(TEST_MANAGER)
-                if not manager or not manager.get("nimId"):
-                    raise OpenError("finance_identity_unverified")
-                # A new directory prevents an old rehearsal from being reset or
-                # its state being mistaken for a first production transaction.
-                test = FinanceSandboxService(
-                    domain.context,
-                    domain.store.path.parent / "chat-tests" / uuid.uuid4().hex,
-                    domain.collector_id,
-                )
-                await asyncio.to_thread(
-                    test.seed,
-                    str(manager["nimId"]),
-                    str(manager.get("userNick") or manager.get("name") or "林夕"),
-                )
-                finance.test_service = test
-                finance.test_until = time.time() + min(300, window.status()["seconds"])
-                finance.test_version = payload["version"] + 1
-                result = {
-                    "status": "opened",
-                    "version": finance.test_version,
-                    "test_ledger": True,
+        if call.action != "finance_status" or payload:
+            raise OpenError("finance_arguments")
+        configured = {g["id"]: g for g in await asyncio.to_thread(domain.store.groups)}
+        return {
+            "version": 1,
+            "grants": await asyncio.to_thread(domain.store.finance_grants),
+            "groups": [
+                {
+                    "account": str(a.account),
+                    "group_id": t["group_id"],
+                    "name": domain.group_name(a, t["group_id"]),
+                    "configured": t["group_id"] in configured,
+                    "bot_id": a.config["id"],
                 }
-                with owner.store.connect(write=True) as db:
-                    owner.store.log(
-                        db,
-                        call.actor,
-                        TEST_ACCOUNT,
-                        TEST_GROUP,
-                        "chat_finance_test_opened",
-                        {"version": finance.test_version},
-                    )
-                finance.test_requests[request_key] = (dict(payload), result)
-                if len(finance.test_requests) > 128:
-                    finance.test_requests.popitem(last=False)
-                return result
-            if call.action == "finance_status":
-                if payload:
-                    raise OpenError("finance_arguments")
-                configured = {
-                    g["id"]: g for g in await asyncio.to_thread(domain.store.groups)
-                }
-                return {
-                    "version": 1,
-                    "grants": await asyncio.to_thread(domain.store.finance_grants),
-                    "groups": [
-                        {
-                            "account": str(a.account),
-                            "group_id": t["group_id"],
-                            "name": domain.group_name(a, t["group_id"]),
-                            "configured": t["group_id"] in configured,
-                            "bot_id": a.config["id"],
-                        }
-                        for a in owner.adapters()
-                        if a.config["id"] == domain.collector_id
-                        for t in owner.tenants.values()
-                        if t["account"] == str(a.account)
-                    ],
-                    "test_active": bool(
-                        getattr(owner, "finance_chat", None)
-                        and owner.finance_chat.test_until > time.time()
-                    ),
-                    "test_version": getattr(
-                        getattr(owner, "finance_chat", None), "test_version", 0
-                    ),
-                }
-            expected = (
-                {"account", "group_id"}
-                if call.action == "finance_members"
-                else {
-                    "account",
-                    "group_id",
-                    "uid",
-                    "role",
-                    "active",
-                    "version",
-                    "request_id",
-                }
-            )
-            if set(payload) != expected:
-                raise OpenError("finance_arguments")
-            if any(
-                not isinstance(payload[k], str)
-                or not re.fullmatch(r"[1-9][0-9]{0,19}", payload[k])
-                for k in ("account", "group_id")
-            ):
-                raise OpenError("finance_arguments")
-            if call.action == "finance_grant" and (
-                not isinstance(payload["uid"], str)
-                or not re.fullmatch(r"[1-9][0-9]{0,19}", payload["uid"])
-                or not isinstance(payload["role"], str)
-                or payload["role"] not in {"cashier", "finance_admin"}
-                or type(payload["active"]) is not bool
-                or type(payload["version"]) is not int
-                or payload["version"] < 0
-                or not isinstance(payload["request_id"], str)
-                or not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", payload["request_id"])
-            ):
-                raise OpenError("finance_arguments")
-            adapter = next(
-                (
-                    a
-                    for a in owner.adapters()
-                    if str(a.account) == payload["account"]
-                    and a.config["id"] == domain.collector_id
-                ),
-                None,
-            )
-            tenant = owner.tenants.get((payload["account"], payload["group_id"]))
-            old = next(
-                (
-                    r
-                    for r in await asyncio.to_thread(domain.store.finance_grants)
-                    if r["account"] == payload["account"]
-                    and r["group_id"] == payload["group_id"]
-                    and r["uid"] == payload.get("uid")
-                ),
-                None,
-            )
-            if call.action == "finance_grant" and payload["active"] is False:
-                if old is None:
-                    raise OpenError("finance_identity_unverified")
-
-                def guard():
-                    if not owner.active:
-                        raise OpenError("finance_unavailable")
-
-                member = {"nimId": old["peer"], "name": old["name"]}
-            else:
-                if adapter is None or tenant is None:
-                    raise OpenError("finance_scope")
-                guard = owner.write_guard(adapter, control=True)
-                roster = await owner.roster(adapter, payload["group_id"])
-                guard()
-                if call.action == "finance_members":
-                    return {
-                        "members": [
-                            {
-                                "uid": uid,
-                                "name": str(
-                                    m.get("userNick")
-                                    or m.get("name")
-                                    or m.get("userName")
-                                    or uid
-                                ),
-                            }
-                            for uid, m in roster.items()
-                            if uid != str(adapter.account)
-                        ]
-                    }
-                member = roster.get(payload["uid"])
-                if not member or not member.get("nimId"):
-                    raise OpenError("finance_identity_unverified")
-                guard = self.control_guard(adapter, tenant, roster)
-            token = WRITE_GUARD.set(guard)
-            try:
-                return await asyncio.to_thread(
-                    domain.store.finance_grant,
-                    call.actor,
-                    {
-                        **payload,
-                        "peer": str(member["nimId"]),
-                        "name": str(
-                            member.get("userNick")
-                            or member.get("name")
-                            or member.get("userName")
-                            or payload["uid"]
-                        )[:100],
-                    },
-                )
-            finally:
-                WRITE_GUARD.reset(token)
-        except ProtocolError as exc:
-            if str(exc) == "secondary_security_code_required":
-                raise OpenError("finance_secondary_security_required") from None
-            raise OpenError("finance_directory_unavailable") from None
+                for a in owner.adapters()
+                if a.config["id"] == domain.collector_id
+                for t in owner.tenants.values()
+                if t["account"] == str(a.account)
+            ],
+            "test_active": False,
+            "test_version": 0,
+        }
 
     async def start(self):
         """Refuse to recreate the retired independent socket service."""

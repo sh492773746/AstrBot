@@ -1,17 +1,21 @@
 # Adapter and plugin configuration migration
 
 Flood fallback counts fresh unique messages per account, group and sender, including
-ordinary group commands: three messages in five seconds, eight in ten seconds, or five identical texts in
+ordinary group commands: five messages in three seconds, fifteen in ten seconds, or five identical texts in
 thirty seconds trigger review and enforcement independently of the model.
 Progressive enforcement first allows three successful recall-only actions, then
-recall plus 5/15/60-minute mutes. The recall grace persists across restarts; failed
-or unknown recalls do not consume it. Existing mute history is retained.
+1/3/10-minute mutes, submitting a qualifying mute before independently recalling.
+Expiry of the ten-minute mute restarts the three-warning cycle. Failed/unknown
+actions do not escalate. Existing mute history is retained.
 
 Updated 2026-10-20. The 2026-10-07 migration build and 2026-10-08 deployment are
-historical milestones. The public bot now runs inside shared AstrBot; the cashier
-service remains independent. Do not restore `astrbot-open.service` or its public
-`control.sock`. The dedicated `cashier.sock` still bridges restricted writes and
-diagnostics. Deployment or passing code tests is not full live acceptance.
+historical milestones. The public bot and Invitation Settlement use shared
+AstrBot/plugin WebUI, retaining the original ledger. Do not restore the retired
+public worker, independent cashier site or its login.
+This private-retirement batch is not deployed; mute-first/raid loading and live
+acceptance remain pending, with raid defense off by default.
+See [the current mapping](wangshangliao-start.md).
+Deployment or passing code tests is not full live acceptance.
 
 Subsequent October 20 live warning checks passed only three cases in 1459282 across
 two isolated fixtures of one and two, not complete escalation, fresh activation,
@@ -30,11 +34,13 @@ no backend and sends no messages.
 | Card previews, execution, manual account cleanup, progress | Compatibility Groups & Runtime → Card tasks; that tab is hidden in integrated mode, with no equivalent visible entry established here |
 | Bounded test windows | Compatibility Groups & Runtime → Test window; protected APIs remain, which does not make the old panel visible |
 | Group grants, card suffix and automatic normalization | Groups → Activation & Rules / Group Grants, subject to actual capability and native role |
-| Reply and AI/moderation settings | AI → Customer Service / Group AI / Model & Budget; the old Moderation tab is hidden in integrated mode |
+| Reply and AI/moderation settings | AI → Group AI / Model & Budget; rules use Groups → Rules; Customer Service and private Admin Guidance are removed |
 | Policy revisions and failures | Runtime & Logs → Operation Logs / Management Audit |
-| Automatic friend approval and reconciliation | Groups → Friend Requests; no friend deletion |
+| Automatic friend approval, welcomes and Friend Requests | Retired, without automatic friend replacements; retain historical audits |
 | Administrators, providers, personas, knowledge bases | Existing AstrBot configuration |
-| Manual cash payments, Access protection and contact text | Independent cashier page |
+| Private finance chat, payment confirmation and Settlement Grants | Private entrances removed; existing authorized operators use Activities & Finance → Invitation Settlement, without inheriting old Access/chat roles |
+| Private menus, group selection, personal knowledge and private AI | Removed; use fixed commands in the target group, never migrate these to group AI |
+| Private advertising images and attachments | Existing authorized operators upload keyword/scheduled images in Groups → Rules |
 
 Online transport and active business are distinct states. Saving business settings does
 not terminate or reload the adapter. Group-selection changes refresh the directory without
@@ -67,9 +73,9 @@ but does not log out the account. Delayed events cannot send or use management t
 Cold starts quarantine old pending chat commands, preserving invitation notices separately.
 Read-only restoration of observation groups cannot activate business execution.
 
-Only currently authorized fixed private management commands can preview and confirm
-changes. AI explains commands but cannot execute them. Private consultation requires
-`/chat`. Group mentions, including administrator mentions, require per-group opt-in
+No private command, AI, finance or image-intake execution remains. Authorized
+native group managers use fixed commands in the current group, without gaining
+global Dashboard access. Group mentions, including administrator mentions, require per-group opt-in
 and, like autonomous replies and idle topics, resolve
 `profiles.resolve("group", account, group)`, never private consultation.
 They share the group persona, with account/group overrides, but verified members'
@@ -77,7 +83,7 @@ mention histories remain independent and bounded by the configured turns.
 Other members, groups, accounts, private chats and old group-consultation history
 are never mixed, migrated or reused. Autonomous candidate buffers and the original
 `/group` origin remain unchanged. All group output is plain text without
-`【群聊AI】` or `【客服咨询】` prefixes; private read-only AI is unchanged.
+`【群聊AI】` or `【客服咨询】` prefixes; private AI is retired.
 `mentions` remains independent of `autonomous`. Ordinary chat reaches bounded, filtered
 model context only when autonomous conversation is separately enabled; idle speech is
 another switch. Budget, payer confirmation, current permissions, quotas and hours apply.
@@ -88,12 +94,9 @@ Verified departure and a durable generation drive exact-group working-data clean
 retaining finance and uncertain-action evidence. Cleanup commits per database, not
 as a cross-database atomic transaction.
 
-Friend reads have a minimum three-second interval and approvals a minimum
-thirty-second interval, alongside scan periods and durable read backoff. Unknown
-approvals require Dashboard readback; toggles do not clear holds. First-use guidance
-is durably claimed before delivery, and uncertain sends are not replayed. Welcome
-delivery uses fixed reviewed native artwork without automatic uploads. Never restore
-friend deletion.
+No friend polling/approval, welcome or quota DM is sent, and historical pending
+work is not replayed. Retain old approval/onboarding stores and unknown records
+without rewriting them as successes.
 
 ## Backup and rollback
 

@@ -15,7 +15,6 @@ from astrbot.core.platform.sources.wangshangliao.storage import instance_dir
 
 from .activities import GroupActivities, clean, member_name
 from .cashback_store import WRITE_GUARD, CashbackError, CashbackStore, source_timestamp
-from .private_invitation import PrivateInvitationQueries
 from .text import plain_text, redact_reply
 
 
@@ -27,7 +26,6 @@ class CashbackService:
         self.locks = {}
         self.business_checked = {}
         self.collector_id = collector_id
-        self.private_queries = PrivateInvitationQueries(self)
 
     def lock(self, group):
         return self.locks.setdefault(group, asyncio.Lock())

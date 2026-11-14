@@ -50,6 +50,20 @@ class NativePipeline:
                     or not conf.get("provider_settings", {}).get("enable")
                 ):
                     raise RuntimeError("Account profile isolation is invalid")
+                persona_id = (
+                    conf.get("agent_runner", {})
+                    .get("config", {})
+                    .get("persona", {})
+                    .get("persona_id")
+                )
+                if (
+                    not persona_id
+                    or self.context.persona_manager.get_persona_v3_by_id(persona_id)
+                    is None
+                ):
+                    raise RuntimeError(
+                        "Account persona was removed; bind a persona before resuming"
+                    )
                 signature = json.dumps(conf, sort_keys=True, ensure_ascii=True)
                 async with self.lock:
                     cached = self.schedulers.get(conf_id)

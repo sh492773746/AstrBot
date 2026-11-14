@@ -97,11 +97,19 @@ def test_authenticated_large_window_rejected_before_decompression():
     ("route", "size", "accepted"),
     [
         ("/v1/group/get-apply-logs", wire.LIMIT + 500, True),
+        ("/v1/group/get-group-members", wire.LIMIT + 500, True),
+        (
+            "/v1/group/get-group-members",
+            wire.MEMBER_DIRECTORY_LIMIT - 100,
+            True,
+        ),
+        ("/v1/group/get-group-members", wire.MEMBER_DIRECTORY_LIMIT + 1, False),
+        ("/v1/group/get-group-list", wire.LIMIT + 500, False),
         ("/v1/group/get-group-apply-list", wire.LIMIT + 500, False),
         ("/v1/group/get-apply-logs", wire.INVITATION_LOG_LIMIT + 1, False),
     ],
 )
-async def test_only_invitation_log_route_has_larger_response_limit(
+async def test_only_reviewed_directory_routes_have_larger_response_limit(
     deployment, encrypted, route, size, accepted
 ):
     response = json.dumps({"code": 0, "data": {"value": "a" * size}}).encode()

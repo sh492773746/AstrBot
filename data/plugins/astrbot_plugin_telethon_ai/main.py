@@ -125,13 +125,6 @@ class TelethonAI(Star):
         for account in adapter.ACCOUNTS:
             platform_id = f"TelethonAI_{account}"
             persona_id = f"telethon-ai-{account}"
-            if self.context.persona_manager.get_persona_v3_by_id(persona_id) is None:
-                await self.context.persona_manager.create_persona(
-                    persona_id,
-                    (Path(__file__).parent / "SOUL.md").read_text(encoding="utf-8"),
-                    tools=[],
-                    skills=[],
-                )
             name = f"Telethon AI - {account}"
             matches = [c for c in manager.get_conf_list() if c["name"] == name]
             if len(matches) > 1:
@@ -139,6 +132,17 @@ class TelethonAI(Star):
             if matches:
                 conf_id = matches[0]["id"]
             else:
+                # Bootstrap new accounts only; never undo a user's persona deletion.
+                if (
+                    self.context.persona_manager.get_persona_v3_by_id(persona_id)
+                    is None
+                ):
+                    await self.context.persona_manager.create_persona(
+                        persona_id,
+                        (Path(__file__).parent / "SOUL.md").read_text(encoding="utf-8"),
+                        tools=[],
+                        skills=[],
+                    )
                 conf = copy.deepcopy(DEFAULT_CONFIG)
                 conf["admins_id"] = []
                 conf["disable_builtin_commands"] = True
@@ -261,7 +265,8 @@ class TelethonAI(Star):
             adapter.ACCOUNTS.update(
                 {key: int(spec["user_id"]) for key, spec in records.items()}
             )
-            await self.provision()
+            if self.config.get("provision_profiles", True):
+                await self.provision()
 
     async def page_account_sync(self):
         if not self.dashboard_admin():

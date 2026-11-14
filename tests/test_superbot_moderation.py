@@ -10,6 +10,7 @@ import pytest
 from telegram import ChatPermissions
 
 from data.plugins.astrbot_plugin_superbot.moderation import TZ, Moderation, boundary
+from data.plugins.astrbot_plugin_superbot.semantic_review import SemanticReview
 from data.plugins.astrbot_plugin_superbot.store import Rejected, Store
 from data.plugins.astrbot_plugin_superbot.ui import UI
 
@@ -322,14 +323,146 @@ async def test_group_list_checks_live_membership(setup):
         callback_query=None,
     )
     await s.runtime.ui.moderation_ui.action(update, {"action": "mod_home"})
-    assert "Fixture（已启用）" in str(
+    assert "Fixture（🟢 已启用）" in str(
         s.bot.send_message.await_args.kwargs["reply_markup"]
     )
     s.members[1] = Member("member")
     await s.runtime.ui.moderation_ui.action(update, {"action": "mod_home"})
-    assert "Fixture（已启用）" not in str(
+    assert "Fixture（🟢 已启用）" not in str(
         s.bot.send_message.await_args.kwargs["reply_markup"]
     )
+
+
+@pytest.mark.asyncio
+async def test_current_group_admin_can_confirm_mute_and_restore_without_global_acl(
+    setup,
+):
+    s = setup
+    s.runtime.semantic_review = SemanticReview(s.runtime)
+    s.members[2] = Member("administrator")
+    s.runtime.ui.render = AsyncMock()
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=2),
+        effective_chat=SimpleNamespace(id=2, type="private"),
+    )
+    await s.runtime.ui.action(update, {"action": "mod_all", "chat": "-1001"})
+    text, buttons = s.runtime.ui.render.await_args.args[1:3]
+    assert "🟢 可发言" in text
+    assert {p["kind"] for _, p in buttons if p["action"] == "mod_form"} == {"mute_all"}
+    await s.runtime.ui.action(
+        update, {"action": "mod_form", "kind": "mute_all", "chat": "-1001"}
+    )
+    confirm = s.runtime.ui.render.await_args.args[2][0][1]
+    assert "普通群员" in s.runtime.ui.render.await_args.args[1]
+    await s.runtime.ui.action(update, confirm, "group-admin-mute")
+    assert s.group.permissions.can_send_messages is False
+    await s.runtime.ui.action(update, {"action": "mod_all", "chat": "-1001"})
+    text, buttons = s.runtime.ui.render.await_args.args[1:3]
+    assert "🔴 已禁言" in text
+    assert {p["kind"] for _, p in buttons if p["action"] == "mod_form"} == {
+        "unmute_all"
+    }
+    await s.runtime.ui.action(
+        update, {"action": "mod_form", "kind": "unmute_all", "chat": "-1001"}
+    )
+    await s.runtime.ui.action(
+        update, s.runtime.ui.render.await_args.args[2][0][1], "group-admin-restore"
+    )
+    assert s.group.permissions.can_send_messages is True
+    assert s.bot.set_chat_permissions.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_group_admin_can_enable_disabled_group_without_business_role(setup):
+    s = setup
+    s.runtime.semantic_review = SemanticReview(s.runtime)
+    s.members[2] = Member("administrator")
+    s.store.db.execute("UPDATE mod_groups SET enabled=0 WHERE chat='-1001'")
+    s.runtime.ui.render = AsyncMock()
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=2),
+        effective_chat=SimpleNamespace(id=2, type="private"),
+    )
+    await s.runtime.ui.action(update, {"action": "mod_group", "chat": "-1001"})
+    text, buttons = s.runtime.ui.render.await_args.args[1:3]
+    assert "🔴 已关闭" in text
+    enable = next(p for label, p in buttons if label == "开启本群群管服务")
+    await s.runtime.ui.action(update, enable)
+    assert "确认启用群" in s.runtime.ui.render.await_args.args[1]
+    await s.runtime.ui.action(
+        update, s.runtime.ui.render.await_args.args[2][0][1], "enable-group"
+    )
+    assert s.mod.row("-1001")["enabled"] == 1
+    s.bot.set_chat_permissions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_revoked_admin_confirmation_does_not_pause_schedule_or_write(setup):
+    s = setup
+    s.runtime.semantic_review = SemanticReview(s.runtime)
+    s.members[2] = Member("administrator")
+    s.runtime.ui.render = AsyncMock()
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=2),
+        effective_chat=SimpleNamespace(id=2, type="private"),
+    )
+    await s.runtime.ui.action(
+        update, {"action": "mod_form", "kind": "mute_all", "chat": "-1001"}
+    )
+    confirm = s.runtime.ui.render.await_args.args[2][0][1]
+    insert_schedule(s)
+    s.members[2].status = "member"
+    with pytest.raises(Rejected):
+        await s.runtime.ui.action(update, confirm, "revoked-group-admin")
+    assert s.store.db.execute("SELECT enabled FROM mod_schedules").fetchone()[0] == 1
+    assert not s.store.db.execute("SELECT 1 FROM mod_ops").fetchone()
+    s.bot.set_chat_permissions.assert_not_awaited()
+    s.members[2].status = "administrator"
+    with pytest.raises(Rejected, match="不一致"):
+        await s.runtime.ui.action(
+            update,
+            {**confirm, "data": {**confirm["data"], "chat": "-1002"}},
+            "tampered-group",
+        )
+    s.bot.set_chat_permissions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_group_admin_without_business_role_rechecks_live_rights(setup):
+    s = setup
+    s.runtime.semantic_review = SemanticReview(s.runtime)
+    s.members[2] = Member("administrator")
+    s.clock[0] = insert_schedule(s)
+    s.store.db.execute("UPDATE mod_schedules SET actor='2'")
+    await s.mod.tick()
+    assert s.bot.set_chat_permissions.await_count == 1
+    s.clock[0] = s.store.db.execute("SELECT next FROM mod_schedules").fetchone()[0]
+    s.members[2].status = "member"
+    await s.mod.tick()
+    assert s.bot.set_chat_permissions.await_count == 1
+    assert s.store.db.execute("SELECT enabled FROM mod_schedules").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("status", ["creator", "administrator"])
+@pytest.mark.parametrize("operation", ["mute", "mute_forever", "kick", "ban", "delete"])
+@pytest.mark.asyncio
+async def test_group_owner_and_admin_member_actions_confirm_without_role(
+    setup, status, operation
+):
+    s = setup
+    s.runtime.semantic_review = SemanticReview(s.runtime)
+    s.members[3] = Member(status)
+    s.runtime.ui.render = AsyncMock()
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=3),
+        effective_chat=SimpleNamespace(id=3, type="private"),
+    )
+    s.store.db.execute("INSERT INTO mod_messages VALUES('-1001',10,'2')")
+    text = "https://t.me/c/1/10" if operation == "delete" else "2 60"
+    await s.runtime.ui.moderation_ui.preview(update, operation, "-1001", text)
+    confirm = s.runtime.ui.render.await_args.args[2][0][1]
+    await s.runtime.ui.action(update, confirm, f"{status}-{operation}")
+    assert s.store.db.execute("SELECT status FROM mod_ops").fetchone()[0] == "accepted"
 
 
 @pytest.mark.asyncio
@@ -352,6 +485,37 @@ async def test_membership_discovers_basic_group(setup):
     assert setup.store.db.execute(
         "SELECT title,enabled FROM mod_groups WHERE chat='-999'"
     ).fetchone()[:] == ("Invited", 0)
+
+
+@pytest.mark.asyncio
+async def test_membership_binds_creator_not_inviting_administrator(setup):
+    from unittest.mock import MagicMock
+
+    from data.plugins.astrbot_plugin_superbot.main import Main
+    from data.plugins.astrbot_plugin_superbot.tenants import binding
+
+    plugin = Main(MagicMock(), {})
+    plugin.store, plugin.moderation = setup.store, setup.mod
+    plugin.application = SimpleNamespace(bot=setup.bot)
+    plugin.bot.get_chat_administrators = AsyncMock(return_value=[
+        SimpleNamespace(status="administrator", user=SimpleNamespace(id=3)),
+        SimpleNamespace(status="creator", user=SimpleNamespace(id=4)),
+    ])
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=-999, type="supergroup", title="Invited"),
+        my_chat_member=SimpleNamespace(
+            old_chat_member=SimpleNamespace(status="left"),
+            new_chat_member=SimpleNamespace(status="administrator"),
+            from_user=SimpleNamespace(id=3),
+        ),
+        message=None,
+        effective_user=None,
+    )
+    await plugin.receive(update, None)
+    assert binding(setup.store, "-999")["owner"] == "4"
+    assert setup.store.db.execute(
+        "SELECT enabled FROM mod_groups WHERE chat='-999'"
+    ).fetchone()[0] == 1
 
 
 @pytest.mark.asyncio

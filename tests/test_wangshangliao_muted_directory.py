@@ -105,6 +105,34 @@ async def test_mute_read_uses_authenticated_catalog_without_the_refresh_lock():
 
 
 @pytest.mark.asyncio
+async def test_multiple_readback_identities_must_match_before_native_query():
+    adapter = SimpleNamespace(
+        account="1",
+        nim_account="901",
+        groups={"5": "905"},
+        nim=SimpleNamespace(get_team_muted_members=AsyncMock(return_value={"903"})),
+        business=SimpleNamespace(
+            request=AsyncMock(
+                return_value={
+                    "groupMemberInfo": [
+                        {"userId": "1", "nimId": "901"},
+                        {"userId": "2", "nimId": "902"},
+                        {"userId": "3", "nimId": "903"},
+                    ]
+                }
+            )
+        ),
+    )
+    assert await muted_member_ids(
+        adapter, "5", expected_members={"2": "902", "3": "903"}
+    ) == {"3"}
+    adapter.nim.get_team_muted_members.reset_mock()
+    with pytest.raises(wire.ProtocolError, match="mute_list_identity"):
+        await muted_member_ids(adapter, "5", expected_members={"2": "902", "3": "old"})
+    adapter.nim.get_team_muted_members.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "change", ["self_absent", "extra", "reconnect", "revoke", "mapping"]
 )

@@ -16,7 +16,6 @@ from astrbot.core.platform.sources.wangshangliao.event import is_managed_account
 from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from astrbot.core.utils.trace import TraceSpan
 
-from .ai_plans import QUOTA_ERRORS
 from .knowledge_store import KnowledgeScope
 from .model_stats import track_model_call
 from .open_store import OpenError
@@ -1197,14 +1196,6 @@ class GroupAI:
                     trigger.split("/", 1)[0],
                     state if dispatched else "not_sent",
                     reason or "none",
-                )
-            if payer and (reserved or reason in QUOTA_ERRORS):
-                await service.notify_quota(
-                    adapter,
-                    payer["principal"],
-                    payer["uid"],
-                    reason=reason,
-                    group=group,
                 )
             await self.refresh()
 

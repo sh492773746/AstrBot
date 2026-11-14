@@ -24,7 +24,7 @@
           <div>
             <v-icon icon="mdi-numeric-1-circle" class="mr-3"></v-icon>
           </div>
-          <div style="flex: 1">
+          <div style="flex: 1; min-width: 0">
             <h3>
               {{ tm("createDialog.step1Title") }}
             </h3>
@@ -35,29 +35,30 @@
               <div v-if="!updatingMode">
                 <v-select
                   v-model="selectedPlatformType"
-                  :items="Object.keys(platformTemplates)"
-                  item-title="name"
-                  item-value="name"
+                  :items="platformTypeOptions"
+                  item-title="title"
+                  item-value="value"
                   :label="tm('createDialog.platformTypeLabel')"
                   variant="outlined"
                   rounded="md"
                   dense
                   hide-details
                   class="mt-6"
-                  style="max-width: 30%; min-width: 300px"
+                  style="width: 100%; max-width: 360px; min-width: 0"
                 >
                   <template v-slot:item="{ props: itemProps, item }">
                     <v-list-item v-bind="itemProps">
                       <template v-slot:prepend>
                         <img
                           :src="
-                            getPlatformIcon(platformTemplates[item.raw].type)
+                            getPlatformIcon(platformTemplates[item.raw.value].type)
                           "
                           style="
                             width: 32px;
                             height: 32px;
                             object-fit: contain;
                             margin-right: 16px;
+                            border-radius: 8px;
                           "
                         />
                       </template>
@@ -68,13 +69,13 @@
                             'qq_official_webhook',
                             'aiocqhttp',
                             'weixin_oc',
-                          ].includes(platformTemplates[item.raw].type)
+                          ].includes(platformTemplates[item.raw.value].type)
                         "
                         activator="parent"
                         :text="
                           tm(
                             `createDialog.platformTooltips.${
-                              platformTemplates[item.raw].type
+                              platformTemplates[item.raw.value].type
                             }`,
                           )
                         "
@@ -964,6 +965,16 @@ export default {
         this.metadata["platform_group"]?.metadata?.platform?.config_template ||
         {}
       );
+    },
+    platformTypeOptions() {
+      const hiddenTypes = new Set(["telethon_ai", "telethon_ai_service"]);
+      const displayNames = { lajiaoliao: "辣椒聊" };
+      return Object.entries(this.platformTemplates)
+        .filter(([, template]) => !hiddenTypes.has(template?.type))
+        .map(([value, template]) => ({
+          value,
+          title: displayNames[template?.type] || value,
+        }));
     },
     canSave() {
       if (

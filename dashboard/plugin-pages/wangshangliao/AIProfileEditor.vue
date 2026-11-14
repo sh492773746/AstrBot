@@ -4,7 +4,6 @@ const props = defineProps<{
   choices: { configs: any[]; personas: any[] };
   providers: any[];
   label: string;
-  privateChat?: boolean;
 }>();
 const emit = defineEmits<{
   "update:modelValue": [value: Record<string, any>];
@@ -19,8 +18,8 @@ function levels(key: string) {
   const values: Record<string, number[]> = {
     temperature: [0.2, 0.5, 0.9],
     top_p: [0.6, 0.85, 1],
-    max_tokens: props.privateChat ? [256, 512, 1024] : [128, 256, 512],
-    history_turns: props.privateChat ? [2, 6, 12] : [2, 4, 6],
+    max_tokens: [128, 256, 512],
+    history_turns: [2, 4, 6],
   };
   return values[key];
 }
@@ -61,7 +60,7 @@ function chooseLevel(key: string, event: Event) {
       {key: 'temperature', name: '回复随机性'},
       {key: 'top_p', name: '表达范围'},
       {key: 'max_tokens', name: '回复长度'},
-      {key: 'history_turns', name: privateChat ? '保留对话轮数' : '聊天上下文'},
+      {key: 'history_turns', name: '聊天上下文'},
     ]" :key="setting.key">{{ setting.name }}
       <select :aria-label="`${label} · ${setting.name}`" :value="level(setting.key)"
         @change="chooseLevel(setting.key, $event)">

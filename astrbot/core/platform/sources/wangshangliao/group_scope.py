@@ -14,10 +14,19 @@ def group_config(config, group):
         "enabled": True,
         "automation_enabled": rules["advertising"]
         or rules["flood"]
-        or rules.get("video_whitelist_only", False),
+        or rules.get("video_whitelist_only", False)
+        or rules.get("raid_defense_enabled", False)
+        or any(
+            rules.get(field, False)
+            for field in ("recall_forward", "image_qr_recall", "image_digits_recall")
+        ),
         "advertising_enabled": rules["advertising"],
         "flood_enabled": rules["flood"],
+        "raid_defense_enabled": rules.get("raid_defense_enabled", False),
         "video_whitelist_only": rules.get("video_whitelist_only", False),
+        "recall_forward": rules.get("recall_forward", False),
+        "image_qr_recall": rules.get("image_qr_recall", False),
+        "image_digits_recall": rules.get("image_digits_recall", False),
         "mute_keywords": list(rules["keywords"]),
         "kick_keywords": [],
         "semantic": {"enabled": False},

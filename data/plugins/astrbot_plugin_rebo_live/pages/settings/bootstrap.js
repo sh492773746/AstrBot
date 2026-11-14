@@ -1,4 +1,4 @@
-// Keep recovery visible even when the module or bridge cannot initialize.
+// Keep recovery visible even when the application or bridge cannot initialize.
 const pageState = document.getElementById('page-state');
 const recovery = document.getElementById('reload-page');
 const controls = document.getElementById('controls');

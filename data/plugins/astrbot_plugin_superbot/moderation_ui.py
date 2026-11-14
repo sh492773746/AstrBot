@@ -7,6 +7,7 @@ from datetime import datetime
 
 from telegram.error import BadRequest, ChatMigrated, Forbidden
 
+from .group_identity import group_label
 from .moderation import ACTIONS, TZ, boundary
 from .store import Rejected, encode
 
@@ -18,6 +19,15 @@ class ModerationUI:
         self.ui, self.runtime, self.store = ui, ui.runtime, ui.store
 
     async def action(self, update, payload, token=""):
+        from .moderation import moderation_request
+
+        chat = str(payload.get("chat", ""))
+        async with moderation_request(
+            self.runtime, str(update.effective_user.id), chat
+        ):
+            return await self._action(update, payload, token)
+
+    async def _action(self, update, payload, token=""):
         uid = str(update.effective_user.id)
         self.store.require(uid, "moderation", chat=payload.get("chat"))
         self.store.clear_dialog(uid)
@@ -44,12 +54,19 @@ class ModerationUI:
             from .ad_killer_ui import action as ad_killer_action
 
             return await ad_killer_action(self, update, payload, token)
-        back = [("换个群", {"action": "mod_home"})]
+        if action in {"mod_keyboard_on", "mod_keyboard_off"}:
+            raise Rejected("群虚拟键盘已移除，此旧按钮不能再修改设置")
+        back = [
+            ("返回群管", {"action": "semantic_group_menu", "chat": chat})
+            if chat
+            else ("返回选群", {"action": "mod_home"})
+        ]
         if action in {"mod_members", "mod_member", "mod_duration"}:
             kind = payload["kind"]
             if kind not in MEMBER_ACTIONS:
                 raise Rejected("无效成员操作")
-            await mod.check(uid, chat)
+            info, _ = await mod.check(uid, chat)
+            label = group_label(info, mod.row(chat)["title"])
             self.store.clear_dialog(uid)
             page = max(0, int(payload.get("page", 0)))
             return_members = (
@@ -127,7 +144,7 @@ class ModerationUI:
                             "page": page,
                         },
                     ),
-                    ("返回上一层", {"action": "mod_group", "chat": chat}),
+                    ("返回成员管理", {"action": "mod_group", "chat": chat}),
                 ]
                 self.store.dialog(
                     uid,
@@ -135,7 +152,7 @@ class ModerationUI:
                 )
                 return await self.ui.render(
                     update,
-                    f"{ACTIONS[kind]} · 选择成员 · 第{page + 1}/{max(1, (count + 7) // 8)}页\n也可发送 @用户名 或 t.me/用户名。\n这里是机器人已识别的成员，不是完整群名单；找不到时请让对方在群里发消息，或回复对方消息并 @机器人。",
+                    f"{label}\n{ACTIONS[kind]} · 选择成员 · 第{page + 1}/{max(1, (count + 7) // 8)}页\n也可发送 @用户名 或 t.me/用户名。\n这里只列机器人已识别的成员，不是完整群名单。",
                     buttons,
                 )
             target = str(payload["target"])
@@ -180,7 +197,7 @@ class ModerationUI:
                 ]
                 return await self.ui.render(
                     update,
-                    f"已选成员 {target}，禁言多久？\n也可直接输入分钟数。",
+                    f"{label}\n已选成员 {getattr(getattr(member, 'user', None), 'full_name', None) or target}，禁言多久？\n也可直接输入分钟数。",
                     buttons + [return_members],
                 )
             return await self.preview(update, kind, chat, target)
@@ -190,14 +207,6 @@ class ModerationUI:
                 "SELECT * FROM platform_mod_groups WHERE enabled=? ORDER BY chat",
                 (0 if pending else 1,),
             ).fetchall()
-            rows = [
-                r
-                for r in rows
-                if self.store.allowed(uid, "manager")
-                or self.store.db.execute(
-                    "SELECT 1 FROM mod_acl WHERE uid=? AND chat=?", (uid, r["chat"])
-                ).fetchone()
-            ]
             visible = []
             unavailable = 0
             for row in rows:
@@ -211,7 +220,7 @@ class ModerationUI:
                     if actor.status in {
                         "creator",
                         "administrator",
-                    } and bot_member.status in {"member", "administrator", "creator"}:
+                    } and bot_member.status in {"administrator", "creator"}:
                         visible.append(row)
                 except ChatMigrated:
                     # The new supergroup is separately discovered and authorized.
@@ -235,7 +244,7 @@ class ModerationUI:
             page = max(0, int(payload.get("page", 0)))
             buttons = [
                 (
-                    r["title"] + ("（已启用）" if r["enabled"] else "（待启用）"),
+                    r["title"] + ("（🟢 已启用）" if r["enabled"] else "（🔴 待启用）"),
                     {"action": "mod_group", "chat": r["chat"]},
                 )
                 for r in rows[page * 10 : (page + 1) * 10]
@@ -256,7 +265,7 @@ class ModerationUI:
                 )
             if self.store.allowed(uid, "manager"):
                 buttons.append(("添加群", {"action": "mod_form", "kind": "add"}))
-            if uid == self.store.owner:
+            if self.store.is_superadmin(uid):
                 buttons.append(("授权指定群", {"action": "mod_form", "kind": "grant"}))
             return await self.ui.render(
                 update,
@@ -298,7 +307,7 @@ class ModerationUI:
                     else []
                 ),
             )
-        if action in {"mod_group", "mod_schedule", "mod_records"}:
+        if action in {"mod_group", "mod_all", "mod_schedule", "mod_records"}:
             info = await self.runtime.bot.get_chat(chat)
             if info.type == "group":
                 actor = await self.runtime.bot.get_chat_member(chat, int(uid))
@@ -315,10 +324,11 @@ class ModerationUI:
                     f"已识别：{info.title}\n这是普通群组。个人禁言等功能需要 Telegram 超级群，转换后重新启用群管即可。",
                     back,
                 )
-            await mod.check(
+            info, _ = await mod.check(
                 uid, chat, "mute" if action == "mod_schedule" else "view", enabled=False
             )
             group = mod.row(chat)
+            label = group_label(info, group["title"])
             schedule = self.store.db.execute(
                 "SELECT * FROM mod_schedules WHERE chat=?", (chat,)
             ).fetchone()
@@ -326,7 +336,9 @@ class ModerationUI:
                 "SELECT action,status,step,error FROM mod_ops WHERE chat=? ORDER BY at DESC LIMIT 5",
                 (chat,),
             ).fetchall()
-            text = f"{group['title']} · {'已启用' if group['enabled'] else '已停用'}"
+            text = (
+                f"{label}\n群管服务：{'🟢 已开启' if group['enabled'] else '🔴 已关闭'}"
+            )
             if action == "mod_records":
                 statuses = {
                     "accepted": "已受理",
@@ -341,12 +353,10 @@ class ModerationUI:
                     )
                     or "还没有操作记录。"
                 )
-                return await self.ui.render(
-                    update, text, [("返回", {"action": "mod_group", "chat": chat})]
-                )
+                return await self.ui.render(update, text, back)
             if action == "mod_schedule":
                 text += "\n" + (
-                    f"每天 {schedule['start']}—{schedule['end']}（北京时间）\n{'运行中' if schedule['enabled'] else '已暂停'}"
+                    f"每天 {schedule['start']}—{schedule['end']}（北京时间）\n{'🟢 运行中' if schedule['enabled'] else '🔴 已暂停'}"
                     if schedule and schedule["error"] != "deleted"
                     else "还没设置定时禁言。"
                 )
@@ -379,63 +389,105 @@ class ModerationUI:
                 return await self.ui.render(
                     update,
                     text,
-                    buttons + [("返回", {"action": "mod_group", "chat": chat})],
+                    buttons + [("返回全群禁言", {"action": "mod_all", "chat": chat})],
+                )
+            if action == "mod_all":
+                permissions = getattr(info, "permissions", None)
+                saved = self.store.db.execute(
+                    "SELECT 1 FROM mod_restrictions WHERE chat=? AND target='all'",
+                    (chat,),
+                ).fetchone()
+                can_send = (
+                    getattr(permissions, "can_send_messages", None)
+                    if permissions is not None
+                    else None
+                )
+                text += (
+                    "\n全员发言："
+                    + (
+                        "🔴 已禁言"
+                        if can_send is False
+                        else "🟢 可发言"
+                        if can_send is True
+                        else "⚪ 无法核验"
+                    )
+                    + (
+                        "\n本插件禁言记录：🟢 可恢复"
+                        if saved
+                        else "\n本插件禁言记录：🔴 无"
+                    )
+                    + "\n手动操作会暂停已有的定时禁言计划。"
+                )
+                text += "\n每日定时：" + (
+                    f"{'🟢 运行中' if schedule['enabled'] else '🔴 已暂停'} · "
+                    f"{schedule['start']}—{schedule['end']}（北京时间）"
+                    if schedule and schedule["error"] != "deleted"
+                    else "🔴 未设置"
+                )
+                text += "\n仅限制普通群员，群主和管理员不受全群禁言影响。"
+                if can_send is False and not saved:
+                    text += "\n当前禁言不是由本插件发起，不能一键恢复；请在 Telegram 群权限中核查。"
+                elif can_send is None:
+                    text += "\n未能读取群发言权限，请刷新后再操作；不会按默认状态放行。"
+            if not group["enabled"]:
+                buttons = []
+                if action == "mod_group":
+                    buttons.append(
+                        (
+                            "开启本群群管服务",
+                            {
+                                "action": "mod_form",
+                                "kind": "enable",
+                                "feature": "group",
+                                "enabled": True,
+                                "chat": chat,
+                            },
+                        )
+                    )
+                return await self.ui.render(
+                    update,
+                    text + "\n服务关闭期间不能执行禁言或处罚，请先开启本群群管服务。",
+                    buttons + back,
+                )
+            if action == "mod_all":
+                kinds = (
+                    ("unmute_all",)
+                    if saved and can_send is not None
+                    else ("mute_all",)
+                    if can_send is True
+                    else ()
+                )
+            else:
+                kinds = (
+                    "mute",
+                    "mute_forever",
+                    "unmute",
+                    "kick",
+                    "ban",
+                    "unban",
+                    "delete",
                 )
             buttons = [
-                (label, {"action": "mod_form", "kind": op, "chat": chat})
-                for op, label in ACTIONS.items()
+                (ACTIONS[kind], {"action": "mod_form", "kind": kind, "chat": chat})
+                for kind in kinds
             ]
-            buttons += [
-                ("定时禁言", {"action": "mod_schedule", "chat": chat}),
-                ("操作记录", {"action": "mod_records", "chat": chat}),
-            ]
-            if group["enabled"]:
-                buttons.append(
-                    ("加拿大28当前倍率", {"action": "mod_multiplier", "chat": chat})
-                )
-                if self.store.allowed(uid, "manager"):
-                    buttons.append(
-                        ("超管群配置模板", {"action": "mod_tpl_home", "chat": chat})
-                    )
-                buttons.append(("广告杀手", {"action": "mod_ak_home", "chat": chat}))
-                buttons.append(("入群验证", {"action": "mod_jv_home", "chat": chat}))
-                if hasattr(self.runtime, "community"):
-                    buttons.append(
-                        ("套用基础配置", {"action": "cm_template", "chat": chat})
-                    )
-                    count = self.store.db.execute(
-                        "SELECT COUNT(*) FROM cm_cases WHERE chat=? AND status='open'",
-                        (chat,),
-                    ).fetchone()[0]
-                    buttons += [
-                        (f"举报处理（{count}）", {"action": "cm_cases", "chat": chat}),
-                        (
-                            "欢迎与群规",
-                            {
-                                "action": "cm_settings",
-                                "chat": chat,
-                                "section": "content",
-                            },
-                        ),
-                        ("违规记录", {"action": "cm_violations", "chat": chat}),
-                        (
-                            "常用说明",
-                            {"action": "cm_settings", "chat": chat, "section": "notes"},
-                        ),
-                        ("日志设置", {"action": "cm_logs", "chat": chat}),
-                    ]
-            if self.store.allowed(uid, "manager"):
+            if action == "mod_all":
+                buttons += [
+                    ("定时禁言设置", {"action": "mod_schedule", "chat": chat}),
+                    ("刷新状态", {"action": "mod_all", "chat": chat}),
+                ]
+            if action == "mod_group":
                 buttons.append(
                     (
-                        "停用此群" if group["enabled"] else "启用此群",
-                        {
-                            "action": "mod_form",
-                            "kind": "disable" if group["enabled"] else "enable",
-                            "chat": chat,
-                        },
+                        "关闭本群群管服务",
+                        {"action": "mod_form", "kind": "disable", "chat": chat},
                     )
                 )
-            return await self.ui.render(update, text, buttons + back)
+            return await self.ui.render(
+                update,
+                f"{text}\n{'全群禁言' if action == 'mod_all' else '成员管理'}",
+                buttons + back,
+            )
         if action == "mod_form":
             kind = payload["kind"]
             if kind in MEMBER_ACTIONS:
@@ -444,13 +496,17 @@ class ModerationUI:
                 )
             if kind == "grant":
                 self.store.require(uid, owner=True)
-            elif kind in {"add", "enable", "disable"}:
+            elif kind == "add":
                 self.store.require(uid, "manager")
             if chat:
                 await mod.check(
                     uid,
                     chat,
-                    "delete" if kind == "delete" else "mute",
+                    "view"
+                    if kind in {"enable", "disable"}
+                    else "delete"
+                    if kind == "delete"
+                    else "mute",
                     enabled=kind not in {"enable", "disable"},
                 )
             self.store.clear_dialog(uid)
@@ -465,18 +521,25 @@ class ModerationUI:
             }:
                 return await self.preview(update, kind, chat, "")
             self.store.dialog(uid, {"moderation": True, "kind": kind, "chat": chat})
+            info = await self.runtime.bot.get_chat(chat) if chat else None
+            label = group_label(info, mod.row(chat)["title"]) if chat else ""
             prompts = {
                 "add": "发送数字群 ID 或 https://t.me/公开群用户名",
-                "grant": "发送：目标UID 有效天数 群ID,群ID\n本链接授予群管范围；领取将替换原业务权限，原权限如需保留应另行统一授权。",
-                "schedule": "发送每日时段，例如 23:00 08:00（北京时间）",
+                "grant": "第1/3步：发送目标用户数字UID。\n本链接授予群管范围；领取将替换原业务权限。/cancel 取消。",
+                "schedule": "第1/2步：发送每日禁言开始时间，例如23:00（北京时间）；/cancel 取消。",
                 "mute": "发送：成员数字UID 禁言分钟数",
                 "delete": "发送此群的 Telegram 消息链接",
             }
             return await self.ui.render(
-                update, prompts.get(kind, "发送成员数字 UID；/cancel 取消"), back
+                update,
+                (label + "\n" if label else "")
+                + prompts.get(kind, "发送成员数字 UID；/cancel 取消"),
+                back,
             )
         if action == "mod_confirm":
             kind, data = payload["kind"], payload["data"]
+            if kind in ACTIONS and (data.get("chat") != chat or data.get("op") != kind):
+                raise Rejected("确认内容与目标群或操作不一致，请重新打开")
             if payload["expires"] <= self.store.clock():
                 raise Rejected("确认已过期")
             if kind in ACTIONS:
@@ -514,7 +577,10 @@ class ModerationUI:
             else:
                 async with mod.locks.setdefault(chat, asyncio.Lock()):
                     await mod.check(
-                        uid, chat, enabled=kind not in {"enable", "disable"}
+                        uid,
+                        chat,
+                        "view" if kind in {"enable", "disable"} else "mute",
+                        enabled=kind not in {"enable", "disable"},
                     )
                     group = mod.row(chat)
                     schedule = self.store.db.execute(
@@ -527,14 +593,38 @@ class ModerationUI:
                     ):
                         raise Rejected("配置已变化，请重新预览")
                     if kind in {"enable", "disable"}:
-                        self.store.require(uid, "manager")
-                        self.store.db.execute(
-                            "UPDATE mod_groups SET enabled=?,version=version+1 WHERE chat=?",
-                            (int(kind == "enable"), chat),
-                        )
+                        from .tenants import binding, platform_group
+
+                        if platform_group(self.store, chat):
+                            if (
+                                kind == "enable"
+                                and self.store.db.execute(
+                                    "SELECT 1 FROM meta WHERE key=?",
+                                    ("group_exit:" + chat,),
+                                ).fetchone()
+                            ):
+                                raise Rejected("退群后须由原经营群主在群管确认重新接入")
+                            self.store.db.execute(
+                                "UPDATE mod_groups SET enabled=?,version=version+1 WHERE chat=?",
+                                (int(kind == "enable"), chat),
+                            )
+                        else:
+                            owner = binding(self.store, chat)
+                            if (
+                                not owner
+                                or data.get("tenant_version") != owner["version"]
+                            ):
+                                raise Rejected("群归属或配置已变化，请重新预览")
+                            self.runtime.tenants.switch(
+                                uid, chat, "group", kind == "enable", owner["version"]
+                            )
                         if kind == "disable":
                             mod.pause(chat, "group_disabled")
                             self.runtime.ad_killer.pause(chat, "group_disabled")
+                            if getattr(self.runtime, "semantic_review", None):
+                                self.runtime.semantic_review.pause(
+                                    chat, "group_disabled"
+                                )
                     elif kind in {"pause", "remove"}:
                         mod.pause(chat, "deleted" if kind == "remove" else "paused")
                     else:
@@ -559,14 +649,101 @@ class ModerationUI:
             return await self.ui.render(
                 update,
                 messages.get(kind, "Telegram 已受理操作，可到操作记录查看详情。"),
-                [("查看此群", {"action": "mod_group", "chat": chat})] + back
+                [
+                    ("返回全群禁言", {"action": "mod_all", "chat": chat})
+                    if kind
+                    in {
+                        "mute_all",
+                        "unmute_all",
+                        "schedule",
+                        "pause",
+                        "resume",
+                        "remove",
+                    }
+                    else ("返回成员管理", {"action": "mod_group", "chat": chat})
+                ]
+                + back
                 if chat
                 else back,
             )
 
     async def preview(self, update, kind, chat, text):
+        from .moderation import moderation_request
+
+        async with moderation_request(
+            self.runtime, str(update.effective_user.id), chat
+        ):
+            return await self._preview(update, kind, chat, text)
+
+    async def _preview(self, update, kind, chat, text):
         uid = str(update.effective_user.id)
         mod = self.runtime.moderation
+        if kind == "grant":
+            dialog = self.store.dialog(uid)
+            if dialog and dialog.get("kind") == "grant":
+                self.store.require(uid, owner=True)
+                values = list(dialog.get("values", []))
+                value = text.strip()
+                if value == "上一步":
+                    values = values[:-1]
+                elif value == "完成":
+                    if len(values) < 3:
+                        raise Rejected("请先填写目标UID、有效天数和至少一个群ID。")
+                    text = f"{values[0]} {values[1]} {','.join(values[2:])}"
+                else:
+                    if len(values) < 2:
+                        if not value.isascii() or not value.isdigit() or int(value) < 1:
+                            raise Rejected("每次只发送一个正整数；/cancel 取消。")
+                        if len(values) == 1 and int(value) > 365:
+                            raise Rejected("有效天数须为1—365。")
+                        value = str(int(value))
+                    else:
+                        if not re.fullmatch(r"-[0-9]+", value):
+                            raise Rejected(
+                                "每次只发送一个数字群ID，例如-1001234567890。"
+                            )
+                        await mod.check(uid, value)
+                        if value in values[2:]:
+                            raise Rejected("此群已添加；发送其他群ID或“完成”。")
+                        if len(values) >= 52:
+                            raise Rejected("最多添加50个群，请发送“完成”。")
+                    values.append(value)
+                if value != "完成":
+                    self.store.dialog(uid, {**dialog, "values": values})
+                    prompt = (
+                        "第1/3步：发送目标用户数字UID。"
+                        if not values
+                        else "第2/3步：发送有效天数（1—365）。"
+                        if len(values) == 1
+                        else f"第3/3步：逐个发送数字群ID，已添加{len(values) - 2}个；发送“完成”预览。"
+                    )
+                    return await self.ui.render(
+                        update, prompt + "\n“上一步”修改；/cancel 取消。"
+                    )
+        if kind == "schedule":
+            dialog = self.store.dialog(uid)
+            if (
+                dialog
+                and dialog.get("kind") == "schedule"
+                and dialog.get("chat") == chat
+            ):
+                await mod.check(uid, chat)
+                if text.strip() == "上一步":
+                    self.store.dialog(
+                        uid, {"moderation": True, "kind": kind, "chat": chat}
+                    )
+                    return await self.ui.render(
+                        update, "第1/2步：重新发送开始时间，例如23:00。"
+                    )
+                if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", text.strip()):
+                    raise Rejected("每次只发送一个时间，例如23:00；/cancel 取消。")
+                if "start" not in dialog:
+                    self.store.dialog(uid, {**dialog, "start": text.strip()})
+                    return await self.ui.render(
+                        update,
+                        "第2/2步：发送恢复发言时间，例如08:00。\n“上一步”修改开始时间；/cancel 取消。",
+                    )
+                text = dialog["start"] + " " + text.strip()
         if kind == "joinverify":
             from .join_verify_ui import input_text
 
@@ -675,7 +852,12 @@ class ModerationUI:
             for group in data["groups"]:
                 await mod.check(uid, group)
         else:
-            await mod.check(uid, chat, enabled=kind not in {"enable", "disable"})
+            await mod.check(
+                uid,
+                chat,
+                "view" if kind in {"enable", "disable"} else "mute",
+                enabled=kind not in {"enable", "disable"},
+            )
             schedule = self.store.db.execute(
                 "SELECT * FROM mod_schedules WHERE chat=?", (chat,)
             ).fetchone()
@@ -683,6 +865,12 @@ class ModerationUI:
                 "group_version": mod.row(chat)["version"],
                 "schedule_version": schedule["version"] if schedule else 0,
             }
+            if kind in {"enable", "disable"}:
+                from .tenants import binding, platform_group
+
+                if not platform_group(self.store, chat):
+                    owner = binding(self.store, chat)
+                    data["tenant_version"] = owner["version"] if owner else None
             if kind in {"schedule", "resume"}:
                 if kind == "resume":
                     if not schedule or schedule["error"] == "deleted":
@@ -708,7 +896,12 @@ class ModerationUI:
             "enable": "启用群",
             "disable": "停用群",
         }
-        description = f"确认{ACTIONS.get(kind, labels.get(kind, kind))}？\n群：{chat or data.get('title', data.get('chat', '所选群'))}"
+        info = await self.runtime.bot.get_chat(chat) if chat else None
+        title = mod.row(chat)["title"] if chat else data.get("title", "")
+        description = (
+            f"确认{ACTIONS.get(kind, labels.get(kind, kind))}？"
+            f"\n群：{group_label(info, title)}"
+        )
         for key, label in {
             "target": "目标",
             "minutes": "分钟",
@@ -721,11 +914,28 @@ class ModerationUI:
         }.items():
             if data.get(key):
                 value = data[key]
+                if key == "groups":
+                    value = [
+                        (
+                            self.store.db.execute(
+                                "SELECT title FROM mod_groups WHERE chat=?", (item,)
+                            ).fetchone()
+                            or {"title": item}
+                        )["title"]
+                        for item in value
+                    ]
                 description += f"\n{label}：{', '.join(value) if isinstance(value, list) else value}"
         if kind in {"ban", "kick"}:
             description += "\n警告：Telegram 可能删除该成员的历史消息。踢出可重新加入，封禁不可自行重新加入。"
         if kind in {"schedule", "resume"}:
             description += "\n北京时间；从下一个未来边界开始，不立即修改群状态。外部管理员临时接管前须暂停计划。"
+        if kind in {"mute_all", "unmute_all"}:
+            description += (
+                "\n影响：普通群员不能发送文字、媒体或链接；群主和管理员不受影响。"
+                if kind == "mute_all"
+                else "\n仅恢复本插件禁言前保存的发言权限，不会把原本关闭的权限全部打开。"
+            )
+            description += "\n确认执行后暂停已有定时禁言计划；返回不做任何修改。"
         return await self.ui.render(
             update,
             description,
@@ -744,7 +954,20 @@ class ModerationUI:
                     "返回上一页",
                     {"action": "mod_members", "kind": kind, "chat": chat}
                     if kind in MEMBER_ACTIONS
-                    else {"action": "mod_group", "chat": chat}
+                    else {
+                        "action": "mod_all"
+                        if kind
+                        in {
+                            "mute_all",
+                            "unmute_all",
+                            "schedule",
+                            "pause",
+                            "resume",
+                            "remove",
+                        }
+                        else "mod_group",
+                        "chat": chat,
+                    }
                     if chat
                     else {"action": "mod_home"},
                 ),

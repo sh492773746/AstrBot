@@ -224,4 +224,6 @@ async def test_authorized_group_admin_cannot_use_owner_template(template):
             s.runtime.ui, private(2), {"action": "mod_tpl_home", "chat": "-1001"}
         )
     await s.runtime.ui.action(private(), {"action": "mod_group", "chat": "-1001"})
-    assert "超管群配置模板" in str(s.bot.send_message.await_args.kwargs["reply_markup"])
+    assert "超管群配置模板" not in str(
+        s.bot.send_message.await_args.kwargs["reply_markup"]
+    )

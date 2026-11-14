@@ -93,21 +93,24 @@ async def test_encrypted_reply_and_nim_reference_use_real_source(native):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "group,message",
+    "group,message,error",
     [
-        ("6", "123"),
-        ("5", "124"),
-        ("private/2/MTAwMg", "123"),
-        ("5", "0"),
-        ("5", "-1"),
-        ("5", "1" * 100),
-        ("5", "１２３"),
+        ("6", "123", "quote_"),
+        ("5", "124", "quote_"),
+        ("private/2/MTAwMg", "123", "private_messages_retired"),
+        ("5", "0", "quote_"),
+        ("5", "-1", "quote_"),
+        ("5", "1" * 100, "quote_"),
+        ("5", "１２３", "quote_"),
     ],
 )
-async def test_quote_cannot_cross_groups_or_invent_native_ids(native, group, message):
-    with pytest.raises(wire.ProtocolError, match="quote_"):
+async def test_quote_cannot_cross_groups_or_invent_native_ids(
+    native, group, message, error
+):
+    with pytest.raises(wire.ProtocolError, match=error):
         await native.send_text(group, "bad-quote", "内容", reply_to=message)
     native.nim.request.assert_not_awaited()
+    assert await native.ledger.receipt("bad-quote") is None
 
 
 @pytest.mark.asyncio

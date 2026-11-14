@@ -67,6 +67,7 @@ async def test_archive_preserves_replay_keys_and_full_payload(text_service):
 async def test_shutdown_waits_for_handler_not_transport_lifetime():
     plugin = Main(MagicMock(), {})
     plugin.store = MagicMock()
+    store = plugin.store
     entered, release, keep_transport = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     async def handler(*args):
@@ -83,10 +84,11 @@ async def test_shutdown_waits_for_handler_not_transport_lifetime():
     await entered.wait()
     stopping = asyncio.create_task(plugin.terminate())
     await asyncio.sleep(0)
-    plugin.store.close.assert_not_called()
+    store.close.assert_not_called()
     release.set()
     await asyncio.wait_for(stopping, 1)
     assert not task.done()
-    plugin.store.close.assert_called_once()
+    store.close.assert_called_once()
+    assert plugin.store is None
     keep_transport.set()
     await task

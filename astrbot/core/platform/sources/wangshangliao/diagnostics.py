@@ -1,20 +1,29 @@
 """Bounded, payload-free diagnostics through the AstrBot logging pipeline."""
 
+import asyncio
 import hashlib
 import logging
+import math
 import re
 import time
 from collections import deque
 
 from astrbot.core import logger
 
+from .business import BusinessError
+from .wire import ProtocolError
+
 FAILURES: dict[tuple[str, str, str, bool], tuple[float, int]] = {}
 MAX_FAILURE_WINDOWS = 512
 ERROR_LABELS = frozenset(
     {
         "transport",
+        "transport_timeout",
+        "operation_cancelled",
         "http_rejected",
         "business_rejected",
+        "member_mute_rejected",
+        "client_check_failed",
         "login_rejected_unspecified",
         "secondary_security_code_required",
         "secondary_security_unverified",
@@ -65,6 +74,9 @@ ERROR_LABELS = frozenset(
         "message_unverified",
         "recall_notification",
         "notification",
+        "notification_cancelled",
+        "notification_expired",
+        "notification_queue_full",
         "receipt_shape",
         "permission_denied",
         "validation_failed",
@@ -72,6 +84,17 @@ ERROR_LABELS = frozenset(
         "model_timeout",
         "model_response_invalid",
         "operation_failed",
+        "raid_arguments",
+        "raid_authorization_required",
+        "raid_evidence_unverified",
+        "raid_existing_mute",
+        "raid_identity_changed",
+        "raid_intent_invalid",
+        "raid_intent_revoked",
+        "raid_join_changed",
+        "raid_policy_changed",
+        "raid_protected",
+        "raid_protection_changed",
         "result_unknown",
         "configuration_conflict",
         "confirmation_invalid",
@@ -82,6 +105,18 @@ ERROR_LABELS = frozenset(
         "card_automation_disabled",
         "moderation_permission",
         "moderation_identity",
+        "moderation_target",
+        "moderation_member_absent",
+        "automatic_existing_native_mute",
+        "blacklist_target_changed",
+        "blacklist_member_unavailable",
+        "blacklist_identity_changed",
+        "blacklist_changed",
+        "blacklist_protected",
+        "mute_list_identity",
+        "mute_list_unavailable",
+        "mute_list_incomplete",
+        "mute_list_rejected",
         "member_pagination_incomplete",
         "members_shape",
         "member_identity",
@@ -91,8 +126,64 @@ ERROR_LABELS = frozenset(
         "body_limit",
         "response_limit",
         "body_authentication_or_compression",
+        "media_image_invalid",
+        "media_image_limit",
+        "media_image_expired",
+        "media_ocr_limit",
+        "media_ocr_timeout",
+        "media_ocr_failed",
+        "media_recognizer_unavailable",
+        "media_recognizer_failed",
+        "media_recognizer_timeout",
+        "media_download_failed",
     }
 )
+
+
+def failure_evidence(exc: BaseException) -> dict:
+    """Retain safe failure facts without response bodies or credential text.
+
+    Args:
+        exc: Exception from authorization, transport or receipt validation.
+
+    Returns:
+        Fixed reason, exception category and optional bounded provider code.
+    """
+    reason = str(exc)
+    if reason not in ERROR_LABELS:
+        reason = (
+            "transport_timeout"
+            if isinstance(exc, TimeoutError)
+            else "operation_cancelled"
+            if isinstance(exc, asyncio.CancelledError)
+            else "business_rejected"
+            if isinstance(exc, BusinessError)
+            else "validation_failed"
+            if isinstance(exc, ProtocolError)
+            else "transport"
+            if isinstance(exc, OSError)
+            else "operation_failed"
+        )
+    result = {
+        "error": reason,
+        "error_type": (
+            "BusinessError"
+            if isinstance(exc, BusinessError)
+            else "ProtocolError"
+            if isinstance(exc, ProtocolError)
+            else "TimeoutError"
+            if isinstance(exc, TimeoutError)
+            else "CancelledError"
+            if isinstance(exc, asyncio.CancelledError)
+            else "OSError"
+            if isinstance(exc, OSError)
+            else "Exception"
+        ),
+    }
+    number = getattr(exc, "number", None)
+    if type(number) is int and number != 0 and -(1 << 31) <= number < 1 << 31:
+        result["provider_code"] = number
+    return result
 
 
 def reference(value: str) -> str:
@@ -133,13 +224,27 @@ class Diagnostics:
                 "model_review",
                 "member_directory",
                 "event_loop",
+                "message_decode",
+                "rule_total",
+                "rule_queue_wait",
+                "rule_execution",
+                "flood_cleanup",
+                "warning_queue",
+                "warning_execution",
+                "business_lock_wait",
+                "business_http",
+                "mute_http",
+                "media_queue",
+                "media_download",
+                "media_recognizer",
+                "media_total",
             }
             or not isinstance(seconds, (int, float))
             or not 0 <= seconds < 86400
         ):
             return
         if metric not in self.samples:
-            self.samples[metric] = deque(maxlen=512)
+            self.samples[metric] = deque(maxlen=1000)
         self.samples[metric].append(seconds * 1000)
         self.sample_counts[metric] = self.sample_counts.get(metric, 0) + 1
 
@@ -151,8 +256,10 @@ class Diagnostics:
             timings[key] = {
                 "count": self.sample_counts[key],
                 "samples": len(ordered),
-                "p50_ms": round(ordered[int((len(ordered) - 1) * 0.5)], 3),
-                "p95_ms": round(ordered[int((len(ordered) - 1) * 0.95)], 3),
+                "p50_ms": round(ordered[math.ceil(len(ordered) * 0.5) - 1], 3),
+                "p95_ms": round(ordered[math.ceil(len(ordered) * 0.95) - 1], 3),
+                "p99_ms": round(ordered[math.ceil(len(ordered) * 0.99) - 1], 3),
+                "max_ms": round(ordered[-1], 3),
             }
         return {"timings": timings, "gauges": dict(self.gauges)}
 
@@ -188,6 +295,8 @@ class Diagnostics:
         count = 1
         if stage == "semantic" and type(duration_ms) is int:
             self.observe("model_review", duration_ms / 1000)
+        if stage in {"content_response", "flood_response"} and type(duration_ms) is int:
+            self.observe("rule_total", duration_ms / 1000)
         stage, outcome, route, action = map(label, (stage, outcome, route, action))
         error = error if error in ERROR_LABELS else "other" if error else "none"
         if failed and aggregate:
@@ -224,7 +333,7 @@ class Diagnostics:
             else logging.DEBUG
             if (
                 stage in {"receive", "process"}
-                and outcome in {"received", "started", "completed"}
+                and outcome in {"received", "started", "completed", "dispatch_finished"}
                 or stage == "recall"
                 and outcome == "observed"
             )

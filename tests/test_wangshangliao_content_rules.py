@@ -2,9 +2,11 @@
 
 import asyncio
 import json
+import re
 import sqlite3
 import threading
 import time
+import unicodedata
 from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,6 +43,60 @@ from tests.fixtures.wsl_actions import bind_action_port
 )
 def test_classification(text, expected):
     assert rules.classify(text) == expected
+
+
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\r", "\u2028", "\u2029"])
+@pytest.mark.parametrize("lines", [1, 4, 5, 6, 7, 8, 9])
+def test_multiline_advertising_counts_explicit_lines(separator, lines):
+    payload = {"text": separator.join(["ordinary text"] * lines)}
+    assert rules.content_category(payload, {"advertising_enabled": True}) == (
+        "external_promotion" if lines > 7 else ""
+    )
+    assert rules.content_category(payload, {"advertising_enabled": False}) == ""
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("one\ntwo\nthree\nfour", ""),
+        ("one\n\nthree\nfour", ""),
+        ("one\ntwo\nthree\nfour\n", ""),
+        ("one\n\n\n\nfive", ""),
+        ("one\r\n\nthree\rfour\nfive", ""),
+        ("one\ntwo\nthree\nfour\nfive\nsix\nseven", ""),
+        ("one\ntwo\nthree\nfour\nfive\nsix\nseven\n", "external_promotion"),
+        ("one\n\n\n\n\n\nseven", ""),
+        ("one\n\n\n\n\n\n\neight", "external_promotion"),
+        ("one\r\n\nthree\rfour\nfive\u2028six\u2029seven", ""),
+        ("one\r\n\nthree\rfour\nfive\u2028six\u2029seven\neight", "external_promotion"),
+        ("ordinary text " * 500, ""),
+        (r"one\ntwo\nthree\nfour\nfive", ""),
+        (r"one\ntwo\nthree\nfour\nfive\nsix\nseven\neight", ""),
+        ("举报：\none\ntwo\nthree\nfour", ""),
+        ("引用：\none\ntwo\nthree\nfour", ""),
+        ("举报：\none\ntwo\nthree\nfour\nfive\nsix\nseven", "external_promotion"),
+        ("引用：\none\ntwo\nthree\nfour\nfive\nsix\nseven", "external_promotion"),
+    ],
+)
+def test_multiline_rule_counts_blank_lines_not_display_wrapping(text, expected):
+    assert (
+        rules.content_category(
+            {"text": text}, {"advertising_enabled": True, "mute_keywords": []}
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize("lines", [1, 5, 7])
+def test_relaxed_line_limit_preserves_keyword_advertising(lines):
+    payload = {"text": "\n".join(["fixture-ad"] + ["ordinary text"] * (lines - 1))}
+    assert (
+        rules.content_category(
+            payload,
+            {"advertising_enabled": True, "mute_keywords": ["fixture-ad"]},
+        )
+        == "mute_keyword"
+    )
 
 
 @pytest.mark.parametrize(
@@ -119,6 +175,94 @@ def test_recalled_advertising_combinations_apply_without_custom_keywords(
 ):
     assert rules.classify(text) == expected
     assert rules.keyword_category(text, {"mute_keywords": []}) == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "☜☜☜几十款 祝㊗️兄弟们一路长洪",
+        "☞几十款，祝大家一路长红！",
+        "☚☚几十款",
+        "☛几百款",
+        "👈🏽多苔有扶",
+        "👉🏻多台有福",
+        "拿扶＋22406063",
+        "拿扶➕22406063",
+        "拿扶加我：22406063",
+        "拿福+（２２４０６０６３）",
+        "拿扶＋二二四零六零六三",
+        "五四三三三每天不定时爆料网红视频",
+        "五四三三三 每日 爆料 网红黑历史",
+        "群号：５４３３３３，每天不定时爆料网红视频",
+        "五四\u200b三三三每天不定时爆料网红视频",
+    ],
+)
+def test_dingfeng_contact_variants_use_existing_advertising_gate(text):
+    assert rules.classify(text) == "external_promotion"
+    assert rules.keyword_category(text, {"mute_keywords": []}) == ""
+    payload = {"text": text}
+    assert rules.content_category(payload, {"advertising_enabled": True}) == (
+        "consecutive_digits"
+        if re.search(r"[0-9]{6,}", unicodedata.normalize("NFKC", text))
+        else "external_promotion"
+    )
+    assert rules.content_category(payload, {"advertising_enabled": False}) == ""
+
+
+@pytest.mark.parametrize("pointer", ["👈", "👉", "☜", "☞", "☚", "☛"])
+@pytest.mark.parametrize("skin", ["", "🏻", "🏼", "🏽", "🏾", "🏿"])
+def test_pointer_solicitation_supports_skin_variants_without_broad_keyword(
+    pointer, skin
+):
+    assert rules.classify(pointer + skin + "几十款") == "external_promotion"
+    assert rules.classify(pointer + skin) == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "☜☜☜几十款 祝㊗️兄弟们一路长洪",
+        "拿扶＋22406063",
+        "五四三三三每天不定时爆料网红视频",
+    ],
+)
+@pytest.mark.parametrize("prefix", ["举报：", "警惕", "引用：", "转发：", "“", "「"])
+def test_contact_variants_preserve_reports_and_quotations(text, prefix):
+    assert rules.classify(prefix + text) == ""
+    assert rules.content_category(
+        {"text": prefix + text}, {"advertising_enabled": True}
+    ) == ("consecutive_digits" if text == "拿扶＋22406063" else "")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "☜☜☜",
+        "👈🏽",
+        "☜几十款车型怎么选",
+        "☞几十款字体的排版教程",
+        "几十款 祝兄弟们一路长洪",
+        "拿扶",
+        "拿扶+1234",
+        "拿扶+1234567890123",
+        "拿扶+22406063=多少",
+        "拿福字给我看看",
+        "拿扶＋",
+        "22406063",
+        "五四三三三",
+        "每天不定时爆料网红视频",
+        "五四三三三网红视频怎么剪辑",
+        "学号五四三三三，每天更新网红视频剪辑教程",
+        "一二三四每天不定时爆料网红视频",
+        "1234567890123每天不定时爆料网红视频",
+        "群里每天不定时爆料网红视频是什么意思",
+    ],
+)
+def test_contact_variants_require_bounded_contact_and_solicitation(text):
+    assert rules.classify(text) == ""
+    assert rules.content_category({"text": text}, {"advertising_enabled": True}) == (
+        "consecutive_digits" if re.search(r"[0-9]{6,}", text) else ""
+    )
 
 
 @pytest.mark.parametrize(
@@ -485,6 +629,8 @@ AD_KEYWORDS = [
     "的来",
     "私我",
     "大秀",
+    "\u65fa\u65fa\u2795",
+    "\u6b63\u5728\u5f00\u4f1a\u6253\u72d7",
 ]
 
 
@@ -493,9 +639,99 @@ def test_requested_ad_keywords_are_unique_persistent_defaults():
         Path(rules.__file__).with_name("keyword_defaults.json").read_text()
     )
     assert set(AD_KEYWORDS) <= set(policy["mute_keywords"])
-    assert len(policy["mute_keywords"]) == 39
+    assert len(policy["mute_keywords"]) == 49
     assert len(policy["mute_keywords"]) == len(set(policy["mute_keywords"]))
     assert policy["kick_keywords"] == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "👈",
+        "👈🏻",
+        "👈🏼",
+        "👈🏽",
+        "👈🏾",
+        "👈🏿",
+        "👈🏿\ufe0f ",
+        "有意向来找我",
+        "找 我",
+        "找\u200b我",
+        "联系我",
+        "联系我们的客服",
+        "私聊我",
+        "私信我",
+        "找俺",
+        "找窝",
+        "找ＷＯ",
+        "滴我",
+        "戳我",
+        "敲我",
+        "扣我",
+        "DD我",
+        "Ｄ我",
+        "来吃肉",
+        "来 吃 肉",
+    ],
+)
+def test_contact_and_pointing_defaults_match_requested_variants(text):
+    policy = json.loads(
+        Path(rules.__file__).with_name("keyword_defaults.json").read_text()
+    )
+    assert rules.keyword_category(text, policy) == "mute_keyword"
+    assert rules.keyword_category(text, {"mute_keywords": []}) == ""
+    assert rules.keyword_category(text, {"keywords": policy["mute_keywords"]}) == (
+        "mute_keyword"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "👉🏽",
+        "👍🏻",
+        "请找管理员",
+        "联系群内客服",
+        "今天吃肉",
+        "这句话提到了他们",
+        "谨防有人发👈🏽广告",
+        "举报有人说找我",
+        "引用“来吃肉”的消息",
+    ],
+)
+def test_contact_defaults_preserve_unmatched_words_and_report_guards(text):
+    policy = json.loads(
+        Path(rules.__file__).with_name("keyword_defaults.json").read_text()
+    )
+    assert rules.keyword_category(text, policy) == ""
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("\u65fa\u65fa\u2795", "mute_keyword"),
+        ("\u65fa \u65fa \u2795\ufe0f", "mute_keyword"),
+        ("\u65fa\u200b\u65fa\u2795 12345678", "mute_keyword"),
+        ("\u6b63\u5728\u5f00\u4f1a\u6253\u72d7", "mute_keyword"),
+        ("\u6b63\u5728 \u5f00\u4f1a \u6253\u72d7\u3002", "mute_keyword"),
+        ("\u6b63\u5728\u5f00\u200b\u4f1a\u6253\u72d7", "mute_keyword"),
+        ("\u65fa\u65fa\u804a\u5929", ""),
+        ("\u6b63\u5728\u5f00\u4f1a", ""),
+        ("\u4e3e\u62a5\uff1a\u65fa\u65fa\u2795", ""),
+        ("\u5f15\u7528\uff1a\u6b63\u5728\u5f00\u4f1a\u6253\u72d7", ""),
+    ],
+)
+def test_november_contact_defaults_preserve_literal_and_report_boundaries(
+    text, expected
+):
+    policy = json.loads(
+        Path(rules.__file__).with_name("keyword_defaults.json").read_text()
+    )
+    assert rules.keyword_category(text, policy) == expected
+    assert (
+        rules.keyword_category(text, {"keywords": policy["mute_keywords"]}) == expected
+    )
+    assert rules.keyword_category(text, {"mute_keywords": []}) == ""
 
 
 @pytest.mark.parametrize(
@@ -519,9 +755,6 @@ def test_requested_ad_keywords_are_unique_persistent_defaults():
         ("直播打狗中", "直播打狗中"),
         ("58", "58小额上分"),
         ("小额", "小额上分"),
-        ("的来", "想接单的来"),
-        ("私我", "需要的私我"),
-        ("大秀", "今晚大秀"),
     ],
 )
 def test_requested_keywords_recognize_promotion_variants(word, text):
@@ -635,6 +868,8 @@ def fixture(tmp_path, monkeypatch):
 async def test_progressive_first_warning_is_mentioned_and_independent(
     tmp_path, monkeypatch, notification, text
 ):
+    # Keep ordinary-ad warning coverage separate from the fixed numeric sanction.
+    text = re.sub(r"[0-9]{6,}", "12345", text)
     adapter, member = fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(automatic, "instance_dir", lambda _: tmp_path)
     adapter.config["_open_groups"] = {}
@@ -682,7 +917,7 @@ async def test_progressive_warning_does_not_display_login_or_erase_sanction(
     if has_nickname:
         member["groupMemberNick"] = name
     payload = {
-        "text": "加我vx:abc123456",
+        "text": "加我vx:abc12345",
         "sender": "2",
         "recall_route": {"time": str(int(time.time() * 1000))},
     }
@@ -732,6 +967,7 @@ async def test_progressive_warning_does_not_display_login_or_erase_sanction(
 async def test_recall_derived_rules_respect_group_advertising_switch(
     tmp_path, monkeypatch, advertising, text
 ):
+    text = re.sub(r"[0-9]{6,}", "12345", text)
     adapter, _ = fixture(tmp_path, monkeypatch)
     adapter.config["moderation"].update(
         advertising_enabled=advertising, mute_keywords=[], kick_keywords=[]
@@ -765,7 +1001,7 @@ async def test_split_contact_evidence_reaches_enforcement_without_flood_switch(
         advertising_enabled=advertising, flood_enabled=False
     )
     payload = {
-        "text": "12345678",
+        "text": "12345",
         "sender": "2",
         "recall_route": {
             "time": int(now * 1000),
@@ -784,7 +1020,7 @@ async def test_split_contact_evidence_reaches_enforcement_without_flood_switch(
         )
         for mid, text, offset in (
             ("old", "找我免费上分", 2),
-            ("contact", "12345678", 0),
+            ("contact", "12345", 0),
         ):
             item = {
                 **payload,
@@ -839,7 +1075,7 @@ async def test_instance_keywords_apply_to_each_authorized_group(tmp_path, monkey
 async def test_warn_repeat_mute_and_duplicate(tmp_path, monkeypatch):
     adapter, _ = fixture(tmp_path, monkeypatch)
     payload = {
-        "text": "加我vx:abc123456",
+        "text": "加我vx:abc12345",
         "sender": "2",
         "recall_route": {"time": str(int(time.time() * 1000))},
     }
@@ -854,6 +1090,39 @@ async def test_warn_repeat_mute_and_duplicate(tmp_path, monkeypatch):
         5,
         2,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["accepted", "unknown", "exception", "cancel"])
+async def test_legacy_content_mutes_before_independent_recall(
+    tmp_path, monkeypatch, outcome
+):
+    adapter, _ = fixture(tmp_path, monkeypatch)
+    data = {
+        "text": "加我vx:abc12345",
+        "sender": "2",
+        "recall_route": {"time": str(int(time.time() * 1000))},
+    }
+    assert await rules.enforce(adapter, "5", "warning", data)
+    adapter.recall_violation.reset_mock()
+    calls = Mock()
+    calls.attach_mock(adapter.execute_moderation, "mute")
+    calls.attach_mock(adapter.recall_violation, "recall")
+    if outcome == "exception":
+        adapter.execute_moderation.side_effect = TimeoutError
+    elif outcome == "cancel":
+        adapter.execute_moderation.side_effect = asyncio.CancelledError
+    else:
+        adapter.execute_moderation.return_value = {"status": outcome}
+    if outcome == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await rules.enforce(adapter, "5", "penalty", data)
+    else:
+        assert await rules.enforce(adapter, "5", "penalty", data)
+    assert [call[0] for call in calls.mock_calls] == (
+        ["mute"] if outcome == "cancel" else ["mute", "recall"]
+    )
+    adapter.send_text.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -924,7 +1193,7 @@ async def test_full_semantic_sanction_path_never_kicks_with_legacy_opt_in(
 async def test_no_sanctions_on_unsafe_evidence(tmp_path, monkeypatch, case):
     adapter, member = fixture(tmp_path, monkeypatch)
     payload = {
-        "text": "加我vx:abc123456",
+        "text": "加我vx:abc12345",
         "sender": "2",
         "recall_route": {"time": str(int(time.time() * 1000))},
     }
@@ -954,7 +1223,7 @@ async def test_content_wait_never_uses_changed_authority(
 ):
     adapter, _ = fixture(tmp_path, monkeypatch)
     payload = {
-        "text": "加我vx:abc123456",
+        "text": "加我vx:abc12345",
         "sender": "2",
         "recall_route": {"time": str(int(time.time() * 1000))},
     }
@@ -998,11 +1267,34 @@ async def test_content_wait_never_uses_changed_authority(
         with closing(sqlite3.connect(tmp_path / "moderation.sqlite3")) as db:
             assert db.execute(
                 "SELECT account,status FROM content_violations"
-            ).fetchall() == [("1", "review_only")]
+            ).fetchall() == [("1", "preflight_failed")]
     finally:
         release.set()
         work.cancel()
         await asyncio.gather(work, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_directory_rejection_is_a_failure_not_record_only(tmp_path, monkeypatch):
+    from astrbot.core.platform.sources.wangshangliao.business import BusinessError
+
+    adapter, _ = fixture(tmp_path, monkeypatch)
+    adapter.get_moderation_members.side_effect = BusinessError("business_rejected", -1)
+    payload = {
+        "text": "加我vx:abc12345",
+        "sender": "2",
+        "recall_route": {"time": str(int(time.time() * 1000))},
+    }
+    assert await rules.enforce(adapter, "5", "failure", payload)
+    store = rules.review_store(adapter, tmp_path / "moderation.sqlite3")
+    assert store.content_outcome("1", "5", "failure") == "preflight_failed"
+    with store.connect() as db:
+        assert db.execute(
+            "SELECT error,provider_code FROM content_rule_errors"
+        ).fetchall() == [("business_rejected", -1)]
+    assert await rules.enforce(adapter, "5", "failure", payload)
+    adapter.get_moderation_members.assert_awaited_once()
+    adapter.execute_moderation.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1022,7 +1314,7 @@ async def test_content_success_after_account_switch_finishes_original_evidence(
         "5",
         "1",
         {
-            "text": "加我vx:abc123456",
+            "text": "加我vx:abc12345",
             "sender": "2",
             "recall_route": {"time": str(int(time.time() * 1000))},
         },
@@ -1036,7 +1328,7 @@ async def test_content_success_after_account_switch_finishes_original_evidence(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["preview", "confirm"])
 @pytest.mark.parametrize("change", ["owner", "account", "cancel"])
-async def test_private_kick_writer_wait_revalidates(
+async def test_retired_private_kick_does_not_wait_for_writer(
     tmp_path, monkeypatch, operation, change
 ):
     adapter, member = fixture(tmp_path, monkeypatch)
@@ -1055,47 +1347,30 @@ async def test_private_kick_writer_wait_revalidates(
         "group": "5",
         "members": [member],
     }
-    command = "踢出 1"
-    if operation == "confirm":
-        preview = await service.run(event, command)
-        command = "确认踢出 " + preview.rsplit(" ", 1)[-1]
-        event.message_obj.message_id = "confirmation"
+    command = "踢出 1" if operation == "preview" else "确认踢出 retired-token"
     blocker = sqlite3.connect(tmp_path / "moderation.sqlite3")
     blocker.execute("BEGIN IMMEDIATE")
-    work = asyncio.create_task(service.run(event, command))
     try:
-        await asyncio.sleep(0.05)
-        assert not work.done()
         if change == "owner":
             event.is_admin = lambda: False
         elif change == "account":
             adapter.account = "other"
         else:
-            work.cancel()
-        blocker.rollback()
-        with pytest.raises(
-            asyncio.CancelledError if change == "cancel" else ProtocolError
-        ):
-            await asyncio.wait_for(work, 3)
+            event.processing_completion = asyncio.get_running_loop().create_future()
+            event.processing_completion.cancel()
+        assert await asyncio.wait_for(service.run(event, command), 0.5) is None
         adapter.execute_moderation.assert_not_awaited()
-        if operation == "confirm":
-            assert blocker.execute(
-                "SELECT used FROM kick_confirmations"
-            ).fetchone() == (0,)
-        else:
-            assert not blocker.execute(
-                "SELECT 1 FROM sqlite_master WHERE name='kick_confirmations'"
-            ).fetchone()
+        assert not blocker.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='kick_confirmations'"
+        ).fetchone()
     finally:
         blocker.rollback()
         blocker.close()
-        work.cancel()
-        await asyncio.gather(work, return_exceptions=True)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("manual_only", [False, True])
-async def test_private_confirmation_bound_single_use(
+async def test_retired_private_confirmation_cannot_create_or_consume_intent(
     tmp_path, monkeypatch, manual_only
 ):
     adapter, member = fixture(tmp_path, monkeypatch)
@@ -1122,14 +1397,13 @@ async def test_private_confirmation_bound_single_use(
             "status": "rejected",
             "reason": "ai_management_retired",
         }
-    preview = await service.run(event, "踢出 1")
-    token = preview.rsplit(" ", 1)[-1]
+    assert await service.run(event, "踢出 1") is None
+    token = "retired-token"
     adapter.execute_moderation.assert_not_called()
-    assert "无效" in await service.run(event, "确认踢出 " + token)
+    assert await service.run(event, "确认踢出 " + token) is None
     event.message_obj.message_id = "confirm"
     event.get_sender_id = lambda: "8"
-    assert "无效" in await service.run(event, "确认踢出 " + token)
+    assert await service.run(event, "确认踢出 " + token) is None
     event.get_sender_id = lambda: "9"
-    assert "accepted" in await service.run(event, "确认踢出 " + token)
-    assert "无效" in await service.run(event, "确认踢出 " + token)
-    adapter.execute_moderation.assert_awaited_once()
+    assert await service.run(event, "确认踢出 " + token) is None
+    adapter.execute_moderation.assert_not_awaited()

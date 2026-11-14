@@ -37,9 +37,11 @@ def is_exempt(instance, account, group, member, peer):
     ):
         return False
     path = instance_dir(instance) / "member_exemptions.sqlite3"
+    from .automatic_whitelist import read_automatic
+
     if path.is_file():
         with closing(
-            sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+            sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)
         ) as db:
             if db.execute(
                 "SELECT 1 FROM speech_exemptions WHERE account=? AND group_id=? "
@@ -47,7 +49,11 @@ def is_exempt(instance, account, group, member, peer):
                 (account, group, member, peer),
             ).fetchone():
                 return True
-    from .automatic_whitelist import read_automatic
+            return bool(
+                read_automatic(
+                    instance, account, group, member=member, peer=peer, manual_db=db
+                )
+            )
 
     return bool(read_automatic(instance, account, group, member=member, peer=peer))
 

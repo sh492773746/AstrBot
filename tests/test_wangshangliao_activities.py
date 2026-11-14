@@ -1,4 +1,4 @@
-"""Private activity controls, durable lotteries and invitation reward evidence."""
+"""Group activity queries, durable lotteries and invitation reward evidence."""
 
 import asyncio
 import copy
@@ -6,7 +6,7 @@ import json
 import sqlite3
 from contextlib import closing
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import pytest_asyncio
@@ -111,6 +111,7 @@ def event(adapter, uid="9", *, private=True, admin=None, mid="message"):
         unified_msg_origin=f"fixture:{'FriendMessage' if private else 'GroupMessage'}:1/{uid if private else '5'}",
         message_obj=SimpleNamespace(message_id=mid),
         get_extra=lambda _: {"created_at": activities.time.time() * 1000},
+        set_extra=Mock(),
     )
 
 
@@ -335,11 +336,8 @@ async def test_fifteen_entries_three_winners_and_single_native_notification(setu
     assert "群通知已受理" in opened and "抽奖状态" in opened
     for uid in range(20, 35):
         roster[str(uid)] = member(uid)
-        assert (
-            await service.command(
-                event(adapter, str(uid), private=False), "5", "参加抽奖", ""
-            )
-            == "参加抽奖成功。"
+        assert "参加抽奖成功。" in await service.command(
+            event(adapter, str(uid), private=False), "5", "参加抽奖", ""
         )
     now[0] += 61
     await service.tick(adapter)
@@ -348,7 +346,7 @@ async def test_fifteen_entries_three_winners_and_single_native_notification(setu
     results = json.loads(row["results"])
     assert len(results) == 3 and len({r["uid"] for r in results}) == 3
     call = adapter.send_reply_text.await_args
-    assert "总共参与15人，综合中奖率20.00%" in call.args[2]
+    assert "总共参与：15，综合中奖率20.00%" in call.args[2]
     assert "联系 秦铭 领取奖品" in call.args[2]
     assert len(call.kwargs["mentions"]) == 3
     assert call.kwargs["auto_recall"] is False and call.kwargs["proactive"] is True
@@ -366,7 +364,7 @@ async def test_concurrent_duplicate_signup_and_capacity(setup):
     replies = await asyncio.gather(
         *[service.command(user, "5", "参加抽奖", "") for _ in range(8)]
     )
-    assert replies.count("参加抽奖成功。") == 1
+    assert sum(reply.endswith("参加抽奖成功。") for reply in replies) == 1
     assert replies.count("你已参加本次抽奖，请勿重复报名。") == 7
     for uid in ["3", "4"]:
         assert "成功" in await service.command(
@@ -401,7 +399,12 @@ async def test_signup_uses_verified_roster_display_names_when_envelope_is_blank(
         "sender": "Envelope Sender",
         "uid": "2",
     }[display]
-    assert await service.command(user, "5", "参加抽奖", "") == "参加抽奖成功。"
+    reply = await service.command(user, "5", "参加抽奖", "")
+    assert reply.endswith(
+        "已参与人数：1\n"
+        + (f"{expected}，" if display != "uid" else "")
+        + "参加抽奖成功。"
+    )
     with closing(activities.database(adapter)) as db:
         entry = db.execute("SELECT * FROM lottery_entries").fetchone()
         assert entry["member"] == "2" and entry["peer"] == "902"
@@ -437,19 +440,33 @@ async def test_all_activity_admin_controls_require_private_authority(
 
 
 @pytest.mark.asyncio
-async def test_existing_command_dispatch_public_queries_and_private_selection(setup):
+async def test_existing_command_dispatch_keeps_public_group_queries(setup):
     service, adapter, _, _, _, _ = setup
     commands = Commands(activities=service)
     public = event(adapter, "2", private=False, admin=False)
     assert await commands.run(public, "抽奖状态") == "尚未开启抽奖。"
     assert "尚未开启邀请统计" in await commands.run(public, "我的邀请")
     assert await commands.run(public, "设置邀请奖励 5") is None
-    private = event(adapter)
-    assert "尚未选择已启用群" in await commands.run(private, "抽奖奖励 奖品")
-    await commands.run(private, "群列表")
-    await commands.run(private, "选择群 1")
-    assert "已设置" in await commands.run(private, "抽奖奖励 奖品")
-    assert await commands.run(event(adapter, "2"), "开启抽奖") == "无权限"
+    assert not commands.selections
+    adapter.send_reply_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uid", ["2", "9"])
+@pytest.mark.parametrize(
+    "text", ["群列表", "选择群 1", "抽奖奖励 奖品", "开启抽奖", "抽奖状态"]
+)
+async def test_private_activity_commands_have_no_dispatch_or_selection(
+    setup, uid, text
+):
+    service, adapter, _, _, _, _ = setup
+    service.command = AsyncMock()
+    commands = Commands(activities=service)
+    assert await commands.run(event(adapter, uid), text) is None
+    assert not commands.selections
+    service.command.assert_not_awaited()
+    adapter.get_moderation_members.assert_not_awaited()
+    adapter.send_reply_text.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -853,7 +870,7 @@ async def test_invitation_gate_and_uniform_credit_lookup(setup):
     mapping["6"] = "2"
     now[0] += 36
     await service.tick(adapter)
-    assert await service.command(user, "5", "参加抽奖", "") == "参加抽奖成功。"
+    assert "参加抽奖成功。" in await service.command(user, "5", "参加抽奖", "")
 
 
 @pytest.mark.asyncio
@@ -909,7 +926,7 @@ async def test_mobile_signup_uses_transport_time_throughout_fifteen_minutes(
         SimpleNamespace(created_at=0), {7: str(int(now[0] * 1000))}
     )
     user.get_extra = lambda _: {"created_at": stamp}
-    assert await service.command(user, "5", "参加抽奖", "") == "参加抽奖成功。"
+    assert "参加抽奖成功。" in await service.command(user, "5", "参加抽奖", "")
     assert (
         await service.command(user, "5", "参加抽奖", "")
         == "你已参加本次抽奖，请勿重复报名。"

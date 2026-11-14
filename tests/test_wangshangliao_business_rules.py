@@ -9,8 +9,6 @@ from zoneinfo import ZoneInfo
 import pytest
 from pydantic import ValidationError
 
-from astrbot.builtin_stars.wangshangliao_moderation import rule_replies
-from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import OpenCall, OpenRPC
 from astrbot.builtin_stars.wangshangliao_moderation.open_service import (
     recognize_integrated,
 )
@@ -24,9 +22,6 @@ from astrbot.builtin_stars.wangshangliao_moderation.rule_replies import (
     RuleReplies,
     next_ad_boundary,
 )
-from astrbot.builtin_stars.wangshangliao_moderation.service_settings import (
-    SupportConfiguration,
-)
 from astrbot.builtin_stars.wangshangliao_moderation.syntax import (
     BUSINESS_COMMANDS,
     recognize_command,
@@ -34,13 +29,10 @@ from astrbot.builtin_stars.wangshangliao_moderation.syntax import (
 from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from tests.test_wangshangliao_group_ai import model_scope, tenant
 from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
-from tests.test_wangshangliao_public_hardening import chat_event
 
 
 @pytest.fixture
-def rules(tmp_path, monkeypatch):
-    monkeypatch.setattr(rule_replies, "ACCOUNT_AD_GAP_SECONDS", 0)
-    monkeypatch.setattr(rule_replies, "IMAGE_TEXT_GAP_SECONDS", 0)
+def rules(tmp_path):
     store = OpenStore(tmp_path)
     tenant(store)
     service = SimpleNamespace(
@@ -96,6 +88,33 @@ def event_for(rule_service, *, text="链接", account="99", group="5", mid="mess
         get_sender_id=lambda: "2",
         message_str=text,
         message_obj=SimpleNamespace(message_id=mid),
+    )
+
+
+def group_event(adapter, *, text="链接", group="5", mid="offline"):
+    """Build a verified native group envelope without private admission."""
+    account = str(adapter.account)
+    extras = {
+        "wangshangliao_payload": {
+            "kind": "text",
+            "created_at": int(time.time() * 1000),
+            "mentions": [],
+        }
+    }
+    return SimpleNamespace(
+        platform=adapter,
+        actor_identity=ActorIdentity(account, "1", "1001", "1"),
+        get_sender_id=lambda: "1",
+        get_group_id=lambda: group,
+        is_private_chat=lambda: False,
+        unified_msg_origin=f"{adapter.meta().id}:GroupMessage:{account}/{group}",
+        message_obj=SimpleNamespace(message_id=mid),
+        message_str=text,
+        get_extra=extras.get,
+        set_extra=lambda key, val: extras.update({key: val}),
+        send=AsyncMock(),
+        plain_result=lambda text: text,
+        stop_event=Mock(),
     )
 
 
@@ -353,8 +372,7 @@ async def test_ads_never_replay_or_retry_unknown(rules, monkeypatch, case):
         "account": "99",
         "group_id": "5",
         "rule_id": "a",
-        "next_at": now
-        - (rule_replies.ADMISSION_WINDOW_SECONDS + 1 if case == "missed" else 0.1),
+        "next_at": now - (20 if case == "missed" else 0.1),
     }
     with rules.store.connect(write=True) as db:
         db.execute("UPDATE business_ad_cursors SET next_at=?", (cursor["next_at"],))
@@ -413,27 +431,9 @@ def test_interrupted_ad_pauses_after_restart_without_replay(rules):
 
 
 @pytest.mark.asyncio
-async def test_group_ownership_does_not_imply_robot_support_editing(rpc_scope):
-    value, adapter, _ = rpc_scope
-    event = chat_event(adapter)
-    await value.verify_actor(event)
-    with pytest.raises(OpenError, match="support_editor_required"):
-        await value.support.command(event, "客服话术 new")
-    assert value.support.read("99")["version"] == 0
-    value.support.grant("99", "1", "1001", 0, True, "server", guard=lambda: None)
-    assert value.support.editor(event.actor_identity)
-    assert not value.support.editor(ActorIdentity("98", "1", "1001", "1"))
-    assert not value.support.editor(ActorIdentity("99", "1", "wrong", "1"))
-    assert not value.support.editor(ActorIdentity("99", "1", "1001"))
-
-
-@pytest.mark.asyncio
 async def test_native_demotion_revokes_rule_commit_and_pending_confirmation(rpc_scope):
     value, adapter, _ = rpc_scope
-    event = chat_event(adapter)
-    event.actor_identity = ActorIdentity("99", "1", "1001", "1")
-    event.is_private_chat = lambda: False
-    event.get_group_id = lambda: "5"
+    event = group_event(adapter)
     _, _, guard = await value.rule_replies.context(event)
     value.member_evidence[("99", "5")]["1"]["groupRole"] = "GROUP_ROLE_MEMBER"
     with pytest.raises(OpenError, match="business_owner_revoked"):
@@ -451,18 +451,9 @@ async def test_complete_ingress_marks_keyword_consumed_before_group_ai(
     await model_scope(value, adapter)
     adapter.send_reply_text = AsyncMock(return_value="accepted")
     save_rules(value.rule_replies, {"keywords": [keyword()]})
-    event = chat_event(adapter)
-    await value.verify_actor(event)
-    event.is_private_chat = lambda: False
-    event.get_group_id = lambda: "5"
-    event.message_str = "链接"
-    event.stop_event = Mock()
-    event.set_extra(
-        "wangshangliao_payload",
-        {
-            "created_at": int(time.time() * 1000),
-            "mentions": [adapter.nim_account] if case == "mention" else [],
-        },
+    event = group_event(adapter)
+    event.get_extra("wangshangliao_payload")["mentions"] = (
+        [adapter.nim_account] if case == "mention" else []
     )
     monkeypatch.setattr(value.rule_replies, "send_guard", lambda *a, **k: None)
     if case == "send_failure":
@@ -478,75 +469,37 @@ async def test_complete_ingress_marks_keyword_consumed_before_group_ai(
         event.message_obj.message_id = "second"
     value.group_ai.observe = AsyncMock()
     await value.on_event(event)
+    value.group_ai.observe.assert_awaited_once()
+    assert value.group_ai.observe.await_args.args == (event,)
     assert value.group_ai.observe.await_args.kwargs["consumed"] is True
+    assert adapter.send_reply_text.await_count == (0 if case == "disabled" else 1)
+    if case != "disabled":
+        assert adapter.send_reply_text.await_args.args[0] == "5"
+        assert adapter.send_reply_text.await_args.args[2] == "已确认的业务资料"
+        assert adapter.send_reply_text.await_args.kwargs["auto_recall"] is False
+    with value.store.connect() as db:
+        receipts = {
+            row["operation"]: row["state"]
+            for row in db.execute("SELECT operation,state FROM business_rule_sends")
+        }
+    assert (
+        receipts
+        == {
+            "mention": {"keyword/99/5/offline": "accepted"},
+            "cooldown": {
+                "keyword/99/5/offline": "accepted",
+                "keyword/99/5/second": "cooldown",
+            },
+            "send_failure": {"keyword/99/5/offline": "unknown"},
+            "disabled": {},
+        }[case]
+    )
     assert value.store.usage()["used"] == 0
 
 
-@pytest.mark.asyncio
-async def test_support_preview_loses_authority_after_revoke(rpc_scope):
-    value, adapter, _ = rpc_scope
-    event = chat_event(adapter)
-    await value.verify_actor(event)
-    value.support.grant("99", "1", "1001", 0, True, "server", guard=lambda: None)
-    editor = value.support.editor(event.actor_identity)
-    preview = value.support.preview(
-        "99",
-        0,
-        {"wording": "account99 only", "links": ["https://example.test/"]},
-        "native",
-        "session",
-        guard=lambda: None,
-        editor=editor,
-    )
-    value.support.grant("99", "1", "1001", 1, False, "server", guard=lambda: None)
-    with pytest.raises(OpenError, match="support_editor_revoked"):
-        value.support.commit(
-            "99", preview["token"], "native", "session", guard=lambda: None
-        )
-    assert value.support.read("99")["version"] == 0
-    assert value.support.read("98")["config"]["links"] == []
-
-
-@pytest.mark.parametrize(
-    "config",
-    [
-        {"provider_id": "evil"},
-        {"tools": ["code"]},
-        {"api_key": "secret"},
-        {"links": ["javascript:alert(1)"]},
-        {"links": ["https://user:pass@example.test"]},
-        {"style": "anything"},
-        {"length": True},
-        {"knowledge": [""]},
-    ],
-)
-def test_support_schema_never_accepts_infrastructure(config):
-    with pytest.raises(ValidationError):
-        SupportConfiguration.model_validate(config)
-
-
 @pytest.mark.parametrize("command", sorted(BUSINESS_COMMANDS))
-def test_fixed_business_commands_cannot_fall_back_to_ai(command):
+def test_fixed_group_business_commands_use_the_native_classifier(command):
     assert recognize_command(command) == command
     assert recognize_command(command + " argument").startswith(command)
     assert recognize_integrated(command) == command
     assert recognize_integrated(command + " argument").startswith(command)
-
-
-@pytest.mark.asyncio
-async def test_server_support_api_rejects_extra_config_fields(rpc_scope):
-    value, _, _ = rpc_scope
-    with pytest.raises(ValidationError):
-        await OpenRPC(value).dispatch(
-            OpenCall(
-                action="support_settings",
-                actor="dashboard/test",
-                payload={
-                    "account": "99",
-                    "operation": "preview",
-                    "version": 0,
-                    "config": {"wording": "valid", "tools": ["code"]},
-                },
-            )
-        )
-    assert value.support.read("99")["version"] == 0

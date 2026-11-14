@@ -1,7 +1,40 @@
 # 旺商聊数据库与性能维护
 
-更新：2026-10-20。本文记录当前实现、升级边界和可重复验收步骤。
+更新：2026-11-01（北京时间）。本文记录实现、候选修复、升级边界和可重复验收步骤，
+具体加载状态以维护记录为准。
 配合[维护与发布](wangshangliao-maintenance.md)、[日志与排障](wangshangliao-diagnostics.md)使用。
+
+## 审核去重清理候选修复（尚未部署）
+
+ReviewStore增加90天的已解决工作记录保留窗口，覆盖`content_violations`、
+`semantic_reviews`、`moderation_action_audit`和`flood_batches`，关联错误、
+刷屏撤回和警告证据按所属记录及独立回执核对后清理。
+顶层显示已禁言不等于撤回成功；仍有关联未知或在途动作时，保留记录。
+旧`review_only`等未确认结果、未知回执和未知刷屏批次不按年龄直接删除。
+不清理`progressive_actions`、`progressive_warnings`、`moderation_cycles`、
+原生`operations`或自动禁言证据，不重置警告或重放处罚。
+
+独立后台工作者每60秒按已绑定账号检查一次，每批最多128个候选，
+大批次撤回子记录另限128项，分页游标避免未知前缀一直遮住后面的可清记录。
+SQL使用新增索引，写锁最多等待50毫秒、SQL计算另限约50毫秒，超预算整批回滚，
+下一轮再检查；不是在收消息或处罚线程中全表清理。
+首次使用前不会凭空创建业务库，切换账号、停止或卸载时再次核对并收尾后台事务。
+已有库的大表索引在群自动化启用前单独准备；完整重启时插件先于平台实例加载，
+因此也读取当前平台配置的账号绑定，后建渐进和自动禁言表同步建关联索引。
+清理遇到缺索引只报告迁移待处理，不在每分钟清理中反复尝试大型建索引。
+历史包在写内容记录前拒绝，刷屏保留水位随事务持久化，防止清掉去重后重放旧批次。
+这仅控制已解决审核工作记录的增长；需要人工核对的未知证据及核心幂等表仍会保留，
+不能声称整个数据库永久严格有界。不执行VACUUM、不承诺文件立刻变小，
+SQLite空闲页可供后续写入复用。财务、活动、名单与聊天正文保留策略不变。
+本轮未对生产数据库执行清理，源码变更与离线验证不等于线上加载。
+
+English: candidate-only ninety-day retention applies to resolved ReviewStore
+working records, not all sanction ledgers. Small account-scoped background
+transactions preserve unknown/in-flight references and all native/progressive
+idempotency. Writer contention and SQL-budget expiry roll back the pass.
+Persistent flood watermarks and stale-envelope rejection prevent replay after
+cleanup. No production cleanup, vacuum, configuration change or deployment is
+implied.
 
 ## 数据放在哪里
 

@@ -1,5 +1,41 @@
 # 旺商聊脚本分类与风险 / Script Inventory
 
+## 当前私信入口退役 / Private Runner Retirement
+
+2026-11-07源码整理：私信业务和旧菜单不再作为当前验收入口。
+已移除专属旧脚本`check_wsl_finance_chat_live.py`、
+`check_wsl_private_invitations_live.py`、`check_wsl_guidance_dialogue_live.py`、
+`check_wsl_three_guides_live.py`，不恢复私信财务、邀请菜单、客服咨询或固定欢迎图重放。
+`check_wsl_three_live.py`同步移除调用旧私信财务 runner 的`finance`阶段，
+`check_wsl_component_runtime.py`只保留群运行／规则检查，不再模拟客服页面。
+`check_wsl_tree_menu_live.py`仍被群验收脚本作为共享辅助类导入，暂未删除；
+其私信／数字菜单流程已失效，**不作为可运行入口**，也不要运行其导入者的旧私信阶段。
+群图文、群AI和后台账本仍保留；离线测试只使用临时数据和合成传输。
+本次没有运行实群脚本、修改生产数据、构建、部署或进行手机验收。
+下文有明确日期的发布和验收结论属于历史记录，不代表本次结果。
+
+English: four private-only runners were removed from source on November 7, 2026.
+The old tree-menu module remains solely because shared live scripts import its
+helper; its private/menu workflow is not a current runnable check. Do not replay
+legacy private phases through those importers. Group media, group AI and Dashboard
+accounting remain. This cleanup does not change production data or establish
+deployment, live execution or phone acceptance.
+
+## 防袭群隔离性能检查（2026-10-31）
+
+`check_wangshangliao_raid_performance.py`只在临时目录构造中性合成消息，
+对照真实认证解包、SQLite接收入队和内存规则决策；不读取生产认证、不调用HTTP或OCR，
+不发群消息、不提交禁言／撤回、不改任何正式群。最少1000样本；
+`--output`仅写调用者明确指定的本地元数据结果文件。
+应在其他构建和测试结束后运行，并保留失败对照，不用负载干扰下的单次结果冒充容量结论。
+
+```bash
+ASTRBOT_DISABLE_FILE_LOGGING=1 .venv/bin/python scripts/check_wangshangliao_raid_performance.py --samples 1000
+```
+
+English: isolated synthetic codec/ledger/decision comparison only, never a live
+raid rehearsal or HTTP/OCR capacity claim. Production group switches stay unchanged.
+
 同步日期：2026-10-22（北京时间）。脚本从项目根目录显式运行，不注册到公共命令、AI或生产定时任务。
 `check_`前缀**不代表只读**；先读源码及参数解析，确认支持后再用`--help`，
 真实写入需要明确授权、固定对象和恢复点。
@@ -53,16 +89,14 @@ their initial baseline rather than clearing the counter.
 | 只读性能／本地负载 | [benchmark_wsl_database.py](benchmark_wsl_database.py)、[check_wsl_open_load.py](check_wsl_open_load.py) | 前者临时合成库；后者默认真实库只读，可`--database`指定快照；当前绝对报告显式加`--absolute-query-report` |
 | 固定测试实验室 | [wsl_test_lab.py](wsl_test_lab.py) | 邀请、移除及平台角色等测试能力；预览确认、对象白名单，不用于正式群；预览也访问平台并保存测试日志 |
 | 旧群离线归零 | [reset_wsl_test_group.py](reset_wsl_test_group.py) | 默认预览；`--apply`只处理已授权1459282，双服务停止、备份／摘要确认；不是全新群证明 |
-| 当前真实验收 | [check_wsl_pair_live.py](check_wsl_pair_live.py)、[check_wsl_pair_rejoin_live.py](check_wsl_pair_rejoin_live.py) | 大蛤为机器人、林夕为管理、受控群；会临时处罚／改配置，须恢复和留证 |
-| 三账号在线验收 | [check_wsl_three_live.py](check_wsl_three_live.py) `--apply --phase ...` | 复用林夕、大蛤、test的已有连接，不创建第四条NIM连接；仅1459282，临时原生管理权限结束后恢复，知识库测试仅增删本轮资料 |
-| 无提权协作验收 | [check_wsl_cooperative_live.py](check_wsl_cooperative_live.py) | 默认只列计划；`--apply`使用43506527既有私信授权联系31846829，并由23691273触发1459282固定命令拒绝；只开短时测试窗口、不改策略或角色。`--phase permissions`不重发帮助检查；新帮助未加载时完整阶段会明确失败 |
+| 历史群验收工具 | [check_wsl_pair_live.py](check_wsl_pair_live.py)、[check_wsl_pair_rejoin_live.py](check_wsl_pair_rejoin_live.py) | 仍依赖旧私信辅助类，不能作为当前整套验收直接运行；群处罚／成员流程需另审查现行阶段与恢复边界 |
+| 历史三账号工具 | [check_wsl_three_live.py](check_wsl_three_live.py) | 保留群阶段源码，但旧私信、数字菜单及个人知识流程不再适用，`finance`阶段已移除；不通过此工具恢复退役入口，群阶段须另获授权并复核 |
+| 历史协作验收 | [check_wsl_cooperative_live.py](check_wsl_cooperative_live.py) | 包含已退役私信客服／帮助流程，不是当前推荐入口；不通过旧发送授权恢复私信功能 |
 | 三账号引用矩阵 | [check_wsl_quotes_live.py](check_wsl_quotes_live.py) | 默认计划，`--preflight`核验当前配置绑定，`--apply`发送9条固定群消息、各由另外两账号见证；无需为见证账号开通群服务或提权，不证明组件试点已加载 |
 | 独立收费测试 | [check_wsl_model_cost.py](check_wsl_model_cost.py) | 固定最多4次模型调用；只在单独授权后运行，不打开公共AI门禁 |
 | 知识检索模型测试 | [check_wsl_knowledge_model.py](check_wsl_knowledge_model.py) `--apply` | 独立测试库检索、当前咨询／热群人格各一次真实调用；不传正式知识，不等于公共AI聊天门禁通过 |
 | 语义模型专项 | [check_wangshangliao_semantic.py](check_wangshangliao_semantic.py) | 六个合成场景使用真实配置模型，可能计费，无`--apply`门禁；不执行平台处罚，但不是离线回归 |
-| 套餐原生命令 | [check_wsl_tree_menu_live.py](check_wsl_tree_menu_live.py) `--billing` | 受控两账号原生私聊，查本人套餐及数字菜单；临时私信发送授权和测试窗口会恢复，不授予付费套餐、不调用模型 |
-| 后台复核 | [check_wsl_readonly_retest.py](check_wsl_readonly_retest.py) | 默认真实读取及页面检查；`--private`会临时改发送授权、开窗口并发固定私聊；`--platform`访问认证平台，不能笼统称零写入 |
-| 财务聊天演练 | [check_wsl_finance_chat_live.py](check_wsl_finance_chat_live.py) | 默认读取；`--native`／`--extended`使用独立模拟账本但真实私聊、窗口及临时设置；`--reload`重载插件，不转账或写正式账本 |
+| 后台复核 | [check_wsl_readonly_retest.py](check_wsl_readonly_retest.py) | 默认真实读取及页面检查；旧`--private`阶段已不适用，不能运行；`--platform`访问认证平台，不能笼统称零写入 |
 | 旧结账日志检查 | `check_wsl_cashier_logging.py`（已移除） | 不再重启独立结账进程；日志由插件入口统一记录 |
 
 English: prefer the entries above. Offline/rendering checks do not prove upstream
@@ -165,10 +199,9 @@ production SLA.
 不重置旧次数，最多二十次，保留三十秒写入间隔。
 三账号脚本默认不变更原生角色，先读实时目录；请在官方App预先设置大蛤为管理员。
 必须显式增加`--manage-test-role`才使用上述角色写入额度，不能用旧缓存代替目录核验。
-`check_wsl_three_guides_live.py`默认只打印计划，`--apply`在短时窗口向1459282
-重发两张固定欢迎图，以另一账号原生接收记录、出站回执、原图和缩略图摘要核验。
-后台`test_guides`不能传文件、URL、群号或任意方法，最多消耗窗口中的两个发送名额，
-继续遵守三秒冷却。它不重置首次欢迎、不假称首次加好友或手机显示通过。
+旧固定欢迎图重放脚本`check_wsl_three_guides_live.py`及后台`test_guides`已移除，
+不再提供首次欢迎或双图菜单验收。群关键词／定时图片仍使用当前群规则素材、
+出站回执和有界原生见证，不重放历史欢迎，不据此声称手机显示通过。
 `--phase lottery-member`显式启用固定成员抽奖测试；后台`test_lottery`只操作
 原窗口的一次标记活动。报名使用真实接收，创建／开奖明确标为后台测试，不冒充群主聊天。
 `check_wsl_three_card_live.py --apply`在独立测试数据目录预览并要求确认改名及恢复，
@@ -196,9 +229,10 @@ Completed flood receipts are window-scoped; continued messages within one window
 do not repeat a mute. Witness persistence uses an isolated transaction so a
 revoked or cancelled observation cannot commit or roll back unrelated writes.
 Native roles are read fresh; role changes require explicit `--manage-test-role`
-and remain subject to the persistent daily cap. Fixed-guide replay has a separate
-opt-in runner, original-window guards and independent native image receipts;
-it does not prove first-friend acceptance or phone rendering.
+and remain subject to the persistent daily cap. Fixed welcome-guide replay and its
+runner have been removed. Current keyword/scheduled group images retain their
+own rule assets, native receipts and bounded witnesses, not old welcome menus or
+claims of phone rendering.
 Local `wsl_test_lab` owner-transfer actions are separate from administrator grants.
 Only the fixed owner and peer in1459282 can exchange ownership; return needs a
 verified forward journal receipt and a new confirmation. They share the existing
@@ -222,7 +256,7 @@ October19; the prior long-card unknown remains recorded and is never replayed.
   [check_wsl_authorization_live.py](check_wsl_authorization_live.py)、
   [check_wsl_flood_cycle_live.py](check_wsl_flood_cycle_live.py)、
   [check_wsl_flood_live.py](check_wsl_flood_live.py)、
-  [check_wsl_workflows_live.py](check_wsl_workflows_live.py)、`check_wsl_tree_menu_live.py`。
+  [check_wsl_workflows_live.py](check_wsl_workflows_live.py)。
   其中真实消息、禁言、公告和活动脚本可能修改测试状态，不能把失败当作安全重跑依据。
   特别是`check_wsl_authorization_live.py`没有`--apply`预览门禁，直接执行即开始真实流程；
   它仍被公共辅助库与回归引用，保留不等于适合当前线上重跑。
@@ -232,13 +266,12 @@ October19; the prior long-card unknown remains recorded and is never replayed.
   1459282执行；1／3／10分钟均自然等待，窗口分段且每段不超过300秒。
   到期回读延迟与未知结果单独记录；只读确认旧处罚结束后可用
   `--resume-directory`沿用原账本续验排名，不重发处罚、不重置违规计数。
-- 私聊／页面：[check_wsl_private_invitations_live.py](check_wsl_private_invitations_live.py)、
-  [check_wsl_ai_dialogue_live.py](check_wsl_ai_dialogue_live.py)、
+- 历史私聊／页面：[check_wsl_ai_dialogue_live.py](check_wsl_ai_dialogue_live.py)、
   [check_wsl_migration_dialogue.py](check_wsl_migration_dialogue.py)、
   [check_wsl_live_page.py](check_wsl_live_page.py)、
   [check_wsl_integrated_page.py](check_wsl_integrated_page.py)、
   `check_wsl_cashier_browser.py`。
-  旧AI管理轮次仅保留历史证据，当前不能据此重新开放工具或公共模型。
+  旧私信、菜单及AI管理轮次仅保留历史证据，私信业务已移除，不能据此重新运行或开放工具。
 - 目录／邀请／配置：[check_wangshangliao_invitations.py](check_wangshangliao_invitations.py)、
   [check_wsl_invitation_history.py](check_wsl_invitation_history.py)、
   [check_wsl_account_names.py](check_wsl_account_names.py)、
@@ -282,15 +315,15 @@ MemoryMax 2G、TasksMax 256。旧结账服务及其加固单元于2026-10-22移�
 
 ## 拒绝兼容与已删除 / Retirement
 
-2026-10-22（北京时间）本轮文件清理仅补记一个无对应源码的
-`developer_gate.cpython-312.pyc`已备份后删除；本次文档收尾不执行删除，
-不删除其他脚本、缓存或历史。下列2026-10-21及更早记录保留原日期与结论，
-不计为本轮再次清理或回归。本次未运行脚本、测试或构建，也未重启或部署。
+以下是2026-10-22（北京时间）的历史记录，不是本次清理范围：
+当时文件清理仅补记一个无对应源码的`developer_gate.cpython-312.pyc`已备份后删除；
+该次文档收尾未删除其他脚本、缓存或历史，也未运行脚本、测试、构建、重启或部署。
+下列2026-10-21及更早记录保留原日期与结论，不计为本次再次执行。
 
-English: this round records only one previously backed-up and removed orphan
-`developer_gate.cpython-312.pyc`. No other scripts, caches or history are removed.
-Earlier dated cleanup and acceptance conclusions remain historical; this
-documentation pass runs no scripts, tests, builds, restarts or deployments.
+English: the following is the historical October 22 documentation pass, which
+recorded one previously backed-up and removed orphan `developer_gate.cpython-312.pyc`.
+It did not perform the current private-runner cleanup. Earlier dated conclusions
+remain historical and are not new executions.
 
 2026-10-21脚本清理移除以下8个无生产、脚本或回归导入依赖的过期入口，
 旺商聊Python脚本由75个减为67个。删除前源码及受影响文档／测试已归档：
@@ -305,7 +338,7 @@ documentation pass runs no scripts, tests, builds, restarts or deployments.
 | `check_wsl_invitation_recalls.py` | 旧实例及额外缓存令牌NIM登录，已由现有连接和账本核对替代 | [check_wsl_invitation_history.py](check_wsl_invitation_history.py)、受控三账号阶段 |
 | `check_wsl_saved_suffix.py` | 无预览，直接修改废弃群1143980名片及固定大海传媒后缀 | [check_wsl_three_card_live.py](check_wsl_three_card_live.py)，独立数据目录、预览确认及恢复 |
 | `check_wsl_shared_platforms.py` | 旧采集插件重载入口，空统计也能通过且未验证原生在线 | 配置启用实例全集与`GET /api/v1/bots/stats`及连接状态逐项核对 |
-| `check_wsl_welcome_repair.py` | 已完成的特定重邀／单张旧欢迎图修复验收，不代表现行双图流程 | [check_wsl_three_guides_live.py](check_wsl_three_guides_live.py)，使用既有连接及独立对端回执 |
+| `check_wsl_welcome_repair.py` | 已完成的特定重邀／单张旧欢迎图修复验收 | 固定欢迎图与旧菜单流程也已退役；保留历史证据，不重新发送 |
 
 English: eight unreferenced, obsolete runners were archived and removed on
 October 21, 2026. The private archive preserves the pre-cleanup sources and affected
@@ -377,7 +410,8 @@ No production API, model request or configuration save is used by this regressio
 ## 离线验证索引 / Offline Verification Index
 
 Python回归同时收集`tests/test_wangshangliao_*.py`和`tests/test_wsl_*.py`；
-近期六类`test_wsl_audit_*_20261019.py`及三个`test_wsl_distributed_*`不能漏测。
+近期六类`test_wsl_audit_*_20261019.py`及保留的`test_wsl_distributed_*`不能漏测；
+专属旧好友／私信测试已移除，混合文件仍保留群功能覆盖。
 `tests/conftest.py`隔离WSL指标／模型统计及会话偏好，但不是所有路径或网络的沙箱。
 登录截图仍有`data/temp`硬编码，部分独立浏览器工具也默认写此目录或旧固定备份目录；
 在隔离检出目录运行，并显式选择本轮截图和产物输出，不复用生产数据目录。
@@ -391,21 +425,17 @@ Python回归同时收集`tests/test_wangshangliao_*.py`和`tests/test_wsl_*.py`�
 失败读和迟到响应；AI配置及预算还有独立Node测试。它们不会调用生产接口，
 不能证明编译产物已更新、手机客户端显示或供应商扣费。
 上述脚本代码链接对应当前`*wsl*`／`*wangshangliao*` Python文件；
-三账号专项还包括[欢迎图](check_wsl_three_guides_live.py)和
-[隔离名片](check_wsl_three_card_live.py)，不能从默认阶段推断全部已执行。
+三账号专项还包括[隔离名片](check_wsl_three_card_live.py)，
+固定欢迎图重放已移除，不能从默认阶段推断其他专项已执行。
 源码链接用于仓库审阅；离线HTML不打包Python、测试或service源码，
 Node文档测试只保证Markdown文档链接可映射，不能据此声称所有源码链接均可离线打开。
 
 ## Real AI Dialogue Experiments
 
-[check_wsl_guidance_dialogue_live.py](check_wsl_guidance_dialogue_live.py) is opt-in
-(`--apply --evidence /opt/backups/EXISTING_PRIVATE_DIRECTORY`). It uses only the
-existing online 林夕31846829 → 小满43506527 private peers, checks native receipts
-and independent witnesses for eight guidance questions, restores its exact-peer
-send grant with revision checks and closes its developer window. No NG guidance
-trial, plan grant, group AI or financial permission is consumed or created.
-Supplier requests can incur actual charges. Unknown sends are not replayed and
-existing evidence is not overwritten.
+The private administrator-guidance runner
+`check_wsl_guidance_dialogue_live.py` has been removed with the private-only
+workflow. Existing dated evidence is historical; do not recreate private trials,
+send grants or menu tests as a replacement.
 
 [check_wsl_warm_dialogue_model.py](check_wsl_warm_dialogue_model.py) uses the current
 bound warm-group configuration and persona with real supplier/PC28 requests, but

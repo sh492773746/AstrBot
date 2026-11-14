@@ -7,12 +7,13 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 @page{size:A4;margin:18mm 16mm} @media print{body{font-size:10pt;margin:0;padding:0;max-width:none}nav{display:none}h1{font-size:22pt}h2{font-size:15pt;break-after:avoid}tr,pre{break-inside:avoid}table{font-size:9pt}a{color:inherit;text-decoration:none}}
 </style></head>
 <body><nav><a href="../#/platforms">AstrBot</a><a href="wangshangliao-index.html">文档目录</a><a href="wangshangliao-start.html">中文入门</a><a href="wangshangliao-start-en.html">English</a></nav><h1>接入器与插件配置迁移</h1>
-<p>当前防刷屏按同一账号、群及成员计数，包含普通群命令：5秒3条、10秒8条，
+<p>当前防刷屏按同一账号、群及成员计数，包含普通群命令：3秒5条、10秒15条，
 或30秒同文5条，不等待模型；原有禁言历史保留，不补处理旧消息。</p>
 <p>更新：2026-10-20。2026-10-07迁移构建与2026-10-08部署是历史节点；
-当前公共机器人已集成于共享AstrBot，独立结账服务仍保留。
-旧<code>astrbot-open.service</code>与公共<code>control.sock</code>不恢复；结账专用<code>cashier.sock</code>
-仍承担受限写入及诊断桥接。代码回归或部署成功均不等于全部线上功能验收。</p>
+当前公共机器人已集成于共享AstrBot，邀请记账／结账也使用插件WebUI，原账本保留。
+旧独立公共进程、结账站点及其登录入口不恢复。
+本轮全部私信功能退役尚未部署，禁言优先与防袭群仍待加载和实群验收，防袭群缺省关闭。
+代码回归或部署成功均不等于全部线上功能验收，见<a href="wangshangliao-start.html">当前映射</a>。</p>
 <p>2026-10-20后续三账号警告实测已通过，范围仅限<code>1459282</code>两个隔离fixture的3次警告（1＋2次），
 不代表完整三级升级、全新群开通、财务或手机画面验收；详见<a href="wangshangliao-testing.html">测试与验收</a>。
 本轮冗余整理仅合并等价回复调用／关键词校验并删除未使用的旧头像定价迁移函数，
@@ -48,23 +49,31 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 </tr>
 <tr>
 <td>模型关联、回复、审核参数</td>
-<td>AI服务 → 客服咨询／群聊与热群／模型与预算；旧审核配置页在合并模式隐藏</td>
+<td>AI服务 → 群聊与热群／模型与预算；规则在群管理→规则，客服与管理员私信指引已移除</td>
 </tr>
 <tr>
 <td>业务配置变更和错误</td>
 <td>运行与日志 → 操作日志／群管审计</td>
 </tr>
 <tr>
-<td>自动同意好友、异常核对</td>
-<td>群管理 → 好友申请；不提供好友删除</td>
+<td>自动同意好友、欢迎及好友申请页</td>
+<td>全部退役，无自动好友替代；保留历史审计</td>
 </tr>
 <tr>
 <td>登录管理员、模型、人格、知识库</td>
 <td>保留 AstrBot 原有入口</td>
 </tr>
 <tr>
-<td>现金付款登记、CF Access 与联系方式</td>
-<td>保留独立结账页</td>
+<td>私信结账、付款确认及财务授权页</td>
+<td>私信入口退役；已有后台权限者用活动与财务→邀请记账／结账，不继承旧Access或聊天角色</td>
+</tr>
+<tr>
+<td>私信菜单、选群、个人知识及私信AI</td>
+<td>移除；回目标群使用现行固定命令，不迁入群AI</td>
+</tr>
+<tr>
+<td>私信广告图片及附件录入</td>
+<td>已有后台权限者在群管理→规则上传关键词／定时图片</td>
 </tr>
 </tbody>
 </table>
@@ -95,16 +104,16 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 </thead>
 <tbody>
 <tr>
-<td>普通用户私聊／群内 @</td>
-<td>私聊<code>/chat</code>咨询；群@须逐群开启并通过门禁；公开固定命令独立，无AI群管工具</td>
+<td>普通用户／管理员私信</td>
+<td>全部退役，不执行命令、AI、财务或收图</td>
 </tr>
 <tr>
-<td>管理员群内 @</td>
-<td>启用时仍为客服，不进入自然语言配置确认</td>
+<td>群内 @</td>
+<td>逐群开启并通过门禁后使用本账号本群群AI，不进入自然语言配置确认</td>
 </tr>
 <tr>
-<td>管理员私聊</td>
-<td>仅当前获授权的固定管理命令可预览／确认；AI只解释，不写配置</td>
+<td>本群获授权原生管理员</td>
+<td>当前群固定命令；不因此获得全局后台权限</td>
 </tr>
 <tr>
 <td>WebUI 已认证管理员</td>
@@ -130,12 +139,11 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 均按<code>profiles.resolve(&quot;group&quot;, account, group)</code>使用群聊配置及账号／单群覆盖，不走私聊咨询人格。
 共享群人格，但群@只带本人新@会话中配置允许的有界历史，不跨成员、群、账号或私聊，
 不迁移或复用旧群客服咨询历史；自主候选缓存及原<code>/group</code>来源不变。
-群输出为纯文本，不加<code>【群聊AI】</code>或<code>【客服咨询】</code>前缀；私聊只读AI行为不变。
+群输出为纯文本，不加<code>【群聊AI】</code>或<code>【客服咨询】</code>前缀；私信AI已退役。
 三种群模式
 均受预算、扣费人、当前权限、额度和时段检查，不是“所有群@永不触发AI”。
-好友读取至少间隔3秒、自动同意至少间隔30秒，另有扫描周期与持久化退避；
-未知审批仅后台读回核对，开关不清暂停。首次引导先持久化认领，
-未确认投递不自动补发，固定原生图片不会在欢迎路径自动上传。好友删除入口不得恢复。</p>
+不再扫描或审批好友、不发送欢迎或额度私信，不补发历史待办；
+好友审批与首次引导历史库保留，未知记录不改写为成功。</p>
 <p>操作日志记录操作者、实例、版本、前后业务值、结果与错误码，不包含登录密码和会话凭据。
 日志为有界查询，凭据备份绝不能作为操作日志或截图公开。</p>
 <h2>备份与回滚</h2>
@@ -184,11 +192,10 @@ table{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}td,t
 付款登记和原收款人审计保持不变，页面显示“已结账 · 归属待核对”，个人邀请统计不计入。
 已付款后的另一次入群不重分配原付款归属，也不产生第二笔返现。</p>
 <h2>上线门槛</h2>
-<p>刷屏兜底按账号、群和成员隔离：10 秒内达到 8 条消息或 30 秒内相同文本达到
-5 条触发，普通群命令同样参与计数，不依赖模型判断。过期消息、重复事件不累计。
-开启递进处罚后，前三次成功撤回不禁言，随后撤回并禁言 5、15、60 分钟，后续封顶 60 分钟。
-前三次撤回额度持久保存，不因重启重置；失败或未知撤回不增加成功次数。
-历史禁言记录继续保留并用于升级，未恢复自动踢群。</p>
+<p>刷屏兜底按账号、群和成员隔离：3秒5条、10秒15条或30秒同文5条，
+普通群命令同样参与计数，不依赖模型判断。过期消息、重复事件不累计。
+广告和刷屏共用三次撤回警告，再禁言1／3／10分钟；10分钟处罚结束后重新三次警告。
+失败及未知不升级；需要禁言时先提交禁言，再独立撤回。历史禁言记录保留，不自动踢群。</p>
 <p>“当前群”显示群目录中的实际群名称，并保留群 ID 用于区分同名群；名称缓存缺失时，
 管理页向已登录账号的群列表补查，不以群 ID 冒充名称。</p>
 <p>隔离服务链路验收使用临时数据库和模拟平台接口，覆盖停用留存证据、恢复旧价核验、

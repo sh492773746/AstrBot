@@ -1,4 +1,4 @@
-"""Shared private/group commands without friendship or cross-group authority."""
+"""Group commands without friendship or cross-group authority."""
 
 import asyncio
 from unittest.mock import AsyncMock
@@ -9,7 +9,6 @@ import pytest_asyncio
 from astrbot.builtin_stars.wangshangliao_moderation.activities import GroupActivities
 from astrbot.builtin_stars.wangshangliao_moderation.commands import Commands
 from astrbot.builtin_stars.wangshangliao_moderation.open_service import (
-    OPEN_COMMANDS,
     recognize,
     recognize_integrated,
 )
@@ -160,7 +159,6 @@ async def test_group_image_never_consumes_finance_or_menu_input(setup):
     [
         "群列表",
         "选择群 1",
-        "我的权限",
         "成员列表",
         "成员搜索 Target",
         "下一页",
@@ -193,7 +191,12 @@ async def test_group_image_never_consumes_finance_or_menu_input(setup):
         "删除关键词 1",
     ],
 )
-def test_manager_command_prefix_is_optional_in_both_channels(command):
+def test_manager_command_prefix_is_optional_for_group_commands(command):
+    if command in {"群列表", "选择群 1"}:
+        assert recognize(command) == ""
+        assert recognize("管理 " + command) == ""
+        assert recognize_integrated("/管理 " + command) == ""
+        return
     assert recognize(command) == command
     assert recognize("管理 " + command) == command
     assert recognize_integrated("/管理 " + command) == command
@@ -243,7 +246,6 @@ def test_shared_recognition_still_rejects_nonfixed_or_multiline_input(command):
     [
         "成员列表",
         "成员搜索 Target",
-        "我的权限",
         "违规计数",
         "定时状态",
         "群列表",
@@ -391,24 +393,6 @@ async def test_roster_wait_cannot_hide_manager_revocation(setup):
     event.platform.get_moderation_members.side_effect = revoke
     with pytest.raises(ProtocolError, match="command_admin_revoked"):
         await engine.run(event, "成员列表")
-
-
-@pytest.mark.asyncio
-async def test_help_documents_friendship_free_group_usage(setup):
-    value, _, event = setup
-    help_text = await value.manager_command(event, "帮助")
-    assert "不用先加好友" in help_text
-    from astrbot.builtin_stars.wangshangliao_moderation.command_capabilities import (
-        CAPABILITIES,
-    )
-
-    for command in OPEN_COMMANDS - {"帮助", "选择群"}:
-        capability = CAPABILITIES.get(command, {})
-        if capability.get("role") == "server" or "group" not in capability.get(
-            "locations", ("group",)
-        ):
-            continue
-        assert command in help_text
 
 
 @pytest.mark.asyncio

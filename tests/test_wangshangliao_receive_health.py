@@ -89,6 +89,11 @@ async def test_unhandled_packets_do_not_become_message_decode_failures(
         assert adapter.receive_health["unhandled_packets"] == int(not invalid_message)
         assert adapter.decode_reasons == ({"encoding": 1} if invalid_message else {})
         if invalid_message:
+            assert (
+                adapter.diagnostics.snapshot()["timings"]["message_decode"]["count"]
+                == 1
+            )
+        if invalid_message:
             adapter.nim.acknowledge.assert_awaited_once_with(1, "77")
             assert adapter.diagnostics.emit.call_args.kwargs["action"] == "encoding"
             async with adapter.ledger.db.execute(

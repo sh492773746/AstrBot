@@ -7,6 +7,7 @@ import pytest
 from telegram.ext import ApplicationHandlerStop
 
 from data.plugins.astrbot_plugin_superbot.ad_killer import AdKiller, defaults
+from data.plugins.astrbot_plugin_superbot.group_authority import GroupAuthority
 from data.plugins.astrbot_plugin_superbot.store import Rejected
 
 
@@ -81,12 +82,13 @@ def message(text, number=1, user=2, *, caption=False, entities=()):
     )
 
 
-def enable(env, *rules, action="delete", **changes):
+async def enable(env, *rules, action="delete", **changes):
     config = defaults()
     for key in rules:
         config["rules"][key] = {"enabled": True, "action": action}
     config.update(changes)
-    env.runtime.ad_killer.save("-1001", "1", 0, config, True)
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        env.runtime.ad_killer.save("-1001", "1", 0, config, True)
     return config
 
 
@@ -95,7 +97,7 @@ async def test_defaults_off_own_ad_and_protected_administrator(env):
     killer = env.runtime.ad_killer
     assert not killer.policy("-1001")["enabled"]
     assert not await killer.inspect(message("https://spam.example"))
-    enable(env, "links")
+    await enable(env, "links")
     own = message("https://sponsored.example", user=9)
     assert not await killer.inspect(own)
     env.members[2] = Member("administrator")
@@ -104,12 +106,31 @@ async def test_defaults_off_own_ad_and_protected_administrator(env):
 
 
 @pytest.mark.asyncio
+async def test_execution_requires_both_switch_and_matching_rule(env):
+    killer = env.runtime.ad_killer
+    config = defaults()
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        killer.save("-1001", "1", 0, config, True)
+    assert not await killer.inspect(message("https://spam.example", 101))
+    config["rules"]["links"]["enabled"] = True
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        killer.save("-1001", "1", 1, config, False)
+    assert not await killer.inspect(message("https://spam.example", 102))
+    env.runtime.bot.delete_message.assert_not_awaited()
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        killer.save("-1001", "1", 2, config, True)
+    assert await killer.inspect(message("https://spam.example", 103))
+    env.runtime.bot.delete_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_links_caption_hidden_link_and_domain_boundary(env):
     from telegram import MessageEntity
 
-    config = enable(env, "links")
+    config = await enable(env, "links")
     config["domains"] = ["safe.example"]
-    env.runtime.ad_killer.save("-1001", "1", 1, config, True)
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        env.runtime.ad_killer.save("-1001", "1", 1, config, True)
     killer = env.runtime.ad_killer
     assert not await killer.inspect(message("https://safe.example/page"))
     assert not await killer.inspect(message("https://sub.safe.example", 2))
@@ -179,7 +200,7 @@ async def test_invite_deep_link_whitelist_preserves_hash_and_own_private_link(en
 
 @pytest.mark.asyncio
 async def test_channel_forward_without_text_and_source_allowlist(env):
-    config = enable(env, "channel_forward")
+    config = await enable(env, "channel_forward")
     event = message("")
     event.message.forward_origin = SimpleNamespace(
         type="channel", chat=SimpleNamespace(id=-10099, username="news")
@@ -187,12 +208,14 @@ async def test_channel_forward_without_text_and_source_allowlist(env):
     assert await env.runtime.ad_killer.inspect(event)
     env.runtime.bot.delete_message.assert_awaited_once()
     config["telegram_allow"] = ["-10099"]
-    env.runtime.ad_killer.save("-1001", "1", 1, config, True)
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        env.runtime.ad_killer.save("-1001", "1", 1, config, True)
     event.message.message_id = 2
     assert not await env.runtime.ad_killer.inspect(event)
     env.runtime.bot.delete_message.assert_awaited_once()
     config["telegram_allow"] = []
-    env.runtime.ad_killer.save("-1001", "1", 2, config, True)
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        env.runtime.ad_killer.save("-1001", "1", 2, config, True)
     event.message.is_automatic_forward = True
     assert not await env.runtime.ad_killer.inspect(event)
     event.message.is_automatic_forward = False
@@ -204,7 +227,7 @@ async def test_channel_forward_without_text_and_source_allowlist(env):
 async def test_platform_hidden_link_zero_width_and_telegram_separation(env):
     from telegram import MessageEntity
 
-    enable(env, "platform_links")
+    await enable(env, "platform_links")
     hidden = MessageEntity("text_link", 0, 2, url="https://discord.gg/offer")
     assert await env.runtime.ad_killer.inspect(message("点击", 1, entities=(hidden,)))
     assert await env.runtime.ad_killer.inspect(message("https://evil.exa\u200bmple", 2))
@@ -214,10 +237,11 @@ async def test_platform_hidden_link_zero_width_and_telegram_separation(env):
     assert env.runtime.bot.delete_message.await_count == 2
 
 
-def test_link_rule_migration_preserves_existing_settings_and_invalidates_buttons(env):
+@pytest.mark.asyncio
+async def test_link_rule_migration_preserves_existing_settings_and_invalidates_buttons(env):
     import json
 
-    old = enable(env, "contact")
+    old = await enable(env, "contact")
     for key in ("group_links", "platform_links", "channel_forward"):
         del old["rules"][key]
     del old["telegram_allow"]
@@ -256,7 +280,7 @@ async def test_unknown_public_target_not_classified_as_group_and_rpc_bounded(env
 
 @pytest.mark.asyncio
 async def test_repeat_flood_edit_idempotence_and_no_content_duplication(env):
-    config = enable(env, "repeat", "flood")
+    config = await enable(env, "repeat", "flood")
     config.update(flood_count=6, repeat_count=3)
     killer = env.runtime.ad_killer
     text = "长期招商计划欢迎大家了解一下"
@@ -272,7 +296,8 @@ async def test_repeat_flood_edit_idempotence_and_no_content_duplication(env):
     # The original message was accepted; editing it to an external link can
     # still trigger, but a replay of the edit cannot trigger twice.
     config["rules"]["links"]["enabled"] = True
-    killer.save("-1001", "1", 1, config, True)
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        killer.save("-1001", "1", 1, config, True)
     changed = message("https://promoted.example", 7)
     changed.edited_message, changed.message = changed.message, None
     assert await killer.inspect(changed)
@@ -282,7 +307,7 @@ async def test_repeat_flood_edit_idempotence_and_no_content_duplication(env):
 
 @pytest.mark.asyncio
 async def test_repeat_similar_text_and_contact_email(env):
-    enable(env, "repeat", "contact")
+    await enable(env, "repeat", "contact")
     killer = env.runtime.ad_killer
     assert not await killer.inspect(message("本周继续招收主播和相关运营人员", 1))
     assert not await killer.inspect(message("本周继续招收主播及相关运营人员", 2))
@@ -293,7 +318,7 @@ async def test_repeat_similar_text_and_contact_email(env):
 
 @pytest.mark.asyncio
 async def test_timeout_freezes_group_and_restart_never_replays(env):
-    enable(env, "links")
+    await enable(env, "links")
     env.runtime.bot.delete_message.side_effect = TimeoutError("simulated")
     assert await env.runtime.ad_killer.inspect(message("https://bad.example"))
     row = env.runtime.store.db.execute(
@@ -309,7 +334,8 @@ async def test_timeout_freezes_group_and_restart_never_replays(env):
 
 @pytest.mark.asyncio
 async def test_failed_identity_is_audited_without_releasing_message(env):
-    enable(env, "links")
+    await enable(env, "links")
+    env.runtime.bot.get_chat_member.reset_mock()
     env.runtime.bot.get_chat_member.side_effect = TimeoutError("private data")
     assert await env.runtime.ad_killer.inspect(message("https://bad.example"))
     row = env.runtime.store.db.execute(
@@ -323,7 +349,7 @@ async def test_failed_identity_is_audited_without_releasing_message(env):
 
 @pytest.mark.asyncio
 async def test_manual_recovery_keeps_rules_off_and_never_replays(env):
-    enable(env, "links")
+    await enable(env, "links")
     env.runtime.bot.delete_message.side_effect = TimeoutError("simulated")
     assert await env.runtime.ad_killer.inspect(message("https://bad.example"))
     env.runtime.bot.delete_message.reset_mock()
@@ -386,7 +412,7 @@ async def test_manual_recovery_keeps_rules_off_and_never_replays(env):
 
 @pytest.mark.asyncio
 async def test_mute_kick_and_revocation_before_network_write(env):
-    config = enable(env, "links", action="mute")
+    config = await enable(env, "links", action="mute")
     assert await env.runtime.ad_killer.inspect(message("https://bad.example"))
     env.runtime.bot.restrict_chat_member.assert_awaited_once()
     # No automatic overwrite of a pre-existing personal restriction.
@@ -395,7 +421,8 @@ async def test_mute_kick_and_revocation_before_network_write(env):
     assert env.runtime.bot.restrict_chat_member.await_count == 1
     env.members[2] = Member("member")
     config["rules"]["links"]["action"] = "kick"
-    env.runtime.ad_killer.save("-1001", "1", 1, config, True)
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        env.runtime.ad_killer.save("-1001", "1", 1, config, True)
     assert await env.runtime.ad_killer.inspect(message("https://third.example", 3))
     env.runtime.bot.ban_chat_member.assert_awaited_once()
     env.runtime.bot.unban_chat_member.assert_awaited_once()
@@ -413,6 +440,10 @@ async def test_private_buttons_version_and_role(env):
     )
     env.runtime.store.db.execute("INSERT INTO mod_acl VALUES('2','-1001')")
     env.members[2] = Member("administrator")
+    tenants = GroupAuthority(env.runtime).runtime.tenants
+    await tenants.designate(
+        "1", "-1001", "2", True, env.runtime.moderation.row("-1001")["version"]
+    )
     ui = env.runtime.ui.moderation_ui
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=2),
@@ -420,7 +451,18 @@ async def test_private_buttons_version_and_role(env):
         callback_query=None,
     )
     await ui.action(update, {"action": "mod_ak_home", "chat": "-1001"})
-    assert "广告杀手" in env.runtime.bot.send_message.await_args.kwargs["text"]
+    assert "执行开关" in env.runtime.bot.send_message.await_args.kwargs["text"]
+    markup = env.runtime.bot.send_message.await_args.kwargs["reply_markup"]
+    switch_labels = [
+        button.text for row in markup.inline_keyboard for button in row
+    ]
+    assert switch_labels == ["启用自动执行", "返回广告与刷屏"]
+    assert "外链" not in env.runtime.bot.send_message.await_args.kwargs["text"]
+    await ui.action(update, {"action": "mod_ak_rules", "chat": "-1001"})
+    markup = env.runtime.bot.send_message.await_args.kwargs["reply_markup"]
+    rule_labels = [button.text for row in markup.inline_keyboard for button in row]
+    assert "外链" in rule_labels
+    assert "启用自动执行" not in rule_labels
     await ui.action(
         update,
         {
@@ -438,14 +480,18 @@ async def test_private_buttons_version_and_role(env):
     assert env.runtime.ad_killer.policy("-1001")["version"] == 1
     with pytest.raises(Rejected, match="修改"):
         await ui.action(update, saved, token)
-    env.runtime.store.revoke("1", "2")
+    await tenants.designate(
+        "1", "-1001", "2", False, env.runtime.moderation.row("-1001")["version"]
+    )
     with pytest.raises(Rejected):
         await ui.action(update, {"action": "mod_ak_home", "chat": "-1001"})
 
 
-def test_expiry_cleans_terminal_body_but_keeps_audit(env):
+@pytest.mark.asyncio
+async def test_expiry_cleans_terminal_body_but_keeps_audit(env):
     config = defaults()
-    env.runtime.ad_killer.save("-1001", "1", 0, config, True)
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        env.runtime.ad_killer.save("-1001", "1", 0, config, True)
     env.runtime.store.db.execute(
         "INSERT INTO ak_hits(chat,message,uid,rules,action,version,body,status,step,at) VALUES('-1001',1,'2','[]','delete',1,'private','accepted','done',?)",
         (env.now[0] - 31 * 86400,),
@@ -461,7 +507,7 @@ def test_expiry_cleans_terminal_body_but_keeps_audit(env):
 async def test_group_gate_blocks_points_and_model_before_detected_message(env):
     from data.plugins.astrbot_plugin_superbot.main import Main
 
-    enable(env, "links")
+    await enable(env, "links")
     plugin = Main(SimpleNamespace(), {"platform_id": "test"})
     plugin.store = env.runtime.store
     plugin.application = SimpleNamespace(bot=env.runtime.bot, running=True)
@@ -484,16 +530,20 @@ async def test_group_gate_blocks_points_and_model_before_detected_message(env):
     assert env.runtime.bot.delete_message.await_count == 2
 
 
-def test_policy_validation_rejects_unsafe_inputs(env):
+@pytest.mark.asyncio
+async def test_policy_validation_rejects_unsafe_inputs(env):
     killer = env.runtime.ad_killer
     policy = defaults()
     policy["keywords"] = ["(?=a).*"]
     # Literal text is safe; it is never evaluated as a regular expression.
-    killer.save("-1001", "1", 0, policy, False)
+    async with GroupAuthority(env.runtime).session("1", "-1001"):
+        killer.save("-1001", "1", 0, policy, False)
     policy["domains"] = ["example.com/bad"]
     with pytest.raises(Rejected, match="域名"):
-        killer.save("-1001", "1", 1, policy, True)
+        async with GroupAuthority(env.runtime).session("1", "-1001"):
+            killer.save("-1001", "1", 1, policy, True)
     policy["domains"] = []
     policy["mute_minutes"] = 525601
     with pytest.raises(Rejected, match="阈值"):
-        killer.save("-1001", "1", 1, policy, True)
+        async with GroupAuthority(env.runtime).session("1", "-1001"):
+            killer.save("-1001", "1", 1, policy, True)

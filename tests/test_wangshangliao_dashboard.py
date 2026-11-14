@@ -8,7 +8,7 @@ import sqlite3
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import jwt
@@ -19,7 +19,6 @@ from fastapi.responses import JSONResponse
 from astrbot.builtin_stars.wangshangliao_moderation import (
     activity_store,
     dashboard,
-    friend_auto,
 )
 from astrbot.core.platform.sources.wangshangliao import schedule_store
 from astrbot.core.star.star_manager import PluginManager
@@ -93,6 +92,16 @@ async def test_action_failure_audit_is_scoped_and_distinguishes_no_submission(
     app, _, _, _, root = page_app
     store = ReviewStore(root / "moderation.sqlite3")
     store.initialize()
+    store.observe("1", "5", "preflight", "2", "message_flood", 1900000001, 1)
+    store.finish(
+        "1",
+        "5",
+        "preflight",
+        "preflight_failed",
+        "none",
+        error="business_rejected",
+        provider_code=-1,
+    )
     with store.connect() as db:
         db.execute(
             "INSERT OR REPLACE INTO content_violations VALUES"
@@ -138,6 +147,14 @@ async def test_action_failure_audit_is_scoped_and_distinguishes_no_submission(
     assert row["recall_submitted"] == 0
     assert row["recall_error"] == "moderation_permission"
     assert row["provider_code"] is None
+    preflight = next(
+        item
+        for item in response.json()["data"]["rules"]
+        if item["message"] == "preflight"
+    )
+    assert preflight["status"] == "preflight_failed"
+    assert preflight["processing_error"] == "business_rejected"
+    assert preflight["processing_provider_code"] == -1
 
 
 @pytest.mark.asyncio
@@ -488,7 +505,6 @@ def page_app(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "instance_dir", lambda _: tmp_path)
     monkeypatch.setattr(activity_store, "instance_dir", lambda _: tmp_path)
     monkeypatch.setattr(schedule_store, "instance_dir", lambda _: tmp_path)
-    monkeypatch.setattr(friend_auto, "instance_dir", lambda _: tmp_path)
     return app, page, service, configs, tmp_path
 
 
@@ -516,7 +532,69 @@ async def test_page_settings_require_auth_and_never_return_secrets(page_app, hea
         ]
         assert "must-not-appear" not in response.text
         assert data["bots"][0]["proactive_send"]["enabled"] is True
+        assert data["bots"][0]["proactive_send"]["targets"] == []
+        assert "reply_private" not in data["bots"][0]
+        assert data["bots"][0]["ai_routes"] == {"groups": {}}
         assert data["bots"][0]["developer_test"] == {"budget": 7}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope",
+    ["group_commands", "group_ai", "group_rules", "private_commands", "private_ai"],
+)
+async def test_group_test_window_never_creates_private_sender_pointer(
+    page_app, headers, scope
+):
+    app, page, _, configs, _ = page_app
+    receiver = page.context.platform_manager.platform_insts[0]
+    receiver.nim_account = "901"
+    receiver.connection_state = "online"
+    receiver.enabled_groups = ["5", "6"]
+    receiver.stopping = asyncio.Event()
+    receiver.test_window = None
+    sender = SimpleNamespace(
+        account="2",
+        nim_account="902",
+        config={"id": "sender"},
+        connection_state="online",
+        stopping=asyncio.Event(),
+        meta=lambda: SimpleNamespace(name="wangshangliao", id="sender"),
+    )
+    page.context.platform_manager.platform_insts.append(sender)
+    page.business_settings = SimpleNamespace(log=Mock())
+    body = {
+        "bot_id": "fixture",
+        "revision": dashboard.revision(configs["fixture"]),
+        "action": "test_open",
+        "sender_instance": "sender",
+        "groups": ["5"],
+        "scopes": [scope],
+        "keywords": ["WSL_TEST_GROUP"],
+        "seconds": 60,
+        "budget": 2,
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
+    ) as client:
+        response = await client.post(
+            f"{PREFIX}/test-window", headers=headers, json=body
+        )
+        if scope.startswith("private_"):
+            assert response.status_code == 410
+            assert receiver.test_window is None
+            page.business_settings.log.assert_not_called()
+        else:
+            assert response.status_code == 200
+            assert response.json()["data"]["window"]["active"] is True
+            assert receiver.test_window.scopes == [scope]
+            response = await client.post(
+                f"{PREFIX}/test-window",
+                headers=headers,
+                json={**body, "action": "test_close"},
+            )
+            assert response.status_code == 200 and receiver.test_window is None
+    assert not hasattr(sender, "test_command_window")
 
 
 @pytest.mark.asyncio
@@ -670,299 +748,6 @@ async def test_plugin_scope_does_not_grant_bot_settings(page_app):
 
 
 @pytest.mark.asyncio
-async def test_friend_cleanup_route_is_removed_for_every_principal(page_app, headers):
-    app, page, _, _, _ = page_app
-    adapter = page.context.platform_manager.platform_insts[0]
-    adapter.nim = SimpleNamespace(request=AsyncMock())
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
-    ) as client:
-        for authority in ({}, headers, {"Authorization": "ApiKey fixture-key"}):
-            for method in ("GET", "POST"):
-                response = await client.request(
-                    method,
-                    f"{PREFIX}/friends",
-                    headers=authority,
-                    **(
-                        {"params": {"bot_id": "fixture"}}
-                        if method == "GET"
-                        else {
-                            "json": {
-                                "bot_id": "fixture",
-                                "action": "execute",
-                                "preview_id": "a" * 32,
-                                "confirmed": True,
-                            }
-                        }
-                    ),
-                )
-                if not authority:
-                    assert response.status_code == 401
-                else:
-                    assert response.status_code == 200
-                    assert response.json() == {
-                        "status": "error",
-                        "message": "未找到该路由",
-                        "data": {},
-                    }
-    assert not hasattr(page, "friend_cleanup")
-    adapter.nim.request.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_reload_removes_old_registered_friend_handlers(page_app, headers):
-    """Remove retired handlers without altering other plugin routes.
-
-    Args:
-        page_app: Isolated dashboard and registry.
-        headers: Authenticated dashboard principal.
-    """
-    app, page, _, _, _ = page_app
-    old_handler = AsyncMock()
-    other = ("/other-plugin/friends", AsyncMock(), ["POST"], "Unrelated")
-    page.context.registered_web_apis.extend(
-        [
-            ("/wangshangliao_moderation/friends", old_handler, ["GET"], "Retired"),
-            ("/wangshangliao_moderation/friends", old_handler, ["POST"], "Retired"),
-            other,
-        ]
-    )
-    page.register()
-    assert other in page.context.registered_web_apis
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
-    ) as client:
-        response = await client.post(f"{PREFIX}/friends", headers=headers, json={})
-        assert response.json()["status"] == "error"
-        assert response.json()["message"] == "未找到该路由"
-    old_handler.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_friend_approval_default_on_dashboard_only_and_versioned(
-    page_app, headers
-):
-    app, page, _, configs, _ = page_app
-    page.business_settings = SimpleNamespace(log=MagicMock())
-    adapter = page.context.platform_manager.platform_insts[0]
-    adapter.business = SimpleNamespace(request=AsyncMock())
-    before = copy.deepcopy(configs)
-    path = f"{PREFIX}/friend-approval"
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
-    ) as client:
-        assert (await client.get(path + "?bot_id=fixture")).status_code == 401
-        assert (
-            await client.get(
-                path + "?bot_id=fixture",
-                headers={"Authorization": "ApiKey fixture-key"},
-            )
-        ).status_code == 403
-        result = await client.get(path + "?bot_id=fixture", headers=headers)
-        assert result.status_code == 200
-        state = result.json()["data"]
-        assert state["enabled"] is True
-        assert state["accepted"] == state["pending"] == 0
-        body = {
-            "bot_id": "fixture",
-            "revision": dashboard.revision(configs["fixture"]),
-            "version": state["version"],
-            "enabled": False,
-        }
-        saved = await client.post(path, headers=headers, json=body)
-        assert saved.status_code == 200 and saved.json()["data"]["enabled"] is False
-        assert (
-            await client.post(path, headers=headers, json={**body, "enabled": True})
-        ).status_code == 409
-        assert (await client.get(path + "?bot_id=fixture", headers=headers)).json()[
-            "data"
-        ]["enabled"] is False
-        adapter.account = "2"
-        assert (
-            await client.get(path + "?bot_id=fixture", headers=headers)
-        ).status_code == 409
-    assert configs == before
-    adapter.business.request.assert_not_awaited()
-    page.business_settings.log.assert_called_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "patch",
-    [
-        {"enabled": "true"},
-        {"enabled": 1},
-        {"version": True},
-        {"version": 0},
-        {"account_id": "2"},
-        {"actor": "admin"},
-        {"flId": 17},
-        {"route": "/v1/user/login"},
-    ],
-)
-async def test_friend_approval_invalid_input_cannot_mutate(page_app, headers, patch):
-    app, page, _, configs, _ = page_app
-    page.friend_auto.configure = AsyncMock()
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
-    ) as client:
-        result = await client.post(
-            f"{PREFIX}/friend-approval",
-            headers=headers,
-            json={
-                "bot_id": "fixture",
-                "revision": dashboard.revision(configs["fixture"]),
-                "version": 1,
-                "enabled": True,
-                **patch,
-            },
-        )
-        assert result.status_code == 400
-    page.friend_auto.configure.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(
-    not os.environ.get("WSL_FRIEND_PAGE_STATIC"),
-    reason="Opt-in built-page browser test",
-)
-async def test_built_friend_approval_toggle_and_mobile_layout(page_app, headers):
-    from playwright.async_api import async_playwright, expect
-
-    app, service, _, configs, _ = page_app
-    adapter = service.context.platform_manager.platform_insts[0]
-    configs["fixture"]["enabled_groups"] = []
-    adapter.config["_business_active"] = True
-    adapter.nim_account, adapter.connection_state = "999", "online"
-    adapter.get_stats = lambda: {
-        "connection_state": "online",
-        "business_active": True,
-    }
-    adapter.nim = SimpleNamespace(request=AsyncMock())
-    service.business_settings = SimpleNamespace(log=MagicMock())
-    static = Path(os.environ["WSL_FRIEND_PAGE_STATIC"]).read_text()
-    bridge = """
-    const api = async (endpoint, method, data) => {
-      const url = '/api/v1/plugins/extensions/wangshangliao_moderation/' + endpoint;
-      const response = await fetch(method === 'GET' ? url + '?' + new URLSearchParams(data || {}) : url,
-        { method, headers: { 'Content-Type': 'application/json' },
-          ...(method === 'POST' ? { body: JSON.stringify(data) } : {}) });
-      const result = await response.json();
-      if (!response.ok || result.status !== 'ok') throw new Error(result.message || 'Request failed');
-      return result.data;
-    };
-    const bridge = {
-      ready: async () => {}, getLocale: () => 'zh-CN', onContext: () => () => {},
-      apiGet: (endpoint, data) => api(endpoint, 'GET', data),
-      apiPost: (endpoint, data) => api(endpoint, 'POST', data),
-    };
-    Object.defineProperty(window, 'AstrBotPluginPage', { get: () => bridge, set: () => {} });
-    """
-    output = Path(
-        os.environ.get("WSL_FRIEND_PAGE_OUTPUT", "data/temp/friends-browser-20261011")
-    )
-    output.mkdir(parents=True, exist_ok=True)
-    async with (
-        httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="https://fixture"
-        ) as api,
-        async_playwright() as playwright,
-    ):
-        browser = await playwright.chromium.launch(
-            executable_path=os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE")
-        )
-        try:
-            for width in (320, 390, 555, 760, 768, 1024, 1440):
-                context = await browser.new_context(
-                    viewport={"width": width, "height": 900}, reduced_motion="reduce"
-                )
-                await context.add_init_script(bridge)
-                page = await context.new_page()
-                errors = []
-                requests = []
-                page.on("pageerror", lambda exc: errors.append(str(exc)))
-
-                async def transport(route):
-                    if route.request.url.endswith("/page"):
-                        await route.fulfill(
-                            status=200, content_type="text/html", body=static
-                        )
-                        return
-                    requests.append(route.request.url)
-                    response = await api.request(
-                        route.request.method,
-                        route.request.url,
-                        content=route.request.post_data,
-                        headers={**headers, "Content-Type": "application/json"},
-                    )
-                    await route.fulfill(
-                        status=response.status_code,
-                        content_type="application/json",
-                        body=response.content,
-                    )
-
-                await page.route("https://fixture/**", transport)
-                await page.goto("https://fixture/page")
-                await expect(page.get_by_role("tab", name="好友清理")).to_have_count(0)
-                await page.get_by_role("tab", name="好友申请").click()
-                automatic = page.get_by_role("checkbox", name="自动同意好友申请")
-                await expect(automatic).to_be_checked()
-                await automatic.uncheck()
-                await expect(automatic).not_to_be_checked()
-                await automatic.check()
-                await expect(automatic).to_be_checked()
-                await page.get_by_role("button", name="刷新申请状态").click()
-                await expect(automatic).to_be_checked()
-                await expect(
-                    page.get_by_role("button", name="确认删除", exact=True)
-                ).to_have_count(0)
-                await page.screenshot(path=str(output / f"friend-approval-{width}.png"))
-                assert await page.evaluate(
-                    "() => document.documentElement.scrollWidth <= innerWidth"
-                )
-                assert await page.locator(".friend-approval").evaluate(
-                    """element => {
-                      const box = element.getBoundingClientRect();
-                      return box.left >= 0 && box.right <= innerWidth &&
-                        [...element.querySelectorAll('button')].every(button => {
-                          const rect = button.getBoundingClientRect();
-                          return button.scrollWidth <= button.clientWidth &&
-                            rect.left >= box.left && rect.right <= box.right;
-                        });
-                    }"""
-                )
-                assert not any("/friends" in url for url in requests)
-                adapter.nim.request.assert_not_awaited()
-                assert not errors
-                await context.close()
-            adapter.current_error, adapter.connection_state = "nim_kicked", "error"
-            adapter.get_stats = lambda: {
-                "connection_state": "error",
-                "current_error": "nim_kicked",
-                "business_active": True,
-            }
-            context = await browser.new_context(
-                viewport={"width": 390, "height": 900}, reduced_motion="reduce"
-            )
-            await context.add_init_script(bridge)
-            page = await context.new_page()
-            await page.route("https://fixture/**", transport)
-            await page.goto("https://fixture/page")
-            await page.get_by_role("tab", name="好友申请").click()
-            await expect(
-                page.get_by_role("checkbox", name="自动同意好友申请")
-            ).to_be_checked()
-            await expect(page.locator(".friend-approval")).to_contain_text(
-                "等待服务在线"
-            )
-            await page.screenshot(path=str(output / "friend-approval-offline-390.png"))
-            adapter.nim.request.assert_not_awaited()
-            await context.close()
-        finally:
-            await browser.close()
-
-
-@pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("WSL_FRIEND_PAGE_STATIC"),
     reason="Opt-in built-page browser test",
@@ -993,9 +778,12 @@ async def test_built_audit_names_keep_ids_escape_markup_and_fit_mobile(
         db.executescript("""
             CREATE TABLE automatic_mutes(operation,account,group_id,member,status,created,closed);
             CREATE TABLE content_violations(account,group_id,message,sender,category,status,observed);
+            CREATE TABLE content_rule_errors(account,group_id,message,error,provider_code);
             INSERT INTO automatic_mutes VALUES('op','1','5','2','accepted',3,0);
             INSERT INTO content_violations VALUES('1','5','m','2','message_flood','recalled',3);
             INSERT INTO content_violations VALUES('1','5','w','2','external_promotion','recalled',2);
+            INSERT INTO content_violations VALUES('1','5','p','2','message_flood','preflight_failed',1);
+            INSERT INTO content_rule_errors VALUES('1','5','p','business_rejected',-1);
         """)
     with sqlite3.connect(root / "messages.sqlite3") as db:
         db.execute("CREATE TABLE inbox(account,team,message,sender,payload)")
@@ -1005,6 +793,10 @@ async def test_built_audit_names_keep_ids_escape_markup_and_fit_mobile(
         )
         db.execute(
             "INSERT INTO inbox VALUES('1','5','w','2',?)",
+            (json.dumps({"sender": "2", "name": name}),),
+        )
+        db.execute(
+            "INSERT INTO inbox VALUES('1','5','p','2',?)",
             (json.dumps({"sender": "2", "name": name}),),
         )
         db.executescript("""
@@ -1079,8 +871,8 @@ async def test_built_audit_names_keep_ids_escape_markup_and_fit_mobile(
                 await page.get_by_role("tab", name="运行与日志", exact=True).click()
                 await page.get_by_role("tab", name="处罚记录", exact=True).click()
                 panel = page.locator("#panel-audit")
-                await expect(panel.locator(".audit-member")).to_have_count(6)
-                for cell in (await panel.locator(".audit-member").all())[:4]:
+                await expect(panel.locator(".audit-member")).to_have_count(7)
+                for cell in (await panel.locator(".audit-member").all())[:5]:
                     await expect(cell.locator("span")).to_have_text(name)
                     await expect(cell.locator("small.mono")).to_have_text("2")
                     assert await cell.locator("span").evaluate(
@@ -1088,13 +880,16 @@ async def test_built_audit_names_keep_ids_escape_markup_and_fit_mobile(
                     )
                 await expect(panel).to_contain_text("刷屏")
                 await expect(panel).to_contain_text("已撤回")
+                await expect(panel).to_contain_text("执行前核验失败")
+                await expect(panel).to_contain_text("平台拒绝请求")
+                await expect(panel).to_contain_text("平台错误码：-1")
                 await expect(panel).to_contain_text("警告曾被自动清理")
                 await expect(panel).to_contain_text("已发送（平台受理）")
                 await expect(panel).to_contain_text("其他成员撤回")
                 assert "message_flood" not in await panel.inner_text()
                 assert "recalled" not in await panel.inner_text()
                 if width == 1440:
-                    assert await panel.get_by_text("历史名称", exact=True).count() == 4
+                    assert await panel.get_by_text("历史名称", exact=True).count() == 5
                 assert await page.evaluate("() => window.auditInjected") is None
                 assert await page.evaluate(
                     "() => document.documentElement.scrollWidth <= innerWidth"
@@ -1104,52 +899,6 @@ async def test_built_audit_names_keep_ids_escape_markup_and_fit_mobile(
                 await context.close()
         finally:
             await browser.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"action": []},
-        {"action": "execute", "preview_id": {}},
-        {"action": "execute", "preview_id": "123", "confirmed": True},
-        {"action": "preview", "peers": []},
-        {"action": "preview", "peers": [""]},
-        {"action": "preview", "peers": [123]},
-        {"action": "preview", "peers": "123"},
-        {"action": "preview", "peers": ["123", "456"]},
-        {"action": "preview", "peers": [str(i) for i in range(100)]},
-        {"action": "preview", "peers": [str(i) for i in range(200)]},
-        {"action": "preview", "peers": [str(i) for i in range(300)]},
-        {"action": "preview", "peers": ["123"], "batch_size": 100},
-        {"action": "preview", "peers": ["123"], "confirmed": True},
-        {
-            "action": "execute",
-            "preview_id": "a" * 32,
-            "confirmed": True,
-            "peers": ["123", "456"],
-        },
-        {"action": "accept", "peers": ["123"]},
-        {"action": "auto_accept", "peers": ["123"]},
-    ],
-)
-async def test_old_friend_inputs_have_no_handler(page_app, headers, payload):
-    app, page, _, configs, _ = page_app
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
-    ) as client:
-        result = await client.post(
-            f"{PREFIX}/friends",
-            headers=headers,
-            json={
-                "bot_id": "fixture",
-                "revision": dashboard.revision(configs["fixture"]),
-                **payload,
-            },
-        )
-    assert result.status_code == 200
-    assert result.json() == {"status": "error", "message": "未找到该路由", "data": {}}
-    assert not hasattr(page, "friend_cleanup")
 
 
 @pytest.mark.asyncio
@@ -1327,6 +1076,13 @@ async def test_activity_controls_read_and_save_scoped_values(page_app, headers):
         "packet_mode": "prize",
         "by_invites": True,
         "remarks": "",
+        "entry_phrase": "参与抽奖",
+        "prize_tiers": [],
+        "reserved_members": [],
+        "start_at": "",
+        "luckiest_bonus": "0.00",
+        "integer_packets": False,
+        "draw_on_full": False,
     }
     assert result["invite_rate"] == "5.50"
     assert result["invitation"]["credited_total"] == "1.25"
@@ -1679,8 +1435,6 @@ async def test_save_preserves_other_group_identity_and_ledger(page_app, headers)
                     "reply": False,
                     "customer_provider_id": "fixture-model",
                 },
-                "admin_provider_id": "fixture-model",
-                "reply_private": False,
             },
         )
     assert response.status_code == 200
@@ -1689,16 +1443,13 @@ async def test_save_preserves_other_group_identity_and_ledger(page_app, headers)
     assert current["moderation"]["auto_kick"] == {"5": False, "6": False}
     assert current["moderation"]["permissions"]["6"] == ["unmute"]
     assert current["moderation"]["content_rules_since"] == 1700000000
-    assert current["proactive_send"] == original["proactive_send"]
+    assert current["proactive_send"] == {"enabled": True, "targets": []}
+    assert "reply_private" not in current
     assert current["developer_test"] == original["developer_test"]
     assert current["account_id"] == original["account_id"]
     assert current["enabled_groups"] == original["enabled_groups"]
     assert current["reply_groups"] == {"5": False, "6": False}
-    assert current["ai_routes"] == {
-        "admin_provider_id": "fixture-model",
-        "groups": {"5": "fixture-model"},
-    }
-    assert current["reply_private"] is False
+    assert current["ai_routes"]["groups"] == {"5": "fixture-model"}
     assert ledger.read_bytes() == b"untouched-ledger-fixture"
     service.update_bot.assert_not_awaited()
 
@@ -1721,7 +1472,6 @@ async def test_save_preserves_other_group_identity_and_ledger(page_app, headers)
         ({"group": {"auto_kick": "yes"}}, 400),
         ({"group": {"permissions": ["shell"]}}, 400),
         ({"group": {"permissions": ["mute", "mute"]}}, 400),
-        ({"reply_private": "yes"}, 400),
     ],
 )
 async def test_invalid_and_stale_saves_never_mutate(page_app, headers, patch, status):

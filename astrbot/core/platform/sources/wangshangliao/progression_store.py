@@ -35,6 +35,10 @@ class ProgressionStore:
                             account TEXT,group_id TEXT,member TEXT,peer TEXT,
                             warnings INTEGER NOT NULL,reset_after REAL NOT NULL,
                             PRIMARY KEY(account,group_id,member,peer));
+                        CREATE INDEX IF NOT EXISTS review_ref_progressive_actions
+                            ON progressive_actions(account,group_id,message);
+                        CREATE INDEX IF NOT EXISTS review_ref_progressive_warnings
+                            ON progressive_warnings(account,group_id,message);
                     """)
                     self.initialized = True
             with db:

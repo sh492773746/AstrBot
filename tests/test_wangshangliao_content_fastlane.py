@@ -71,11 +71,24 @@ async def test_keyword_review_is_independent_of_chat_rate_limit(bot, state):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", [None, "image", "video", "forward"])
-async def test_high_confidence_ads_use_the_fastlane_without_custom_keywords(bot, kind):
+@pytest.mark.parametrize(
+    "text",
+    [
+        "加我vx:abc123456",
+        "☜☜☜几十款 祝㊗️兄弟们一路长洪",
+        "拿扶＋22406063",
+        "五四三三三每天不定时爆料网红视频",
+        "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth",
+    ],
+)
+async def test_high_confidence_ads_use_the_fastlane_without_custom_keywords(
+    bot, kind, text
+):
+    text = text.replace("abc123456", "abc12345").replace("22406063", "22406")
     bot.config["moderation"]["flood_enabled"] = False
     runtime = runtime_for(bot)
     try:
-        payload = await ingest(bot, "100", "加我vx:abc123456", kind=kind)
+        payload = await ingest(bot, "100", text, kind=kind)
         assert payload["_ingress_content"]["category"] == "external_promotion"
         await runtime.step()
         await asyncio.gather(*runtime.workers.values())
@@ -140,10 +153,16 @@ async def test_group_combinations_keep_all_terms_and_group_isolation(bot):
         "stale",
     ],
 )
-async def test_fastlane_never_weakens_sanction_authorization(bot, monkeypatch, change):
+@pytest.mark.parametrize(
+    "text",
+    ["fixture-ad", "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth"],
+)
+async def test_fastlane_never_weakens_sanction_authorization(
+    bot, monkeypatch, change, text
+):
     bot.config["moderation"].update(mute_keywords=["fixture-ad"], flood_enabled=False)
     runtime = runtime_for(bot)
-    payload = await ingest(bot, "100", "fixture-ad")
+    payload = await ingest(bot, "100", text)
     if change == "revision":
         bot.config["_business_revision"] = "new"
     elif change == "epoch":
@@ -169,12 +188,35 @@ async def test_fastlane_never_weakens_sanction_authorization(bot, monkeypatch, c
     elif change == "forged_group":
         payload["_ingress_content"]["group"] = "6"
     elif change == "forged_category":
-        payload["_ingress_content"]["category"] = "external_promotion"
+        payload["_ingress_content"]["category"] = (
+            "mute_keyword" if "\n" in text else "external_promotion"
+        )
     else:
         payload["recall_route"]["time"] = str(int((time.time() - 301) * 1000))
     try:
         await runtime.execute(("fixture", "1", "5", "2"), bot, "100", payload, None)
         assert not bot.calls
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("advertising", [False, True])
+@pytest.mark.parametrize("lines", [4, 5, 7, 8])
+async def test_multiline_ingress_respects_advertising_gate(bot, advertising, lines):
+    bot.config["moderation"].update(
+        advertising_enabled=advertising, flood_enabled=False, mute_keywords=[]
+    )
+    runtime = runtime_for(bot)
+    try:
+        payload = await ingest(bot, "100", "\n".join(["ordinary text"] * lines))
+        assert ("_ingress_content" in payload) is (advertising and lines > 7)
+        await runtime.step()
+        await asyncio.gather(*runtime.workers.values())
+        assert bot.calls == (
+            [("recall", "100", "22")] if advertising and lines > 7 else []
+        )
+        bot.execute_moderation.assert_not_awaited()
     finally:
         await runtime.close()
 
@@ -226,11 +268,13 @@ async def test_fastlane_backlog_is_bounded_and_scans_past_benign_messages(bot):
     try:
         for n in range(12):
             await ingest(bot, str(100 + n), "fixture-ad" if n % 2 else "hello")
-        for _ in range(10):
+        for _ in range(32):
             await runtime.step()
             assert sum(len(lane) for lane in runtime.pending.values()) <= 2
             assert len(runtime.workers) <= 1
             await asyncio.gather(*runtime.workers.values())
+            if len([call for call in bot.calls if call[0] == "recall"]) == 6:
+                break
         assert len([call for call in bot.calls if call[0] == "recall"]) == 6
         assert len([call for call in bot.calls if call[0] == "mute"]) == 3
         assert bot.diagnostics.gauges["rule_queue_full"] > 0
@@ -241,15 +285,16 @@ async def test_fastlane_backlog_is_bounded_and_scans_past_benign_messages(bot):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("when", ["before", "during_directory"])
+@pytest.mark.parametrize("text", ["fixture-ad", "first\nsecond\nthird\nfourth\nfifth"])
 async def test_new_fastlane_retains_exact_speech_exemption_checks(
-    bot, tmp_path, monkeypatch, when
+    bot, tmp_path, monkeypatch, when, text
 ):
     from astrbot.builtin_stars.wangshangliao_moderation import member_exemptions
 
     monkeypatch.setattr(member_exemptions, "instance_dir", lambda _: tmp_path)
     bot.config["moderation"].update(mute_keywords=["fixture-ad"], flood_enabled=False)
     runtime = runtime_for(bot)
-    payload = await ingest(bot, "100", "fixture-ad")
+    payload = await ingest(bot, "100", text)
 
     def grant():
         member_exemptions.set_exemption(

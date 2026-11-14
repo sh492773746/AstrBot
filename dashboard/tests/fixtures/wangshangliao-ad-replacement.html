@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Advertisement Replacement Fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h, ref } from "vue";
+      import RuleAutomationPanel from "../../plugin-pages/wangshangliao/RuleAutomationPanel.vue";
+      const snapshot = value => JSON.parse(JSON.stringify(value));
+      const fixture = window.adFixture = {
+        calls: [], state: null, version: 1,
+        configs: Object.fromEntries(["5", "6"].map(group => [group, {
+          keywords: [], replace_previous_ad: false,
+          ads: ["A", "B", "C"].map((id, index) => ({
+            id, name: `中性测试通知${id}`, enabled: true, text: `中性通知${id}`,
+            images: [], mode: "daily", times: [`09:${String(index * 20).padStart(2, "0")}`],
+            start: "09:00", end: "22:00", interval_minutes: 60,
+          })),
+        }])),
+      };
+      createApp({
+        setup() {
+          const group = ref("5");
+          fixture.switchGroup = value => { group.value = value; };
+          return () => h("main", [h(RuleAutomationPanel, {
+            account: "1", group: group.value, tenantVersion: 1,
+            api: async (name, request) => {
+              if (name === "page_schema") return {
+                schema_version: 1, id: "business_rules",
+                fields: {
+                  properties: {
+                    keywords: { maxItems: 50 }, ads: { maxItems: 20 },
+                    replace_previous_ad: { type: "boolean", default: false },
+                  },
+                  $defs: { Advertisement: { properties: {
+                    name: { minLength: 1, maxLength: 40 },
+                    text: { maxLength: 2000 },
+                    interval_minutes: { minimum: 5, maximum: 1440 },
+                  } } },
+                },
+              };
+              if (name !== "business_rules") throw new Error("unexpected_api");
+              fixture.calls.push(snapshot(request));
+              if (request.operation === "read") return {
+                config: snapshot(fixture.configs[request.group_id]),
+                version: fixture.version, tenant_version: 1,
+                images: {}, schedules: [], ad_replacement: fixture.state,
+              };
+              if (request.operation === "preview") {
+                fixture.preview = snapshot(request.config);
+                return { token: "isolated-preview", version: fixture.version, config: fixture.preview };
+              }
+              if (request.operation === "commit") {
+                fixture.configs[request.group_id] = snapshot(fixture.preview);
+                return { saved: true, version: ++fixture.version };
+              }
+              throw new Error("unexpected_operation");
+            },
+          })]);
+        },
+      }).mount("#app");
+    </script>
+    <style>
+      * { box-sizing: border-box; letter-spacing: 0; }
+      body { margin: 0; color: #202b33; background: #fff; font-family: Arial, "Noto Sans CJK SC", sans-serif; }
+      main { max-width: 1100px; margin: auto; padding: 16px; }
+      button { cursor: pointer; border: 1px solid #c4cdd3; background: #fff; border-radius: 4px; }
+      button:disabled { cursor: default; opacity: .5; }
+    </style>
+  </body>
+</html>

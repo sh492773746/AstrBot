@@ -222,6 +222,46 @@ async def test_current_scope_and_unrelated_group_changes_still_submit(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("missing_at", [1, 2])
+async def test_departure_before_initial_or_final_native_check_never_submits(
+    fence_case, missing_at
+):
+    adapter, store, intent, mutations = fence_case
+    original = adapter.business.request.side_effect
+    reads = 0
+
+    async def request(route, parameters, **kwargs):
+        nonlocal reads
+        if route == "/v1/group/get-group-members":
+            reads += 1
+            if reads >= missing_at:
+                return {"groupMemberInfo": []}
+        return await original(route, parameters, **kwargs)
+
+    adapter.business.request.side_effect = request
+    with pytest.raises(ProtocolError, match="blacklist_member_unavailable"):
+        await adapter.execute_moderation(
+            intent.operation,
+            "mute",
+            5,
+            2,
+            minutes=intent.minutes,
+            blacklist_intent=intent,
+        )
+    assert mutations == []
+    with sqlite3.connect(store.path.parent / "moderation.sqlite3") as db:
+        row = db.execute(
+            "SELECT result FROM operations WHERE id=?", (intent.operation,)
+        ).fetchone()
+    if missing_at == 1:
+        assert row is None
+    else:
+        receipt = json.loads(row[0])
+        assert receipt["status"] == "rejected" and receipt["submitted"] is False
+        assert receipt["error"] == "blacklist_member_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_group_revision_is_frozen_before_directory_wait(fence_case):
     adapter, _, intent, mutations = fence_case
 

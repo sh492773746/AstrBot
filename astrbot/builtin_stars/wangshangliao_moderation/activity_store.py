@@ -41,6 +41,10 @@ def database(adapter):
         CREATE TABLE IF NOT EXISTS lottery_entries(
             lottery TEXT, member TEXT, peer TEXT, name TEXT, joined REAL,
             PRIMARY KEY(lottery,member));
+        CREATE TABLE IF NOT EXISTS lottery_controls(
+            id TEXT PRIMARY KEY, lottery TEXT NOT NULL, actor TEXT NOT NULL,
+            action TEXT NOT NULL, value TEXT NOT NULL, previous TEXT NOT NULL,
+            created REAL NOT NULL, status TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS invite_rules(
             account TEXT, group_id TEXT, rate INTEGER NOT NULL DEFAULT 0,
             enabled INTEGER NOT NULL DEFAULT 0,
@@ -95,6 +99,13 @@ def database(adapter):
             ("packet_mode", "TEXT NOT NULL DEFAULT 'prize'"),
             ("by_invites", "INTEGER NOT NULL DEFAULT 0"),
             ("remarks", "TEXT NOT NULL DEFAULT ''"),
+            ("entry_phrase", "TEXT NOT NULL DEFAULT '参与玩家福利抽奖'"),
+            ("prize_tiers", "TEXT NOT NULL DEFAULT '[]'"),
+            ("start_at", "TEXT NOT NULL DEFAULT ''"),
+            ("luckiest_bonus", "INTEGER NOT NULL DEFAULT 0"),
+            ("integer_packets", "INTEGER NOT NULL DEFAULT 0"),
+            ("draw_on_full", "INTEGER NOT NULL DEFAULT 0"),
+            ("reserved_members", "TEXT NOT NULL DEFAULT '[]'"),
         ):
             if name not in fields:
                 db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
@@ -104,9 +115,24 @@ def database(adapter):
     for name, declaration in (
         ("packet_amounts", "TEXT NOT NULL DEFAULT '[]'"),
         ("unclaimed_amount", "INTEGER NOT NULL DEFAULT 0"),
+        ("starts", "REAL NOT NULL DEFAULT 0"),
+        ("control_actor", "TEXT NOT NULL DEFAULT ''"),
     ):
         if name not in columns:
             db.execute(f"ALTER TABLE lotteries ADD COLUMN {name} {declaration}")
+    active_index = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='lottery_active'"
+    ).fetchone()
+    if active_index and "'scheduled'" not in active_index["sql"]:
+        db.execute("DROP INDEX lottery_active")
+        db.execute(
+            "CREATE UNIQUE INDEX lottery_active ON lotteries(account,group_id) "
+            "WHERE status IN ('scheduled','schedule_blocked','announcing','open','blocked','drawing')"
+        )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS lottery_scheduled_tick ON lotteries(account,starts) "
+        "WHERE status='scheduled'"
+    )
     columns = {row["name"] for row in db.execute("PRAGMA table_info(invite_rules)")}
     if "presence_checked_at" not in columns:
         db.execute(

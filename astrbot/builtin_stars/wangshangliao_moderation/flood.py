@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
+import sqlite3
 import time
 import unicodedata
 from collections import OrderedDict, deque
@@ -140,23 +141,352 @@ class FloodWindows:
 class FloodRuntime:
     """Consume committed deterministic rules outside the ordinary chat FIFO."""
 
-    def __init__(self, context, *, slots=4, backlog=256):
+    def __init__(self, context, *, slots=4, backlog=256, media_runtime=None):
         self.context = context
         self.slots = slots
         self.backlog = backlog
         self.cursors = {}
         self.pending = OrderedDict()
         self.workers = {}
+        self.assigned = set()
+        self.finished = OrderedDict()
+        self.wakeup = asyncio.Event()
         self.active = True
         self.started_at = time.time()
+        self.media_runtime = media_runtime
+        self.recalls = {}
+        self.recall_workers = {}
+        self.recall_counts = {}
+        self.receipt_checks = {}
+        self.receipt_workers = {}
+        self.warning_items = {}
+        self.warning_pending = {}
+        self.warning_workers = {}
+        self.warning_started = {}
+
+    async def defer_warning(self, adapter, request, authorize):
+        """Queue a bounded, audited notification outside the sanction lane.
+
+        Args:
+            adapter: Original audit-wrapped native action port.
+            request: Frozen warning intent, never a punishment.
+            authorize: Original scope and policy guard.
+
+        Returns:
+            Whether the warning is admitted or already has a durable receipt.
+        """
+        from astrbot.core.platform.sources.wangshangliao.storage import instance_dir
+
+        from .review_store import review_store
+
+        identity = (adapter.config["id"], adapter.account)
+        if (
+            request.action != "warning"
+            or (request.instance, request.account) != identity
+            or request.message
+        ):
+            return False
+        key = (*identity, request.operation)
+        if key in self.warning_items:
+            return True
+        store = getattr(adapter, "_review_store", None)
+        if store is None:
+            store = review_store(
+                adapter, instance_dir(identity[0]) / "moderation.sqlite3"
+            )
+        full = sum(k[:2] == identity for k in self.warning_items) >= self.backlog
+        item = (adapter, request, authorize, time.monotonic(), store)
+        if not full and self.active:
+            self.warning_items[key] = item
+        reservation = asyncio.create_task(
+            asyncio.to_thread(
+                store.reserve_warning,
+                request.operation,
+                request.account,
+                str(request.group),
+                str(request.member),
+            )
+        )
+        try:
+            reserved = await asyncio.shield(reservation)
+            if not reserved:
+                self.warning_items.pop(key, None)
+                return True
+            if full or not self.active or key not in self.warning_items:
+                if full:
+                    gauges = getattr(adapter.diagnostics, "gauges", {})
+                    gauges["warning_queue_full"] = (
+                        gauges.get("warning_queue_full", 0) + 1
+                    )
+                await self.reject_warning(
+                    item,
+                    "notification_queue_full" if full else "notification_cancelled",
+                )
+                self.warning_items.pop(key, None)
+                return False
+            self.warning_pending.setdefault(identity, deque()).append(key)
+            self.wakeup.set()
+            return True
+        except BaseException:
+            await asyncio.gather(reservation, return_exceptions=True)
+            self.warning_items.pop(key, None)
+            await self.reject_warning(item, "notification_cancelled")
+            raise
+
+    async def reject_warning(self, item, error):
+        """Close an unsubmitted warning and publish a payload-free failure.
+
+        Args:
+            item: Frozen adapter, intent, guard, enqueue time and audit store.
+            error: Fixed cancellation or capacity diagnostic.
+        """
+        adapter, request, _, _, store = item
+        await asyncio.to_thread(
+            store.cancel_warning,
+            request.operation,
+            request.account,
+            str(request.group),
+            error,
+        )
+        adapter.diagnostics.emit(
+            "warning_notification",
+            "not_submitted",
+            request.operation,
+            failed=True,
+            error=error,
+        )
+
+    async def send_warning(self, key):
+        """Submit once after independent admission and current authorization.
+
+        Args:
+            key: Account-scoped queued operation key.
+        """
+        import inspect
+
+        from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
+
+        item = self.warning_items[key]
+        adapter, request, authorize, queued_at, _ = item
+        started = time.monotonic()
+        adapter.diagnostics.observe("warning_queue", started - queued_at)
+
+        async def guarded():
+            if not self.active or time.monotonic() - queued_at > 30:
+                raise ProtocolError("notification_expired")
+            checked = authorize()
+            if inspect.isawaitable(checked):
+                await checked
+
+        try:
+            await guarded()
+            result = await adapter.execute_action(request, authorize=guarded)
+            adapter.diagnostics.emit(
+                "warning_notification",
+                result.get("status", "unknown"),
+                request.operation,
+            )
+        finally:
+            # The native audit owns submitted/unknown outcomes. This only
+            # closes an unsubmitted queued receipt, including cancellation.
+            try:
+                await self.reject_warning_if_queued(item)
+            finally:
+                self.warning_items.pop(key, None)
+                adapter.diagnostics.observe(
+                    "warning_execution", time.monotonic() - started
+                )
+                self.wakeup.set()
+
+    async def reject_warning_if_queued(self, item):
+        """Close abandoned queue state without altering native receipts.
+
+        Args:
+            item: Frozen adapter, intent, guard, enqueue time and audit store.
+        """
+        _, request, _, queued_at, store = item
+        await asyncio.to_thread(
+            store.cancel_warning,
+            request.operation,
+            request.account,
+            str(request.group),
+            "notification_expired"
+            if time.monotonic() - queued_at > 30
+            else "notification_cancelled",
+        )
+
+    def defer_recalls(self, adapter, count, work, *, cancel=None):
+        """Admit bounded cleanup without occupying the member's sanction lane.
+
+        Args:
+            adapter: Original authenticated transport.
+            count: Number of already-reserved message recalls.
+            work: Deferred callable retaining independent authorization checks.
+            cancel: Optional audit closure for a batch cancelled before starting.
+
+        Returns:
+            Whether cleanup was admitted; a full queue keeps inline handling.
+        """
+        identity = (adapter.config["id"], adapter.account)
+        if (
+            not self.active
+            or self.recall_counts.get(identity, 0) + count > self.backlog
+        ):
+            gauges = getattr(adapter.diagnostics, "gauges", {})
+            gauges["flood_recall_queue_full"] = (
+                gauges.get("flood_recall_queue_full", 0) + 1
+            )
+            return False
+        self.recalls.setdefault(identity, deque()).append((count, work, cancel))
+        self.recall_counts[identity] = self.recall_counts.get(identity, 0) + count
+        self.wakeup.set()
+        return True
+
+    def owns(self, adapter, group, mid, payload):
+        """Identify a current deterministic event handled by this inbox worker.
+
+        Args:
+            adapter: Original adapter owning the committed native inbox.
+            group: Exact business group ID.
+            mid: Exact upstream message ID.
+            payload: Trusted event envelope from that inbox.
+
+        Returns:
+            Whether the ordinary pipeline can defer moderation to this worker.
+            This is routing ownership, never evidence of a successful sanction.
+        """
+        from astrbot.core.platform.sources.wangshangliao.group_scope import (
+            group_revision,
+        )
+
+        config = adapter.config
+        if (
+            not self.active
+            or config.get("type") != "wangshangliao"
+            or not config.get("enable", True)
+            or config.get("_business_active") is False
+            or adapter.connection_state != "online"
+            or adapter.stopping.is_set()
+            or getattr(getattr(adapter, "ledger", None), "db", None) is None
+            or payload.get("_dispatch_class") == "command"
+            or payload.get("_audit_incomplete")
+            or group in getattr(adapter.ledger, "review_groups", set())
+        ):
+            return False
+        now = time.time()
+        revision = group_revision(config, group)
+        for label, categories, since in (
+            ("_ingress_raid", {"raid_flood"}, now - 30),
+            ("_ingress_flood", {"message_flood"}, now - 30),
+            ("_ingress_content", None, self.started_at),
+        ):
+            evidence = payload.get(label, {})
+            if (
+                evidence.get("category")
+                and (categories is None or evidence["category"] in categories)
+                and since <= evidence.get("received_at", 0) <= now
+                and evidence.get("account") == adapter.account
+                and evidence.get("group") == group
+                and evidence.get("sender") == str(payload.get("sender", ""))
+                and evidence.get("message") == mid
+                and evidence.get("revision") == revision
+                and not (
+                    label == "_ingress_flood"
+                    and payload.get("_ingress_raid", {}).get("observing")
+                )
+            ):
+                return True
+        return False
+
+    async def handoff(self, adapter, group, mid, payload):
+        """Acknowledge only non-exempt events actually admitted to a bounded lane.
+
+        Args:
+            adapter: Original authenticated inbox owner.
+            group: Exact business group.
+            mid: Committed upstream message ID.
+            payload: Trusted event envelope, not a command-selected target.
+
+        Returns:
+            Whether a pending or running worker now owns this exact event.
+            False leaves ordinary handling and keyword replies unchanged.
+        """
+        from .member_exemptions import is_exempt
+
+        if not self.owns(adapter, group, mid, payload):
+            return False
+        if await asyncio.to_thread(
+            is_exempt,
+            adapter.config["id"],
+            adapter.account,
+            group,
+            str(payload.get("sender", "")),
+            payload.get("recall_route"),
+        ):
+            return False
+        if not self.owns(adapter, group, mid, payload):
+            return False
+        snapshot = getattr(adapter, "member_snapshots", {}).get(group)
+        sender = str(payload.get("sender", ""))
+        # Unknown or protected roles keep ordinary handling and replies. This
+        # snapshot is only a routing hint; execution still rereads native roles.
+        if (
+            not snapshot
+            or snapshot[0] != adapter.account
+            or not snapshot[2].get("complete")
+            or not any(
+                str(row.get("userId")) == sender
+                and str(row.get("nimId")) == payload.get("recall_route", {}).get("peer")
+                and row.get("groupRole") == "GROUP_ROLE_MEMBER"
+                for row in snapshot[2].get("groupMemberInfo", [])
+            )
+        ):
+            return False
+        identity = (adapter.config["id"], adapter.account)
+        message_key = (*identity, group, mid)
+        if message_key in self.finished:
+            return False
+        if message_key in self.assigned:
+            return True
+        if (
+            sum(
+                len(items)
+                for lane, items in self.pending.items()
+                if lane[:2] == identity
+            )
+            >= self.backlog
+        ):
+            return False
+        key = (*identity, group, str(payload.get("sender", "")))
+        self.pending.setdefault(key, deque()).append(
+            (adapter, mid, payload, adapter.config.get("_business_epoch"))
+        )
+        self.assigned.add(message_key)
+        if payload.get("_ingress_raid", {}).get("category") == "raid_flood":
+            self.pending.move_to_end(key, last=False)
+        self.wakeup.set()
+        return True
 
     async def step(self):
         """Scan bounded committed inbox rows and start at most four tasks per bot."""
+        while self.finished:
+            if next(iter(self.finished.values())) >= time.monotonic() - 300:
+                break
+            self.finished.popitem(last=False)
         for key, task in list(self.workers.items()):
             if task.done():
                 if not task.cancelled():
                     task.exception()
                 del self.workers[key]
+        for identity, task in list(self.warning_workers.items()):
+            if task.done():
+                if not task.cancelled():
+                    error = task.exception()
+                    if error is not None:
+                        from astrbot.api import logger
+
+                        logger.warning("Wangshangliao warning notification failed")
+                del self.warning_workers[identity]
         for adapter in list(self.context.platform_manager.platform_insts):
             config = getattr(adapter, "config", {})
             ledger = getattr(adapter, "ledger", None)
@@ -175,6 +505,41 @@ class FloodRuntime:
             ):
                 continue
             identity = (config["id"], adapter.account)
+            cleanup = self.recall_workers.get(identity)
+            if cleanup is not None and cleanup.done():
+                if not cleanup.cancelled():
+                    cleanup.exception()
+                del self.recall_workers[identity]
+            if identity not in self.recall_workers and self.recalls.get(identity):
+                count, work, _ = self.recalls[identity].popleft()
+                if not self.recalls[identity]:
+                    del self.recalls[identity]
+                cleanup = asyncio.create_task(work())
+                self.recall_workers[identity] = cleanup
+
+                def recalled(_, identity=identity, count=count):
+                    self.recall_counts[identity] = max(
+                        0, self.recall_counts.get(identity, 0) - count
+                    )
+                    self.wakeup.set()
+
+                cleanup.add_done_callback(recalled)
+            store = getattr(adapter, "_review_store", None)
+            reconciliation = self.receipt_workers.get(identity)
+            if reconciliation is not None and reconciliation.done():
+                del self.receipt_workers[identity]
+                reconciliation.result()
+            if (
+                store is not None
+                and identity not in self.receipt_workers
+                and time.monotonic() - self.receipt_checks.get(identity, 0) >= 5
+            ):
+                self.receipt_checks[identity] = time.monotonic()
+                self.receipt_workers[identity] = asyncio.create_task(
+                    self.reconcile_receipts(
+                        adapter, adapter.account, store, ledger.path
+                    )
+                )
             # Adapter shutdown shares this lock and detaches the connection first.
             async with ledger.ingress_lock:
                 if (
@@ -191,8 +556,11 @@ class FloodRuntime:
                 ):
                     continue
                 connection = ledger.db
+                # Keep the time index for startup, then seek the physical cursor
+                # instead of rescanning five minutes of traffic on every poll.
+                table = "inbox NOT INDEXED" if identity in self.cursors else "inbox"
                 async with connection.execute(
-                    "SELECT rowid,team,message,payload FROM inbox WHERE account=? "
+                    f"SELECT rowid,team,message,payload FROM {table} WHERE account=? "
                     "AND rowid>? AND received_at>=? "
                     "AND state IN ('pending','processing','processed') "
                     "AND json_valid(payload) "
@@ -218,12 +586,20 @@ class FloodRuntime:
                 payload = json.loads(encoded)
                 flood = payload.get("_ingress_flood", {})
                 content = payload.get("_ingress_content", {})
+                raid = payload.get("_ingress_raid", {})
                 if not (
-                    flood.get("category") == "message_flood"
+                    raid.get("category") == "raid_flood"
+                    and raid.get("received_at", 0) >= time.time() - 30
+                    or flood.get("category") == "message_flood"
+                    and not raid.get("observing")
                     and flood.get("received_at", 0) >= time.time() - 30
                     or content.get("category")
                     and content.get("received_at", 0) >= self.started_at
                 ):
+                    self.cursors[identity] = rowid
+                    continue
+                message_key = (*identity, group, mid)
+                if message_key in self.assigned or message_key in self.finished:
                     self.cursors[identity] = rowid
                     continue
                 key = (*identity, group, str(payload.get("sender", "")))
@@ -248,6 +624,9 @@ class FloodRuntime:
                 self.pending.setdefault(key, deque()).append(
                     (adapter, mid, payload, config.get("_business_epoch"))
                 )
+                self.assigned.add(message_key)
+                if raid.get("category") == "raid_flood":
+                    self.pending.move_to_end(key, last=False)
             running = sum(k[:2] == identity for k in self.workers)
             for key in list(self.pending):
                 if running >= self.slots:
@@ -257,7 +636,21 @@ class FloodRuntime:
                 item = self.pending[key].popleft()
                 if not self.pending[key]:
                     del self.pending[key]
+                else:
+                    self.pending.move_to_end(key)
                 self.workers[key] = asyncio.create_task(self.execute(key, *item))
+
+                def completed(_, message_key=(*identity, key[2], item[1])):
+                    self.assigned.discard(message_key)
+                    # Task completion is not a sanction receipt. Keep only
+                    # bounded routing keys to avoid re-enqueueing its inbox row.
+                    self.finished[message_key] = time.monotonic()
+                    self.finished.move_to_end(message_key)
+                    while len(self.finished) > 4096:
+                        self.finished.popitem(last=False)
+                    self.wakeup.set()
+
+                self.workers[key].add_done_callback(completed)
                 running += 1
             queued = [
                 item
@@ -265,7 +658,36 @@ class FloodRuntime:
                 if key[:2] == identity
                 for item in items
             ]
+            # Admit sanctions first, then allow one advisory per busy second.
+            # Waiting for the entire account to become idle starves other groups.
+            warning_keys = self.warning_pending.get(identity, ())
+            now = time.monotonic()
+            oldest_warning = (
+                self.warning_items.get(warning_keys[0]) if warning_keys else None
+            )
+            if (
+                identity not in self.warning_workers
+                and oldest_warning is not None
+                and (
+                    not running
+                    and not queued
+                    or now - oldest_warning[3] >= 1
+                    and now - self.warning_started.get(identity, -1) >= 1
+                )
+            ):
+                warning_key = self.warning_pending[identity].popleft()
+                if not self.warning_pending[identity]:
+                    del self.warning_pending[identity]
+                if warning_key in self.warning_items:
+                    self.warning_started[identity] = now
+                    self.warning_workers[identity] = asyncio.create_task(
+                        self.send_warning(warning_key)
+                    )
             gauges.update(
+                warning_pending=len(self.warning_pending.get(identity, ())),
+                warning_workers=int(identity in self.warning_workers),
+                flood_recall_pending=self.recall_counts.get(identity, 0),
+                flood_recall_workers=int(identity in self.recall_workers),
                 rule_workers=running,
                 rule_pending=len(queued),
                 rule_oldest_pending_ms=int(
@@ -275,7 +697,8 @@ class FloodRuntime:
                                 0,
                                 time.time()
                                 - (
-                                    payload.get("_ingress_content")
+                                    payload.get("_ingress_raid")
+                                    or payload.get("_ingress_content")
                                     or payload.get("_ingress_flood", {})
                                 ).get("received_at", time.time()),
                             )
@@ -297,6 +720,62 @@ class FloodRuntime:
         for key in list(self.pending):
             if key[:2] not in live:
                 del self.pending[key]
+        self.assigned.intersection_update(
+            {key for key in self.assigned if key[:2] in live}
+        )
+        for key in list(self.finished):
+            if key[:2] not in live:
+                del self.finished[key]
+        for identity in list(self.recalls):
+            if identity not in live:
+                for _, _, cancel in self.recalls.pop(identity):
+                    if cancel is not None:
+                        await cancel()
+                self.recall_counts.pop(identity, None)
+        for identity in list(self.receipt_checks):
+            if identity not in live:
+                del self.receipt_checks[identity]
+        for identity, task in list(self.receipt_workers.items()):
+            if identity not in live and task.done():
+                if not task.cancelled():
+                    task.exception()
+                del self.receipt_workers[identity]
+        available = {
+            (adapter.config.get("id"), getattr(adapter, "account", ""))
+            for adapter in self.context.platform_manager.platform_insts
+            if getattr(adapter, "config", {}).get("enable", True)
+            and getattr(adapter, "config", {}).get("_business_active") is not False
+            and getattr(adapter, "connection_state", "") == "online"
+        }
+        for identity in list(self.warning_pending):
+            if identity not in available:
+                for key in self.warning_pending.pop(identity):
+                    item = self.warning_items.pop(key, None)
+                    if item is not None:
+                        await self.reject_warning(item, "notification_cancelled")
+
+    async def reconcile_receipts(self, adapter, account, store, ledger_path):
+        """Own one bounded local receipt scan without holding rule dispatch.
+
+        Args:
+            adapter: Original diagnostic owner, never a new native action port.
+            account: Frozen account owning both existing ledgers.
+            store: Original review store retained until this scan finishes.
+            ledger_path: Original transport database opened read-only.
+        """
+        try:
+            await asyncio.to_thread(store.reconcile_recalls, account, ledger_path)
+        except Exception as exc:
+            busy = isinstance(exc, sqlite3.OperationalError) and (
+                getattr(exc, "sqlite_errorcode", 0) & 0xFF
+                in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            )
+            adapter.diagnostics.emit(
+                "recall_reconcile",
+                "busy" if busy else "failed",
+                failed=not busy,
+                error="" if busy else "operation_failed",
+            )
 
     async def execute(self, key, adapter, mid, payload, epoch):
         """Use the normal guarded sanction path, never a model-selected target.
@@ -322,6 +801,43 @@ class FloodRuntime:
         from .policy import handle, is_fresh_message
 
         instance, account, group, sender = key
+        started = time.monotonic()
+        received = (
+            payload.get("_ingress_raid")
+            or payload.get("_ingress_content")
+            or payload.get("_ingress_flood", {})
+        ).get("received_at", time.time())
+        adapter.diagnostics.observe("rule_queue_wait", max(0, time.time() - received))
+        raid = payload.get("_ingress_raid", {})
+        if raid.get("category") == "raid_flood":
+            from astrbot.core.platform.sources.wangshangliao.runtime_policy import (
+                runtime,
+            )
+
+            worker = getattr(runtime.open_service, "raid_defense", None)
+            if worker is not None:
+                try:
+                    await worker.enforce(
+                        adapter, group, mid, payload, recall_queue=self
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    adapter.diagnostics.emit(
+                        "raid_response",
+                        "blocked",
+                        mid,
+                        group=group,
+                        failed=True,
+                        error=str(exc)
+                        if isinstance(exc, ProtocolError)
+                        else "operation_failed",
+                    )
+                finally:
+                    adapter.diagnostics.observe(
+                        "rule_execution", time.monotonic() - started
+                    )
+            return
         session = str(
             MessageSession(instance, MessageType.GROUP_MESSAGE, f"{account}/{group}")
         )
@@ -382,11 +898,26 @@ class FloodRuntime:
                         .get("custom_rules", []),
                     },
                 )
+                if (
+                    not category
+                    and content.get("category") == "image_inspection"
+                    and payload.get("kind") == "image"
+                    and self.media_runtime is not None
+                ):
+                    await handle(
+                        adapter,
+                        group,
+                        mid,
+                        payload,
+                        execution_check=authorized,
+                        media_runtime=self.media_runtime,
+                    )
+                    return
                 if category != content.get("category"):
                     return
             if not category:
                 return
-            await handle(
+            consumed = await handle(
                 adapter,
                 group,
                 mid,
@@ -397,13 +928,25 @@ class FloodRuntime:
                     "message_id": mid,
                 },
                 execution_check=authorized,
+                recall_queue=self,
+            )
+            from .review_store import ReviewStore
+
+            store = getattr(adapter, "_review_store", None)
+            outcome = (
+                await asyncio.to_thread(store.content_outcome, account, group, mid)
+                if consumed and isinstance(store, ReviewStore)
+                else "outcome_unconfirmed"
+                if consumed
+                else "not_applied"
             )
             adapter.diagnostics.emit(
                 "content_response"
                 if content and category != "message_flood"
                 else "flood_response",
-                "completed",
+                outcome,
                 mid,
+                failed=outcome in {"preflight_failed", "execution_rejected", "unknown"},
                 group=group,
                 duration_ms=int(
                     max(
@@ -429,11 +972,14 @@ class FloodRuntime:
                 if isinstance(exc, ProtocolError)
                 else "operation_failed",
             )
+        finally:
+            adapter.diagnostics.observe("rule_execution", time.monotonic() - started)
 
     async def run(self):
         """Poll only this plugin's native adapters without blocking their readers."""
         try:
             while self.active:
+                self.wakeup.clear()
                 try:
                     await self.step()
                 except asyncio.CancelledError:
@@ -442,23 +988,54 @@ class FloodRuntime:
                     from astrbot.api import logger
 
                     logger.exception("Wangshangliao flood inbox scan failed")
-                await asyncio.sleep(0.1)
+                try:
+                    await asyncio.wait_for(self.wakeup.wait(), 0.1)
+                except TimeoutError:
+                    pass
         finally:
             await self.close()
 
     async def close(self):
         """Revoke queued work and quarantine any already-submitted unknown effects."""
         self.active = False
+        self.wakeup.set()
         self.pending.clear()
-        for task in self.workers.values():
+        warning_items = list(self.warning_items.values())
+        tasks = [
+            *self.workers.values(),
+            *self.recall_workers.values(),
+            *self.warning_workers.values(),
+        ]
+        for task in tasks:
             task.cancel()
-        if self.workers:
-            await asyncio.gather(*self.workers.values(), return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        # Cancelling to_thread does not stop its SQLite work. Drain these
+        # bounded scans before releasing the old plugin's stores on reload.
+        if self.receipt_workers:
+            await asyncio.gather(*self.receipt_workers.values(), return_exceptions=True)
+        for batches in self.recalls.values():
+            for _, _, cancel in batches:
+                if cancel is not None:
+                    await cancel()
+        for item in warning_items:
+            await self.reject_warning_if_queued(item)
+        self.warning_items.clear()
+        self.warning_pending.clear()
+        self.warning_workers.clear()
+        self.warning_started.clear()
         self.workers.clear()
+        self.recalls.clear()
+        self.recall_workers.clear()
+        self.recall_counts.clear()
+        self.receipt_checks.clear()
+        self.receipt_workers.clear()
+        self.assigned.clear()
+        self.finished.clear()
         self.cursors.clear()
 
 
-async def enforce(adapter, group, mid, payload, *, store, guard):
+async def enforce(adapter, group, mid, payload, *, store, guard, recall_queue=None):
     """Count one violation per burst and recall its authenticated messages.
 
     Args:
@@ -468,6 +1045,7 @@ async def enforce(adapter, group, mid, payload, *, store, guard):
         payload: Trusted ingress envelope.
         store: Instance-owned review repository.
         guard: Frozen account, policy and capability reauthorization callback.
+        recall_queue: Optional bounded runtime for independent recall cleanup.
 
     Returns:
         Independent mute status and aggregate recall status. Unknowns are not retried.
@@ -553,6 +1131,47 @@ async def enforce(adapter, group, mid, payload, *, store, guard):
                 )
             ):
                 raise ProtocolError("flood_evidence_unverified")
+        # Recount only disjoint, authenticated candidates for the next warning.
+        # Overlapping old recalls must not turn one extra message into a new burst.
+        stamp = float(payload["recall_route"]["time"])
+        if stamp > 100000000000:
+            stamp /= 1000
+        rapid, recent, matching = [], [], []
+        normalized = (
+            "".join(
+                c
+                for c in unicodedata.normalize(
+                    "NFKC", str(payload.get("text", ""))
+                ).casefold()
+                if not c.isspace() and unicodedata.category(c) != "Cf"
+            )
+            if evidence.get("repeated", 0) >= 5
+            else ""
+        )
+        for message, (candidate, seen) in rows.items():
+            sent = float(candidate["recall_route"]["time"])
+            if sent > 100000000000:
+                sent /= 1000
+            if not candidate.get("_ingress_flood", {}).get("live"):
+                continue
+            if received_at - 3 <= seen <= received_at and stamp - 3 <= sent <= stamp:
+                rapid.append(message)
+            if received_at - 10 <= seen <= received_at and stamp - 10 <= sent <= stamp:
+                recent.append(message)
+            if (
+                normalized
+                and received_at - 30 <= seen <= received_at
+                and stamp - 30 <= sent <= stamp
+                and normalized
+                == "".join(
+                    c
+                    for c in unicodedata.normalize(
+                        "NFKC", str(candidate.get("text", ""))
+                    ).casefold()
+                    if not c.isspace() and unicodedata.category(c) != "Cf"
+                )
+            ):
+                matching.append(message)
         operation = (
             "flood/"
             + hashlib.sha256(
@@ -573,6 +1192,7 @@ async def enforce(adapter, group, mid, payload, *, store, guard):
             received_at,
             messages,
             scope=payload.get("_test_rule_window", ""),
+            windows=((5, rapid), (15, recent), (5, matching)),
         )
         guard()
         progression = {}
@@ -626,41 +1246,105 @@ async def enforce(adapter, group, mid, payload, *, store, guard):
             if progression.get("recall_status") not in {None, "none"}
             else []
         )
-        for message in pending:
-            guard()
-            recall_status = "unknown"
+        ready = asyncio.Event()
+        expected_outcomes = len(outcomes) + len(pending)
+
+        async def recall_pending():
+            """Finish reserved recalls after the trigger's initial audit is saved."""
+            await ready.wait()
+            cleanup_started = time.monotonic()
             try:
-                result = await adapter.execute_action(
-                    ActionRequest.bind(
-                        adapter,
-                        f"recall/{account}/{group}/{message}",
-                        "recall",
-                        int(group),
-                        member=int(sender),
-                        expected_nim=peer,
-                        message=message,
-                    ),
-                    authorize=guard,
-                )
-                recall_status = result.get("status", "unknown")
-                if recall_status not in {"accepted", "verified", "rejected"}:
+                for message in pending:
+                    guard()
                     recall_status = "unknown"
-            except Exception as exc:
-                recall_status = getattr(exc, "action_status", "unknown")
+                    try:
+                        result = await adapter.execute_action(
+                            ActionRequest.bind(
+                                adapter,
+                                f"recall/{account}/{group}/{message}",
+                                "recall",
+                                int(group),
+                                member=int(sender),
+                                expected_nim=peer,
+                                message=message,
+                            ),
+                            authorize=guard,
+                        )
+                        recall_status = result.get("status", "unknown")
+                        if recall_status not in {"accepted", "verified", "rejected"}:
+                            recall_status = "unknown"
+                    except Exception as exc:
+                        recall_status = getattr(exc, "action_status", "unknown")
+                        adapter.diagnostics.emit(
+                            "flood_recall",
+                            recall_status,
+                            message,
+                            failed=True,
+                            error=getattr(exc, "action_error", "operation_failed"),
+                            group=group,
+                            actor=sender,
+                        )
+                    finally:
+                        await asyncio.to_thread(
+                            store.finish_flood,
+                            operation,
+                            recall_status,
+                            message=message,
+                        )
+                    outcomes.append(recall_status)
+            except ProtocolError as exc:
                 adapter.diagnostics.emit(
-                    "flood_recall",
-                    recall_status,
-                    message,
+                    "flood_cleanup",
+                    "blocked",
+                    mid,
                     failed=True,
-                    error=getattr(exc, "action_error", "operation_failed"),
+                    error=str(exc),
                     group=group,
-                    actor=sender,
                 )
             finally:
-                await asyncio.to_thread(
-                    store.finish_flood, operation, recall_status, message=message
+                adapter.diagnostics.observe(
+                    "flood_cleanup", time.monotonic() - cleanup_started
                 )
-            outcomes.append(recall_status)
+                status = (
+                    "accepted"
+                    if len(outcomes) == expected_outcomes
+                    and outcomes
+                    and all(s in {"accepted", "verified"} for s in outcomes)
+                    else "unknown"
+                )
+                await asyncio.to_thread(
+                    store.finish,
+                    account,
+                    group,
+                    mid,
+                    "muted"
+                    if mute_status in {"accepted", "verified"}
+                    else "execution_rejected"
+                    if mute_status == "rejected"
+                    else "unknown"
+                    if mute_status == "unknown"
+                    else "recalled"
+                    if status == "accepted"
+                    else "unknown",
+                    status,
+                )
+
+        if (
+            pending
+            and recall_queue is not None
+            and recall_queue.defer_recalls(adapter, len(pending), recall_pending)
+        ):
+            return {
+                **progression,
+                "action": "mute" if mute_status != "none" else "recall",
+                "status": mute_status if mute_status != "none" else "pending",
+                "mute_status": mute_status,
+                "recall_status": "pending",
+                "warning_recall_status": progression.get("recall_status", "none"),
+                "_recall_ready": ready,
+            }
+        ready.set()
+        await recall_pending()
         recall_status = (
             "accepted"
             if outcomes and all(s in {"accepted", "verified"} for s in outcomes)

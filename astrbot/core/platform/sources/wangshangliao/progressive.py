@@ -42,8 +42,25 @@ async def enforce(
     execution_check=None,
     operation=None,
     recall_after_mute=False,
+    recall_queue=None,
+    recall_complete=None,
 ):
-    """Attempt both actions once; never treat a partial outcome as full success."""
+    """Submit an earned mute before recalls while keeping independent receipts.
+
+    Args:
+        adapter: Original authenticated platform adapter.
+        group: Exact business group identity.
+        member: Verified ordinary member identity.
+        message: Original upstream message identity.
+        execution_check: Caller-owned authorization repeated before effects.
+        operation: Optional stable burst operation identity.
+        recall_after_mute: Leave recalls to the burst caller after a mute.
+        recall_queue: Optional bounded cleanup queue after an earned mute.
+        recall_complete: Async callback receiving the recall status and action result.
+
+    Returns:
+        Independent mute and recall results, or a recall-only warning result.
+    """
     account = adapter.account
     test_path = advertising_path(adapter, group, member, message)
     path = (
@@ -100,17 +117,14 @@ async def enforce(
             "submitted": False,
             "action": "recall" if warnings < 3 else "mute",
         }
-        try:
-            # Database contention can outlive a grant or account change.
-            await check()
-            if warnings >= 3 and recall_after_mute:
-                recall_status = "none"
-                result = await mute_and_escalate(
-                    adapter, operation, group, member, message, execution_check=check
-                )
-                return {**result, "recall_status": recall_status}
+        deferred = False
+
+        async def recall():
+            """Submit one independently authorized recall, never retrying unknowns."""
+            status = "rejected"
             try:
-                recall_status = "unknown"
+                await check()
+                status = "unknown"
                 receipt = await adapter.execute_action(
                     ActionRequest.bind(
                         adapter,
@@ -123,14 +137,96 @@ async def enforce(
                     ),
                     authorize=check,
                 )
-                recall_status = receipt["status"]
-                if recall_status not in {"accepted", "verified", "rejected"}:
-                    recall_status = "unknown"
-            except Exception:
+                status = receipt["status"]
+                if status not in {"accepted", "verified", "rejected"}:
+                    status = "unknown"
+            except Exception as exc:
+                status = getattr(exc, "action_status", status)
                 adapter.diagnostics.emit(
                     "progressive_recall", "failed_or_unknown", message, failed=True
                 )
-            # Recall failure must not silently skip muting; revoked authority must.
+            return status
+
+        try:
+            # Database contention can outlive a grant or account change.
+            await check()
+            if warnings >= 3:
+                recall_status = "none"
+                result = await mute_and_escalate(
+                    adapter, operation, group, member, message, execution_check=check
+                )
+                if recall_after_mute:
+                    return {**result, "recall_status": recall_status}
+            if recall_queue is not None and (warnings >= 3 or warnings < 0):
+                if warnings < 0:
+                    result = {
+                        "status": "pending",
+                        "action": "recall",
+                        "cycle_wait": True,
+                    }
+                ready = asyncio.Event()
+                receipt_result = dict(result)
+
+                async def finish_recall(status):
+                    """Save cleanup separately from the original mute receipt."""
+                    completed = {
+                        **receipt_result,
+                        **(
+                            {"status": status}
+                            if receipt_result.get("action") == "recall"
+                            else {}
+                        ),
+                    }
+                    await asyncio.to_thread(
+                        store.finish, operation, status, completed, peer
+                    )
+                    if recall_complete is not None:
+                        await recall_complete(status, completed)
+                    adapter.diagnostics.emit(
+                        "progressive_result",
+                        status,
+                        message,
+                        action="recall",
+                        group=group,
+                        actor=member,
+                        failed=status not in {"accepted", "verified"},
+                        error="result_unknown" if status == "unknown" else "",
+                        aggregate=False,
+                    )
+
+                async def cleanup():
+                    """Wait for the initial audit before refining its receipt."""
+                    status = "rejected"
+                    try:
+                        await ready.wait()
+                        status = "unknown"
+                        status = await recall()
+                    finally:
+                        await ready.wait()
+                        await finish_recall(status)
+
+                async def cancel_cleanup():
+                    """Close never-started cleanup without submitting a recall."""
+                    await ready.wait()
+                    await finish_recall("rejected")
+
+                # Persist before handing off; no cancellable work may sit
+                # between queue admission and returning the audit barrier.
+                await asyncio.to_thread(
+                    store.finish, operation, "pending", result, peer
+                )
+                if recall_queue.defer_recalls(
+                    adapter, 1, cleanup, cancel=cancel_cleanup
+                ):
+                    recall_status = "pending"
+                    deferred = True
+                    return {
+                        **result,
+                        "recall_status": recall_status,
+                        "_recall_ready": ready,
+                    }
+            # Recalls and notifications cannot delay an already earned mute.
+            recall_status = await recall()
             await check()
             if warnings < 3:
                 if warnings >= 0:
@@ -153,18 +249,21 @@ async def enforce(
                     ),
                 }
                 return {**result, "recall_status": recall_status}
-            result = await mute_and_escalate(
-                adapter, operation, group, member, message, execution_check=check
-            )
             return {**result, "recall_status": recall_status}
         finally:
-            await asyncio.to_thread(
-                store.finish, operation, recall_status, result, peer
+            if not deferred:
+                await asyncio.to_thread(
+                    store.finish, operation, recall_status, result, peer
+                )
+            outcomes = (
+                (
+                    ("mute", result.get("status", "unknown")),
+                    ("recall", recall_status),
+                )
+                if warnings >= 3
+                else (("recall", recall_status),)
             )
-            for action, status in (
-                ("recall", recall_status),
-                (result.get("action", "mute"), result.get("status", "unknown")),
-            ):
+            for action, status in outcomes:
                 adapter.diagnostics.emit(
                     "progressive_result",
                     status,
@@ -172,7 +271,7 @@ async def enforce(
                     action=action,
                     group=group,
                     actor=member,
-                    failed=status not in {"accepted", "verified"},
+                    failed=status not in {"accepted", "verified", "none", "pending"},
                     error="result_unknown" if status == "unknown" else "",
                     aggregate=False,
                 )

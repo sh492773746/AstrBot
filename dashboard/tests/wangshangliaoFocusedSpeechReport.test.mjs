@@ -10,12 +10,20 @@ const require = createRequire(import.meta.url);
 const filename = "../plugin-pages/wangshangliao/FocusedSpeechReport.vue";
 const { descriptor } = parse(readFileSync(new URL(filename, import.meta.url), "utf8"));
 const script = compileScript(descriptor, { id: "focused-report" });
+const exportModule = { exports: {} };
+new Function("module", "exports", ts.transpileModule(readFileSync(
+  new URL("../plugin-pages/wangshangliao/speechReportExport.ts", import.meta.url), "utf8",
+), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText)(exportModule, exportModule.exports);
 const module = { exports: {} };
 let clipboard = async () => true;
 new Function("require", "module", "exports", ts.transpileModule(script.content, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText)(id => id.endsWith("/utils/clipboard")
-  ? { copyToClipboard: (...args) => clipboard(...args) } : require(id), module, module.exports);
+  ? { copyToClipboard: (...args) => clipboard(...args) }
+  : id === "./speechReportExport" ? exportModule.exports
+  : require(id), module, module.exports);
 const renderer = createRenderer({
   createComment: () => ({}), insert() {}, remove() {},
   parentNode: () => null, nextSibling: () => null,
@@ -56,21 +64,21 @@ test("focused report template compiles and uses a read-only bot-scoped endpoint"
   await flush();
   assert.equal(panel.state().selected.total, 7);
 });
-test("dedicated report copies date, exact UID and each group's totals", async t => {
+test("dedicated report copies a dated TSV table with exact member and group totals", async t => {
   const texts = [];
   clipboard = async text => { texts.push(text); return true; };
   const panel = mount(t, async () => snapshot());
   await flush();
-  await panel.state().copy();
+  await panel.state().exportReport("text");
   assert.match(texts[0], /2026-10-26/);
-  assert.match(texts[0], /成员甲（UID 10）：合计 3 句/);
-  assert.match(texts[0], /群乙（6）：2 句/);
+  assert.match(texts[0], /成员甲（10）\t1\t2\t3/);
+  assert.match(texts[0], /群乙（6）/);
   panel.day.value = 1;
   await flush();
   assert.equal(panel.state().notice, "");
-  await panel.state().copy();
+  await panel.state().exportReport("text");
   assert.match(texts[1], /2026-10-25/);
-  assert.match(texts[1], /合计 7 句/);
+  assert.match(texts[1], /合计\t4\t3\t7/);
 });
 test("incomplete and failed reports never produce confirmed clipboard success", async t => {
   let copied = 0;
@@ -78,10 +86,10 @@ test("incomplete and failed reports never produce confirmed clipboard success", 
   const panel = mount(t, async () => snapshot());
   await flush();
   panel.state().report.catching_up = true;
-  await panel.state().copy();
+  await panel.state().exportReport("text");
   assert.equal(copied, 0);
   panel.state().report.catching_up = false;
-  await panel.state().copy();
+  await panel.state().exportReport("text");
   assert.equal(panel.state().notice, "");
   assert.match(panel.state().error, /浏览器未允许复制/);
 });
@@ -90,7 +98,7 @@ test("late report and copy results cannot refill another bot or date", async t =
   clipboard = async () => new Promise(resolve => { release = resolve; });
   const panel = mount(t, async () => snapshot());
   await flush();
-  const pending = panel.state().copy();
+  const pending = panel.state().exportReport("text");
   panel.day.value = 1;
   await flush();
   release(true);

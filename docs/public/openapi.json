@@ -7465,6 +7465,11 @@
             "type": "string",
             "writeOnly": true
           },
+          "security_code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "writeOnly": true
+          },
           "action": {
             "type": "string",
             "enum": [
@@ -7474,6 +7479,8 @@
               "request_sms",
               "verify_sms",
               "resend_sms",
+              "verify_security_code",
+              "retry_connection",
               "cancel",
               "logout",
               "groups",

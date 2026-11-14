@@ -7,6 +7,7 @@ import { fetchWithAuth } from "@/api/http";
 import { useModuleI18n } from "@/i18n/composables";
 import { usePluginI18n } from "@/utils/pluginI18n";
 import { useCustomizerStore } from "@/stores/customizer";
+import PluginHumanVerification from "@/components/shared/PluginHumanVerification.vue";
 
 const BRIDGE_CHANNEL = "astrbot-plugin-page";
 
@@ -25,6 +26,7 @@ const plugin = ref(null);
 const page = ref(null);
 const iframeSrc = ref("");
 const iframeRef = ref(null);
+const humanVerification = ref(null);
 const sseConnections = new Map();
 const BRIDGE_TARGET_ORIGIN = window.location.origin;
 let iframeMessageOrigin = null;
@@ -215,6 +217,12 @@ const sendBridgeResponse = (requestId, ok, payload) => {
   });
 };
 
+const finishHumanVerification = (result, error) => {
+  const pending = humanVerification.value;
+  humanVerification.value = null;
+  if (pending) sendBridgeResponse(pending.requestId, !error, error || result);
+};
+
 const getBridgeErrorMessage = (error, fallback) => {
   const responseData = error?.response?.data;
   if (responseData && typeof responseData === "object") {
@@ -377,6 +385,16 @@ const handleBridgeRequest = async (message) => {
   try {
     if (!requestId) {
       throw new Error("Missing plugin bridge request id.");
+    }
+
+    if (action === "verification:yidun") {
+      if (
+        pluginName.value !== "astrbot_plugin_rebo_live" ||
+        pageName.value !== "settings"
+      ) throw new Error("verification_not_allowed");
+      if (humanVerification.value) throw new Error("verification_busy");
+      humanVerification.value = { requestId };
+      return;
     }
 
     if (action === "api:get") {
@@ -552,6 +570,7 @@ const handleIframeLoad = () => {
 };
 
 const loadPluginPage = async () => {
+  finishHumanVerification(null, "verification_cancelled");
   loading.value = true;
   errorMessage.value = "";
   plugin.value = null;
@@ -616,6 +635,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  finishHumanVerification(null, "verification_cancelled");
   window.removeEventListener("message", handleWindowMessage);
   cleanupSSEConnections();
 });
@@ -631,6 +651,12 @@ watch(() => customizer.uiTheme, () => {
 
 <template>
   <div class="plugin-page-page">
+    <PluginHumanVerification
+      v-if="humanVerification"
+      @verified="finishHumanVerification($event, null)"
+      @failed="finishHumanVerification(null, $event)"
+      @cancel="finishHumanVerification(null, 'verification_cancelled')"
+    />
     <div v-if="loading" class="plugin-page-state">
       <v-progress-circular indeterminate color="primary" />
       <span>{{ tm("status.loading") }}</span>

@@ -12,6 +12,7 @@ const busy = ref(false);
 const error = ref("");
 const preview = ref<any>(null);
 const schedules = ref<any[]>([]);
+const adReplacement = ref<any>(null);
 const authorizationRequired = ref(false);
 const images = ref<Record<string, string>>({});
 const uploadStatus = ref("");
@@ -47,6 +48,8 @@ async function load() {
   ]);
   if (current !== generation) return;
   config.value = row.config; version.value = row.version;
+  config.value.replace_previous_ad ??= false;
+  adReplacement.value = row.ad_replacement || null;
   authorizationRequired.value = row.version > 0 && row.tenant_version !== props.tenantVersion;
   schema.value = declaration;
   schedules.value = row.schedules || [];
@@ -158,6 +161,10 @@ async function upload(ad: any, files: File[], index?: number, kind: "keywords" |
         ]);
       } finally { clearTimeout(timer); }
       if (current !== generation || !config.value[kind].includes(ad)) return;
+      if (ad.images.some((image: string, imageIndex: number) =>
+        image === result.id && imageIndex !== index)) {
+        throw new Error("已包含这张图片，请选择不同图片");
+      }
       images.value[result.id] = result.thumbnail;
       if (index === undefined) ad.images.push(result.id);
       else ad.images.splice(index, 1, result.id);
@@ -197,7 +204,7 @@ function deliveryError(id: string) {
 }
 watch(() => [props.account, props.group, props.tenantVersion], () => {
   generation++; preview.value = null; config.value = { keywords: [], ads: [] };
-  schedules.value = []; images.value = {}; uploadStatus.value = "";
+  schedules.value = []; adReplacement.value = null; images.value = {}; uploadStatus.value = "";
   authorizationRequired.value = false;
   staggerIds.value = ["", "", ""]; staggerMinutes.value = [0, 20, 40]; staggerStatus.value = "";
   if (props.account && props.group) void run(load, true);
@@ -259,6 +266,10 @@ onBeforeUnmount(() => { generation++; operation++; });
     </fieldset>
     <fieldset :disabled="busy || disabled || Boolean(preview) || !schema">
       <legend>定时发言 · 北京时间</legend>
+      <label class="check replacement-toggle"><input v-model="config.replace_previous_ad" type="checkbox" />新广告发送成功后撤回上一组广告</label>
+      <p v-if="adReplacement?.state === 'accepted'" class="media-note" role="status">上一组广告的撤回请求已受理。</p>
+      <p v-else-if="adReplacement?.state === 'pending'" class="media-note" role="status">正在撤回上一组广告。</p>
+      <p v-else-if="adReplacement && ['unknown', 'rejected', 'partial'].includes(adReplacement.state)" class="error" role="status">新广告已发送，上一组广告撤回未全部确认，请核对群内消息；不会自动重试。</p>
       <div class="stagger-editor" role="group" aria-label="三条消息错峰排程">
         <h4>三条消息 · 每小时循环</h4>
         <div class="stagger-slots">
@@ -329,6 +340,7 @@ onBeforeUnmount(() => { generation++; operation++; });
     <button type="button" :disabled="busy || disabled || Boolean(preview) || !schema" @click="run(inspect)"><Eye :size="16" />预览修改</button>
     <div v-if="preview" class="rule-confirmation" role="alertdialog" aria-label="确认业务规则">
       <h4>确认本群业务规则 · 版本 {{ preview.version }}</h4>
+      <p>新广告撤回上一组：{{ preview.config.replace_previous_ad ? '开启' : '关闭' }}</p>
       <p v-for="rule in preview.config.keywords" :key="rule.id">
         {{ rule.enabled ? '开启' : '关闭' }} · {{ rule.name }} · {{ rule.match === 'exact' ? '整句精确' : '包含' }} · {{ rule.terms.join(' / ') }}<br />{{ rule.text }}
       </p>
@@ -357,6 +369,7 @@ legend { font-weight: 600; }
 .rule-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
 label { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 14px; }
 label.check { flex-direction: row; align-items: center; }
+.replacement-toggle { margin: 4px 0 12px; }
 input, select, textarea { min-width: 0; max-width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #b9c2ca; border-radius: 4px; color: inherit; background: transparent; font: inherit; }
 .wide { grid-column: 1 / -1; }
 button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; }

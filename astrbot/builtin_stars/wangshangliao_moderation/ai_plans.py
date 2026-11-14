@@ -105,13 +105,6 @@ class AIPlans:
                     WHERE state<>'not_sent';
                 CREATE INDEX IF NOT EXISTS ai_charges_month_cost ON ai_charges(month,charged_micro)
                     WHERE state<>'not_sent';
-                CREATE TABLE IF NOT EXISTS ai_quota_notices(
-                    id TEXT PRIMARY KEY,pool TEXT NOT NULL,kind TEXT NOT NULL,
-                    account TEXT NOT NULL,uid TEXT NOT NULL,principal TEXT NOT NULL,
-                    text TEXT NOT NULL,state TEXT NOT NULL,created REAL NOT NULL);
-                DROP INDEX IF EXISTS ai_notice_pool_kind;
-                CREATE UNIQUE INDEX IF NOT EXISTS ai_notice_pool_recipient_kind
-                    ON ai_quota_notices(pool,account,uid,principal,kind);
                 CREATE TABLE IF NOT EXISTS ai_plan_migrations(name TEXT PRIMARY KEY);
             """)
             columns = {
@@ -149,17 +142,9 @@ class AIPlans:
                     "WHERE global_limit=1000"
                 )
                 db.execute("INSERT INTO ai_plan_migrations VALUES('subscription-v1')")
-            db.execute("DROP INDEX IF EXISTS ai_notice_pool_kind")
-            db.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ai_notice_pool_recipient_kind "
-                "ON ai_quota_notices(pool,account,uid,principal,kind)"
-            )
             # A reload cannot establish whether a prior process dispatched HTTP.
             db.execute(
                 "UPDATE ai_charges SET state='unknown' WHERE state IN ('reserved','dispatched')"
-            )
-            db.execute(
-                "UPDATE ai_quota_notices SET state='unknown' WHERE state='sending'"
             )
 
     def settings(self):
@@ -430,14 +415,6 @@ class AIPlans:
             if old and pool != principal:
                 db.execute(
                     "UPDATE ai_charges SET pool=? WHERE pool=?", (pool, principal)
-                )
-                db.execute(
-                    "DELETE FROM ai_quota_notices WHERE pool=? AND kind IN "
-                    "(SELECT kind FROM ai_quota_notices WHERE pool=?)",
-                    (principal, pool),
-                )
-                db.execute(
-                    "UPDATE ai_quota_notices SET pool=? WHERE pool=?", (pool, principal)
                 )
                 db.execute("DELETE FROM ai_pools WHERE pool=?", (principal,))
         return dict(
@@ -811,7 +788,6 @@ class AIPlans:
         payer_version=None,
         group_version=None,
         continuation=None,
-        guidance_trial=None,
         now=None,
     ):
         now = time.time() if now is None else now
@@ -836,27 +812,6 @@ class AIPlans:
                 raise OpenError("billing_price_expired")
             if db.execute("SELECT 1 FROM calls WHERE request=?", (request,)).fetchone():
                 raise OpenError("request_duplicate")
-            if guidance_trial is not None:
-                trial = db.execute(
-                    "SELECT * FROM guidance_trials WHERE account=? AND group_id=? AND uid=?",
-                    (account, guidance_trial["group_id"], uid),
-                ).fetchone()
-                if (
-                    group
-                    or continuation is not None
-                    or not trial
-                    or dict(trial) != guidance_trial
-                    or not trial["active"]
-                    or trial["principal"] != principal
-                ):
-                    raise OpenError("ai_access_changed")
-                used = db.execute(
-                    "SELECT COUNT(*) FROM ai_charges WHERE account=? AND uid=? "
-                    "AND principal=? AND group_id='' AND created>=? AND state<>'not_sent'",
-                    (account, uid, principal, trial["created"]),
-                ).fetchone()[0]
-                if used >= trial["quota"]:
-                    raise OpenError("guidance_trial_exhausted")
             pool = self._pool(db, principal, uid)
             if continuation is not None:
                 parent = db.execute(
@@ -1174,116 +1129,6 @@ class AIPlans:
                     "UPDATE ai_charges SET state='unknown' WHERE request=?", (request,)
                 )
 
-    def queue_notices(
-        self, principal, uid, account, *, reason="", group="", exempt=False, now=None
-    ):
-        now = time.time() if now is None else now
-        with self.store.connect(write=True) as db:
-            state = self._snapshot(db, self._pool(db, principal, uid), now)
-            settings = db.execute("SELECT * FROM ai_plan_settings").fetchone()
-            contact = (
-                f"{settings['contact_name']} {settings['contact']}".strip()
-                or "机器人服务管理员"
-            )
-            notices = []
-            if not exempt and (
-                state["used"] >= state["daily"] or reason == "personal_quota"
-            ):
-                notices.append(
-                    ("daily/" + state["day"], "今日AI次数已用完，明天零点恢复。")
-                )
-            if reason == "group_quota":
-                notices.append(
-                    (
-                        f"group/{account}/{group}/{state['day']}",
-                        "本群AI今日附加次数已用完，明天零点恢复；其他群及私聊仍按共享余额计算。",
-                    )
-                )
-            if reason in {"plan_budget", "trial_budget", "site_budget", "global_quota"}:
-                notices.append(
-                    (
-                        reason
-                        + "/"
-                        + (
-                            state["period"]
-                            if reason == "plan_budget"
-                            else state["month"]
-                        ),
-                        "全站免费试用预算不足，免费AI暂时暂停；付费套餐不占此预算。"
-                        if reason == "trial_budget"
-                        else "全站AI安全预算不足，AI暂时暂停，请联系服务管理员核对。"
-                        if reason == "site_budget"
-                        else "本周期AI费用预算或服务额度不足，AI已暂停。",
-                    )
-                )
-            for percent in (80, 100):
-                if (
-                    state["tier"] == "trial"
-                    and state["trial_site_cost_micro"]
-                    and state["trial_site_cost_micro"] * 100
-                    >= state["trial_site_budget_micro"] * percent
-                ):
-                    notices.append(
-                        (
-                            f"trial-site/{state['month']}/{percent}",
-                            f"全站免费试用费用预算已达到{percent}%，付费套餐独立计算。",
-                        )
-                    )
-                if state["cost_micro"] * 100 >= state["budget_micro"] * percent:
-                    notices.append(
-                        (
-                            f"cost/{state['period']}/{percent}",
-                            f"套餐AI费用预算已达到{percent}%。",
-                        )
-                    )
-            for kind, text in notices:
-                key = hashlib.sha256(
-                    json.dumps(
-                        [state["pool"], account, uid, principal, kind],
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ).encode()
-                ).hexdigest()
-                db.execute(
-                    "INSERT OR IGNORE INTO ai_quota_notices VALUES(?,?,?,?,?,?,?,'pending',?)",
-                    (
-                        key,
-                        state["pool"],
-                        kind,
-                        account,
-                        uid,
-                        principal,
-                        f"【AI套餐提醒】{state['name']}\n{text}\n固定命令不受影响。升级或核对请联系：{contact}",
-                        now,
-                    ),
-                )
-            return [
-                dict(r)
-                for r in db.execute(
-                    "SELECT * FROM ai_quota_notices WHERE pool=? AND account=? "
-                    "AND uid=? AND principal=? AND state='pending' "
-                    "ORDER BY created LIMIT 4",
-                    (state["pool"], account, uid, principal),
-                )
-            ]
-
-    def claim_notice(self, key):
-        with self.store.connect(write=True) as db:
-            return (
-                db.execute(
-                    "UPDATE ai_quota_notices SET state='sending' WHERE id=? AND state='pending'",
-                    (key,),
-                ).rowcount
-                == 1
-            )
-
-    def finish_notice(self, key, state):
-        with self.store.connect(write=True) as db:
-            db.execute(
-                "UPDATE ai_quota_notices SET state=? WHERE id=? AND state='sending'",
-                (state, key),
-            )
-
     def prune(self, *, now=None):
         """Remove expired completed metadata without releasing unknown money holds.
 
@@ -1293,16 +1138,10 @@ class AIPlans:
         cutoff = (time.time() if now is None else now) - 90 * 86400
         with self.store.connect(write=True) as db:
             db.execute("DELETE FROM ai_plan_previews WHERE expires<?", (cutoff,))
+            # Retired private receipts remain financial evidence, not chat state.
             db.execute(
-                "DELETE FROM ai_charges WHERE created<? AND state IN ('settled','not_sent') "
-                "AND NOT EXISTS(SELECT 1 FROM guidance_trials t WHERE "
-                "t.account=ai_charges.account AND t.uid=ai_charges.uid "
-                "AND t.principal=ai_charges.principal AND ai_charges.group_id='' "
-                "AND ai_charges.created>=t.created AND ai_charges.state<>'not_sent')",
-                (cutoff,),
-            )
-            db.execute(
-                "DELETE FROM ai_quota_notices WHERE created<? AND state IN ('accepted','failed','rejected')",
+                "DELETE FROM ai_charges WHERE created<? AND group_id<>'' "
+                "AND state IN ('settled','not_sent')",
                 (cutoff,),
             )
 
@@ -1315,7 +1154,7 @@ class AIPlans:
         return (
             "【AI套餐说明】\n试用：每天20次，默认长期；每人每月费用上限3元。\n"
             "Plus：20 USDT／30天，每天2000次。\nPro：50 USDT／30天，每天5000次。\n"
-            "私聊与本人确认承担的群AI共享次数，不是每群单独发放。\n"
+            "本人确认承担的各群AI共享次数，不是每群单独发放。\n"
             "次数为上限，同时受成本预算保护；付费费用预算按实收金额70%计算。\n"
             f"免费试用全站每月共{settings['trial_monthly_micro'] / MICRO:g}元，"
             "付费套餐不占免费池；所有调用仍受全站安全预算保护。\n"
@@ -1438,12 +1277,6 @@ class AIPlans:
                 "prices": [
                     {**dict(r), "config": json.loads(r["config"])}
                     for r in db.execute("SELECT * FROM ai_prices")
-                ],
-                "notices": [
-                    dict(r)
-                    for r in db.execute(
-                        "SELECT * FROM ai_quota_notices ORDER BY created DESC LIMIT 100"
-                    )
                 ],
                 "unknown": [
                     dict(r)

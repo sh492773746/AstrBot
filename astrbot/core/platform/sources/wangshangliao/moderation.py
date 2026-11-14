@@ -5,14 +5,19 @@ import hashlib
 import inspect
 import json
 import sqlite3
+import time
 from collections.abc import Awaitable, Callable
 
 from .blacklist import BLACKLIST_MUTE_MINUTES, BlacklistIntent, authorize_intent
 from .business import BusinessClient, BusinessError
 from .database import AsyncDatabase
-from .diagnostics import Diagnostics
+from .diagnostics import Diagnostics, failure_evidence
 from .directory import member_card, member_directory
 from .event import is_managed_account
+from .policy import (
+    DELEGATED_MUTE_MAX_MINUTES,
+    validate_delegated_mute,
+)
 from .storage import instance_dir
 from .wire import ProtocolError
 
@@ -54,6 +59,8 @@ async def execute(
     blacklist_fixture=None,
     rule_fixture=None,
     submission_guard: Callable[[], None] | None = None,
+    raid_intent=None,
+    delegated_mute: bool = False,
 ) -> dict:
     """Execute a human-confirmed action once and retain ambiguous outcomes.
 
@@ -66,12 +73,14 @@ async def execute(
         group: Positive business group ID.
         member: Member ID for member actions.
         text: Announcement content or new group card.
-        minutes: Mute duration, capped at one day except for a stored blacklist intent.
+        minutes: Mute duration; one day normally, three days for explicit delegation.
         expected_card: Exact previewed group card, required for rename.
-        expected_nim: Verified preview transport identity, required for rename.
+        expected_nim: Frozen transport identity for automatic mutes or rename.
         authorize: Revalidate current local authorization after remote lookups.
         blacklist_intent: Stored canonical-join capability, not a callback grant.
         submission_guard: Synchronous adapter generation fence after the last DB wait.
+        raid_intent: Exact stored short-mute capability with independent native checks.
+        delegated_mute: Trusted callback-backed mute-only delegation, never a prefix grant.
 
     Returns:
         Persisted operation result, without authentication material.
@@ -81,10 +90,37 @@ async def execute(
     """
     if not operation or len(operation) > 128 or type(group) is not int or group <= 0:
         raise ProtocolError("moderation_arguments")
+    validate_delegated_mute(
+        operation, action, minutes, delegated_mute, expected_nim, authorize
+    )
+    if delegated_mute and (blacklist_intent is not None or raid_intent is not None):
+        raise ProtocolError("delegated_mute_authority_invalid")
+    raid_action = operation.startswith("raid/") or raid_intent is not None
+    if raid_action:
+        from .raid import authorize_raid
+
+        if not callable(authorize):
+            raise ProtocolError("raid_authorization_required")
+        await asyncio.to_thread(
+            authorize_raid,
+            instance,
+            raid_intent,
+            account,
+            operation,
+            action,
+            group,
+            member,
+            minutes,
+        )
+        if expected_nim != raid_intent.peer:
+            raise ProtocolError("raid_identity_changed")
     if str(client.fields[3]) != account:
         raise ProtocolError("moderation_identity")
     blacklist_action = (
         operation.startswith("blacklist/") or blacklist_intent is not None
+    )
+    progressive_mute = action == "mute" and operation.startswith(
+        ("progressive/", "flood/")
     )
 
     async def managed_protected():
@@ -150,6 +186,8 @@ async def execute(
             1 <= minutes <= 1440
             or blacklist_action
             and 1 <= minutes <= BLACKLIST_MUTE_MINUTES
+            or delegated_mute
+            and 1 <= minutes <= DELEGATED_MUTE_MAX_MINUTES
         )
     ):
         raise ProtocolError("moderation_minutes")
@@ -217,17 +255,37 @@ async def execute(
             if str(m.get("userId")) == str(member)
         ]
         if (
+            page.get("complete")
+            and not matches
+            and str(member) != account
+            and (action == "cleanup" or not await managed_protected())
+        ):
+            raise ProtocolError(
+                "blacklist_member_unavailable"
+                if blacklist_action
+                else "moderation_member_absent"
+            )
+        if (
             (
                 blacklist_action
                 or blacklist_fixture is not None
                 or rule_fixture is not None
+                or raid_action
+                or delegated_mute
+                or progressive_mute
             )
             and not page.get("complete")
             or len(matches) != 1
             or str(member) == account
             or action != "cleanup"
             and await managed_protected()
-            or (blacklist_action or rule_fixture is not None)
+            or (
+                blacklist_action
+                or rule_fixture is not None
+                or raid_action
+                or delegated_mute
+                or progressive_mute
+            )
             and str(matches[0].get("nimId")) != expected_nim
             or matches[0].get("groupRole") != "GROUP_ROLE_MEMBER"
             or not matches[0].get("nimId")
@@ -262,12 +320,17 @@ async def execute(
         if inspect.isawaitable(validation):
             await validation
     native_authorize = authorize
-    if blacklist_action or blacklist_fixture is not None or rule_fixture is not None:
+    if (
+        blacklist_action
+        or blacklist_fixture is not None
+        or rule_fixture is not None
+        or raid_action
+    ):
 
         async def native_authorize():
             # This callback also runs under BusinessClient's reentrant HTTP lock.
             # Lookup requests do not carry this callback, so they cannot recurse.
-            if authorize is not None:
+            if authorize is not None and not raid_action:
                 validation = authorize()
                 if inspect.isawaitable(validation):
                     await validation
@@ -283,6 +346,12 @@ async def execute(
                 for row in roster.get("groupMemberInfo", [])
                 if str(row.get("userId")) == str(member)
             ]
+            if roster.get("complete") and not current:
+                raise ProtocolError(
+                    "blacklist_member_unavailable"
+                    if blacklist_action
+                    else "moderation_member_absent"
+                )
             if (
                 len(group_matches) != 1
                 or group_matches[0].get("me", {}).get("role")
@@ -295,7 +364,9 @@ async def execute(
                 or await managed_protected()
                 or str(client.fields[3]) != account
             ):
-                raise ProtocolError("blacklist_target_changed")
+                raise ProtocolError(
+                    "raid_protected" if raid_action else "blacklist_target_changed"
+                )
             if authorize is not None:
                 validation = authorize()
                 if inspect.isawaitable(validation):
@@ -323,6 +394,18 @@ async def execute(
                     minutes,
                     blacklist_intent,
                 )
+            if raid_action:
+                await asyncio.to_thread(
+                    authorize_raid,
+                    instance,
+                    raid_intent,
+                    account,
+                    operation,
+                    action,
+                    group,
+                    member,
+                    minutes,
+                )
             if submission_guard is not None:
                 submission_guard()
 
@@ -332,6 +415,7 @@ async def execute(
         "group": group,
         "member": member,
         "status": "unknown",
+        "started_at": time.time(),
     }
     if action == "mute":
         result["minutes"] = minutes
@@ -396,6 +480,14 @@ async def execute(
             ):
                 result.update(status="verified", notice_id=notice_id)
     except BaseException as exc:
+        result.update(
+            **failure_evidence(exc),
+            error_phase=(
+                "readback"
+                if result["status"] in {"accepted", "verified"}
+                else "submission"
+            ),
+        )
         # Readback submission evidence belongs to that read, not the mutation.
         if result["status"] not in {"accepted", "verified"}:
             if not submitted or getattr(exc, "submitted", None) is False:
@@ -408,18 +500,27 @@ async def execute(
                 result.update(
                     status="rejected",
                     submitted=True,
-                    error=str(exc),
-                    provider_code=exc.number,
                 )
             else:
                 result.update(status="unknown", submitted=True)
         if not isinstance(exc, Exception):
             failure = exc
+    result["finished_at"] = time.time()
     async with AsyncDatabase(lambda: operation_database(instance), write=True) as db:
         await db.execute(
             "UPDATE operations SET result=? WHERE id=?", (json.dumps(result), operation)
         )
-    Diagnostics(instance).emit("moderation", result["status"], operation)
+    Diagnostics(instance).emit(
+        "moderation",
+        result["status"],
+        operation,
+        failed=result["status"] in {"unknown", "rejected"},
+        error=result.get("error", ""),
+        provider_code=result.get("provider_code"),
+        action=action,
+        group=str(group),
+        actor=str(member),
+    )
     if failure is not None:
         if result.get("submitted") is False:
             failure.submitted = False

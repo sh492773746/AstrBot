@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Focused Speech Report Fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h, ref } from "vue";
+      import FocusedSpeechReport from "../../plugin-pages/wangshangliao/FocusedSpeechReport.vue";
+      const fixture = window.speechFixture = {
+        fail: false, incomplete: false,
+        data: {
+          configured: true, catching_up: false, updated_at: 1793897000,
+          groups: [{ id: "5", name: "测试群甲" }, { id: "6", name: "测试群乙" }],
+          days: ["2026-11-06", "2026-11-05"].map((date, index) => ({
+            date, total: 6 * (3 + index), totals: [6 * (1 + index), 12],
+            members: Array.from({ length: 6 }, (_, person) => ({
+              id: String(person + 10),
+              name: person === 0 ? "中性成员甲" : `中性测试成员${person + 1}`,
+              counts: [1 + index, 2], total: 3 + index,
+              hours: Array.from({ length: 24 }, (_, hour) =>
+                hour === 0 ? [1 + index, 0] : hour === 23 ? [0, 2] : [0, 0]),
+            })),
+          })),
+        },
+      };
+      createApp({
+        setup() {
+          const day = ref(0);
+          return () => h("main", [
+            h("label", ["统计日期 ", h("select", {
+              "aria-label": "统计日期", value: day.value,
+              onChange: event => { day.value = Number(event.target.value); },
+            }, [h("option", { value: 0 }, "今日"), h("option", { value: 1 }, "昨日")])]),
+            h(FocusedSpeechReport, {
+              botId: "fixture", day: day.value,
+              bridge: { apiGet: async () => {
+                if (fixture.fail) throw new Error("private-error");
+                return { ...fixture.data, catching_up: fixture.incomplete };
+              } },
+            }),
+          ]);
+        },
+      }).mount("#app");
+    </script>
+    <style>
+      * { box-sizing: border-box; letter-spacing: 0; }
+      body { margin: 0; color: #202b33; background: #fff; font-family: Arial, "Noto Sans CJK SC", sans-serif; }
+      main { max-width: 1200px; margin: auto; padding: 16px; }
+      button { cursor: pointer; border: 1px solid #c4cdd3; background: #fff; border-radius: 4px; }
+      button:disabled { cursor: default; opacity: .5; }
+      select { background: #fff; color: #202b33; }
+    </style>
+  </body>
+</html>

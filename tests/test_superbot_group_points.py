@@ -11,6 +11,7 @@ from test_superbot_community import community, private  # noqa: F401
 from test_superbot_moderation import setup  # noqa: F401
 from test_superbot_text_game import accept, request, text_service, update  # noqa: F401
 
+from data.plugins.astrbot_plugin_superbot.game import Game
 from data.plugins.astrbot_plugin_superbot.group_points import migrate
 from data.plugins.astrbot_plugin_superbot.points import DEFAULT, Points
 from data.plugins.astrbot_plugin_superbot.store import Rejected, Store
@@ -291,3 +292,54 @@ async def test_disabled_group_still_receives_settlement(scoped):
     s.runtime.game.ingest([draw(101, s.clock[0])])
     payout = s.store.db.execute("SELECT SUM(payout) FROM bets").fetchone()[0]
     assert s.store.balance("2", "-1001") == 990 + payout
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_group_bet_debits_once(scoped):
+    s = scoped
+    await accept(s, "jnd", 1)
+    await asyncio.gather(*(accept(s, "大10", 10) for _ in range(10)))
+    assert request(s)["result"] == "accepted"
+    assert s.store.balance("2", "-1001") == 990
+    assert s.store.balance("2", "-1002") == 0
+    assert s.store.db.execute("SELECT COUNT(*) FROM bets").fetchone()[0] == 1
+    assert (
+        s.store.db.execute(
+            "SELECT COUNT(*) FROM group_ledger WHERE delta<0"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+@pytest.mark.parametrize("text,status", [("大10", "win"), ("小10", "lose")])
+@pytest.mark.asyncio
+async def test_pending_group_bet_settles_once_after_reopen(scoped, text, status):
+    s = scoped
+    await accept(s, "jnd", 1)
+    await accept(s, text, 10)
+    reopened = Store(s.store.path, "1", s.store.clock)
+    try:
+        game = Game(reopened)
+        assert reopened.balance("2", "-1001") == 990
+        s.clock[0] += 210
+        evidence = draw(101, s.clock[0])
+        game.ingest([evidence])
+        bet = reopened.db.execute("SELECT * FROM bets").fetchone()
+        assert bet["status"] == status
+        assert bet["settled"] is not None
+        payout = bet["payout"]
+        assert (payout > 0) if status == "win" else (payout == 0)
+        assert reopened.balance("2", "-1001") == 990 + payout
+        before = [
+            tuple(row)
+            for row in reopened.db.execute("SELECT * FROM group_ledger ORDER BY rowid")
+        ]
+        game.ingest([evidence])
+        game.settle()
+        assert before == [
+            tuple(row)
+            for row in reopened.db.execute("SELECT * FROM group_ledger ORDER BY rowid")
+        ]
+        assert reopened.balance("2", "-1002") == 0
+    finally:
+        reopened.close()

@@ -302,7 +302,7 @@ class Payments:
             if not row:
                 raise Rejected("广告订单不存在")
             if row["tenant"] != "platform":
-                raise Rejected("此订单须直接支付给对应群主，不能使用平台广告余额。")
+                raise Rejected("此订单须直接支付给对应群主，不能使用本BOT广告余额。")
             from .ad_state import available, version
 
             payment = db.execute(

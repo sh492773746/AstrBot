@@ -43,7 +43,7 @@ def validate(value):
 
 
 class ConversationProfiles:
-    """Resolve independent private profiles and optional group overrides."""
+    """Resolve the group AI default and authorized per-group overrides."""
 
     def __init__(self, service):
         self.service = service
@@ -52,7 +52,7 @@ class ConversationProfiles:
         with self.service.store.connect() as db:
             return [
                 {**dict(row), "selection": json.loads(row["selection"])}
-                for row in db.execute("SELECT * FROM ai_profiles")
+                for row in db.execute("SELECT * FROM ai_profiles WHERE kind='group'")
             ]
 
     def inventory(self):
@@ -110,8 +110,8 @@ class ConversationProfiles:
         """Save parameters while keeping provisioned bindings fixed.
 
         Args:
-            kind: Server-owned conversation role.
-            account: Receiving account or verified owner scope.
+            kind: Group conversation role.
+            account: Receiving account.
             group: Optional group override.
             version: Expected current revision.
             selection: Bounded generation settings and fixed binding references.
@@ -122,16 +122,11 @@ class ConversationProfiles:
         """
         if (
             not isinstance(kind, str)
-            or kind not in {"consultation", "admin_guidance", "group"}
+            or kind != "group"
             or type(version) is not int
             or not isinstance(account, str)
             or not isinstance(group, str)
-            or kind == "group"
-            and bool(account) != bool(group)
-            or kind == "consultation"
-            and bool(group)
-            or kind == "admin_guidance"
-            and bool(account or group)
+            or bool(account) != bool(group)
         ):
             raise OpenError("ai_profile_invalid")
         if selection is None:
@@ -184,13 +179,10 @@ class ConversationProfiles:
     def resolve(self, kind, account="", group="", *, override=None):
         """Snapshot safe profile values; no RAG, tools, retries or agent execution."""
         if (
-            kind not in {"consultation", "admin_guidance", "group"}
-            or kind == "group"
-            and bool(account) != bool(group)
-            or kind == "consultation"
-            and bool(group)
-            or kind == "admin_guidance"
-            and bool(account or group)
+            kind != "group"
+            or not isinstance(account, str)
+            or not isinstance(group, str)
+            or bool(account) != bool(group)
         ):
             raise OpenError("ai_profile_invalid")
         rows = self.rows()
@@ -210,11 +202,6 @@ class ConversationProfiles:
             ),
             None,
         )
-        if kind == "consultation" and account:
-            # Account support never inherits a mutable global persona or version.
-            default = None
-            if override is None and not (exact and exact["selection"]):
-                raise OpenError("ai_profile_missing")
         selection = validate(
             override
             if override is not None
@@ -297,15 +284,13 @@ class ConversationProfiles:
                 ):
                     raise OpenError("ai_profile_invalid")
                 parameters[name] = value
-        private = kind in {"consultation", "admin_guidance"}
-        limit = 1024 if private else 512
         tokens = selection["max_tokens"]
         if tokens is None:
-            tokens = extra.get("max_completion_tokens", extra.get("max_tokens", limit))
+            tokens = extra.get("max_completion_tokens", extra.get("max_tokens", 512))
         if type(tokens) is not int or tokens < 1:
             raise OpenError("ai_profile_invalid")
         # Group messages remain short regardless of the referenced model configuration.
-        parameters["max_completion_tokens"] = min(tokens, 4096 if private else 512)
+        parameters["max_completion_tokens"] = min(tokens, 512)
         turns = selection["history_turns"]
         if turns is None:
             turns = options.get("compression", {}).get("max_turns", 6)
@@ -317,7 +302,7 @@ class ConversationProfiles:
             "prompt": prompt,
             "persona_id": persona_id,
             "examples": examples,
-            "history_turns": turns if private else min(turns, 12),
+            "history_turns": min(turns, 12),
             "selection": selection,
             "versions": [
                 (r["kind"], r["account"], r["group_id"], r["version"])

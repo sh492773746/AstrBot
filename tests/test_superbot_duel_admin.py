@@ -40,9 +40,9 @@ async def test_admin_navigation_and_actual_save_button(text_service):
     ui = s.runtime.ui
     ui.render = AsyncMock()
     s.runtime.moderation.check = AsyncMock()
-    await ui.admin(private(1), {"action": "admin"}, "")
+    await ui.admin(private(1), {"action": "bot_control"}, "")
     labels = [label for label, _ in ui.render.await_args.args[2]]
-    assert "玩法管理" in labels and "全部功能启停" in labels
+    assert "🔌 功能总开关" in labels and "⚙️ 全局业务策略" in labels
     await ui.admin(private(1), {"action": "admin_game"}, "")
     assert {p["action"] for _, p in ui.render.await_args.args[2]} >= {
         "games_duel",

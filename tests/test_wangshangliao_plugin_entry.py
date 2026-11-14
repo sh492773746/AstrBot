@@ -11,11 +11,8 @@ from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
 @pytest.mark.asyncio
 @pytest.mark.parametrize("private", [True, False])
 @pytest.mark.parametrize("admin", [True, False])
-async def test_builtin_help_native_response_is_scoped(monkeypatch, private, admin):
+async def test_builtin_help_never_responds_or_falls_back(monkeypatch, private, admin):
     from astrbot.builtin_stars.builtin_commands.commands.help import HelpCommand
-    from astrbot.builtin_stars.wangshangliao_moderation.commands import (
-        HELP,
-    )
 
     event = SimpleNamespace(
         get_platform_name=lambda: "wangshangliao",
@@ -31,14 +28,12 @@ async def test_builtin_help_native_response_is_scoped(monkeypatch, private, admi
         native_event.WangshangliaoEvent.handle_builtin_help(event)
     )
     monkeypatch.setattr(runtime, "service", SimpleNamespace(active=True))
-    monkeypatch.setattr(
-        runtime, "help_responder", lambda event: main.Main.moderation_help(None, event)
-    )
-    await HelpCommand(None).help(event)
-    if private:
-        event.send.assert_awaited_once_with(HELP if admin else "无权限")
-    else:
-        event.send.assert_not_awaited()
+    monkeypatch.setattr(runtime, "help_responder", None)
+    command = HelpCommand(None)
+    command._query_astrbot_notice = AsyncMock()
+    await command.help(event)
+    command._query_astrbot_notice.assert_not_awaited()
+    event.send.assert_not_awaited()
     assert event.stop_event.called
 
 
@@ -82,28 +77,8 @@ async def test_native_help_handler_failure_stops_without_generic_fallback(monkey
     event.stop_event.assert_called_once()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("private", [True, False])
-@pytest.mark.parametrize("admin", [True, False])
-async def test_plugin_help_only_replies_in_private(private, admin):
-    from astrbot.builtin_stars.wangshangliao_moderation.commands import HELP
-
-    event = SimpleNamespace(
-        get_platform_name=lambda: "wangshangliao",
-        is_private_chat=lambda: private,
-        is_admin=lambda: admin,
-        get_extra=lambda _: None,
-        set_extra=Mock(),
-        send=AsyncMock(),
-        plain_result=lambda text: text,
-        stop_event=Mock(),
-    )
-    await main.Main.moderation_help(None, event)
-    if private:
-        event.send.assert_awaited_once_with(HELP if admin else "无权限")
-    else:
-        event.send.assert_not_awaited()
-    event.stop_event.assert_called_once()
+def test_plugin_help_entry_is_removed():
+    assert not hasattr(main.Main, "moderation_help")
 
 
 @pytest.mark.asyncio

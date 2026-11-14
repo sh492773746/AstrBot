@@ -13,12 +13,12 @@ async def main():
     requests = []
     infos = [
         {
-            "umo": f"wangshangliao_bot:FriendMessage:20000002/private/{uid}/MTIz",
+            "umo": f"wangshangliao_bot:FriendMessage:9798577/private/{uid}/MTIz",
             "creator_sender_id": uid,
             "auto_name": name,
         }
         for uid, name in [
-            ("20000001", "已授权用户"),
+            ("31846829", "已授权用户"),
             ("23691273", "testfork"),
             ("123", "同名用户"),
             ("124", "同名用户"),
@@ -28,7 +28,7 @@ async def main():
     ]
     infos.append(
         {
-            "umo": "wangshangliao_bot:GroupMessage:20000002/1143980",
+            "umo": "wangshangliao_bot:GroupMessage:9798577/1143980",
             "creator_sender_id": "12345",
             "auto_name": "A Group Must Not Be An Administrator",
         }

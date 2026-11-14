@@ -7,14 +7,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from astrbot.builtin_stars.wangshangliao_moderation import group_ai, private_batches
+from astrbot.builtin_stars.wangshangliao_moderation import group_ai
 from astrbot.builtin_stars.wangshangliao_moderation.native_conversations import (
     NativeConversations,
 )
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
 from astrbot.core.platform.sources.wangshangliao.test_window import TestWindow as Window
 from tests.fixtures.wsl_native_conversations import conversation_manager
-from tests.test_wangshangliao_component_batches import event, fixture
 from tests.test_wangshangliao_group_ai import fake_http, model_scope
 from tests.test_wangshangliao_group_ai_window import (
     GROUP,
@@ -284,48 +283,3 @@ async def test_reopened_test_keeps_budget_but_never_imports_production_history(
         await control_group_ai(
             value, "dashboard/test", {"operation_id": operation, "action": "close"}
         )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["exit", "policy", "completion"])
-async def test_private_enqueue_cannot_adopt_authority_changed_during_verification(
-    tmp_path, monkeypatch, change
-):
-    service, adapter, batches, _ = fixture(tmp_path)
-    monkeypatch.setattr(private_batches, "WINDOW", 0)
-    monkeypatch.setattr(
-        private_batches, "consultation_access", lambda *args: {"kind": "consultation"}
-    )
-    entered, release = asyncio.Event(), asyncio.Event()
-
-    async def verify(source):
-        entered.set()
-        await release.wait()
-
-    service.verify_actor.side_effect = verify
-    source = event(adapter, "cancelled-before-buffer")
-    task = asyncio.create_task(batches.enqueue(source))
-    try:
-        await asyncio.wait_for(entered.wait(), 3)
-        if change == "exit":
-            batches.cancel(source)
-            service.chat_generations[
-                (adapter.account, source.actor_identity.principal)
-            ] = 1
-        elif change == "policy":
-            adapter.config["_business_epoch"] += 1
-        else:
-            source.processing_completion.cancel()
-        release.set()
-        await asyncio.gather(task, return_exceptions=True)
-        await asyncio.gather(*tuple(batches.running), return_exceptions=True)
-        service.chat.assert_not_awaited()
-        assert not batches.pending
-        with service.store.connect() as db:
-            assert (
-                db.execute("SELECT count(*) FROM private_ai_batches").fetchone()[0] == 0
-            )
-    finally:
-        release.set()
-        await asyncio.gather(task, return_exceptions=True)
-        await batches.close()

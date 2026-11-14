@@ -128,6 +128,15 @@ def lifecycle(tmp_path, monkeypatch):
         return {}
 
     adapter.business = SimpleNamespace(request=AsyncMock(side_effect=request))
+
+    async def refresh_members(group):
+        result = await module.member_directory(adapter.business, group)
+        adapter.members[group] = {
+            row["userId"]: row["nimId"] for row in result["groupMemberInfo"]
+        }
+        return result
+
+    adapter.refresh_member_mapping.side_effect = refresh_members
     context.platform_manager.platform_insts = [adapter]
     monkeypatch.setattr(module.asyncio, "sleep", AsyncMock())
     monkeypatch.setattr(module, "instance_dir", lambda _: tmp_path / "native")

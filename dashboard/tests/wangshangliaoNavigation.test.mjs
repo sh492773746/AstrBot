@@ -83,7 +83,7 @@ test("every current feature has one category and only its subtabs are shown", as
   const s = state();
   assert.equal(s.sections.length, 5);
   assert.equal(s.tab, "open");
-  assert.deepEqual(s.sectionTabs.map(x => x.id), ["open", "rules", "permissions", "friend-approval", "speech-activity"]);
+  assert.deepEqual(s.sectionTabs.map(x => x.id), ["open", "rules", "permissions", "speech-activity", "video-relay"]);
   const inventory = s.sections.flatMap(x => x.tabs)
     .filter(id => s.tabs.some(tab => tab.id === id));
   assert.equal(new Set(inventory).size, s.tabs.length);
@@ -149,7 +149,7 @@ test("Enter in unrelated panels cannot submit hidden permission or moderation ed
   assert(handler.modifiers.includes("prevent"));
   const submit = new Function("tab", "save", `return ${handler.exp.content};`);
   let calls = 0;
-  for (const tab of ["open", "consultation", "admin-guidance", "plans", "finance", "activities", "runtime", "schedule"]) {
+  for (const tab of ["open", "consultation", "admin-guidance", "plans", "finance", "activities", "runtime", "schedule", "video-relay"]) {
     submit(tab, () => calls++);
   }
   assert.equal(calls, 0);
@@ -162,6 +162,7 @@ test("service views retain selected group and edited data; expensive panels are 
   const view = ref("groups");
   const status = {
     mode: "integrated", settings: {}, admins: [], providers: [], ai_profiles: [],
+    accounts: [{ account: "1" }],
     groups: [{ account: "1", group_id: "5", active: 1, present: 1, admission: "legacy",
       managers: ["2"], rules: { keywords: ["Existing keyword"] } }],
   };
@@ -194,23 +195,20 @@ test("service views retain selected group and edited data; expensive panels are 
   assert.deepEqual(state().invalidManagers, ["4"]);
   assert(!state().visibleManagers.some(m => m.id === "4"));
   state().keywordText = "Unsaved keyword";
-  state().privateProfile.temperature = 0.3;
-  state().adminProfile.temperature = 0.2;
+  state().defaultGroupProfile.temperature = 0.3;
   assert.equal(state().visited.has("plans"), false);
-  assert.equal(state().visited.has("finance"), false);
-  for (const id of ["consultation", "admin-guidance", "plans", "finance", "runtime", "groups"]) {
+  for (const id of ["group-ai", "plans", "runtime", "groups"]) {
     view.value = id;
     await nextTick();
   }
   assert.equal(state().selected, "1/5");
   assert.equal(state().keywordText, "Unsaved keyword");
-  assert.equal(state().privateProfile.temperature, 0.3);
-  assert.equal(state().adminProfile.temperature, 0.2);
-  assert(state().visited.has("plans") && state().visited.has("finance"));
+  assert.equal(state().defaultGroupProfile.temperature, 0.3);
+  assert(state().visited.has("plans"));
   assert.deepEqual(calls, ["status", "tenant_members"]);
 });
 
-test("administrator profile saves its own version and never posts a customer or group selection", async t => {
+test("group profile saves its own version and retired profile kinds cannot write", async t => {
   const calls = [];
   const defaults = { config_id: "", persona_id: "", provider_id: "",
     temperature: null, top_p: null, max_tokens: null, history_turns: null };
@@ -224,55 +222,69 @@ test("administrator profile saves its own version and never posts a customer or 
       { kind: "group", account: "", group_id: "", version: 9,
         selection: { ...defaults, persona_id: "group" } },
     ] };
-  const state = mount(t, OpenService, { view: "admin-guidance",
+  const state = mount(t, OpenService, { view: "group-ai",
     bridge: { async apiPost(endpoint, request) {
       assert.equal(endpoint, "open-service");
       calls.push(structuredClone(request));
       return request.action === "status" ? structuredClone(status) : { saved: true };
     } } });
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(state().adminProfile.persona_id, "admin");
-  state().adminProfile.temperature = 0.2;
+  assert.equal(state().defaultGroupProfile.persona_id, "group");
+  state().defaultGroupProfile.temperature = 0.2;
   await state().saveProfile("admin_guidance");
+  await state().saveProfile("consultation");
+  assert.equal(calls.filter(request => request.action !== "status").length, 0);
+  await state().saveProfile("group");
   const changes = calls.filter(request => request.action !== "status");
   assert.equal(changes.length, 1);
   assert.deepEqual(changes[0], { action: "ai_profile", payload: {
-    kind: "admin_guidance", account: "", group_id: "", version: 2,
-    selection: { ...defaults, persona_id: "admin", max_tokens: 1024, temperature: 0.2 },
+    kind: "group", account: "", group_id: "", version: 9,
+    selection: { ...defaults, persona_id: "group", temperature: 0.2 },
   } });
-  assert.equal(state().privateProfile.persona_id, "customer");
   assert.equal(state().defaultGroupProfile.persona_id, "group");
 });
 
-test("video-only policy saves in the selected group without changing managers or pause", async t => {
-  const calls = [];
-  const status = { mode: "integrated", settings: {}, admins: [], providers: [], groups: [
-    { account: "1", group_id: "5", version: 7, active: 1, present: 1, paused: 1,
-      managers: ["2"], rules: { advertising: false, flood: false, keywords: ["keep"] } },
-    { account: "1", group_id: "6", version: 3, active: 1, present: 1, paused: 0,
-      managers: ["2"], rules: { advertising: true, flood: true, keywords: [] } },
-  ] };
-  const state = mount(t, OpenService, { view: "rules", bridge: {
-    async apiPost(endpoint, request) {
-      calls.push(structuredClone(request));
-      if (request.action === "status") return structuredClone(status);
-      if (request.action === "tenant_members") return { members: [
-        { id: "2", name: "Manager", role: "GROUP_ROLE_ADMIN" },
-      ] };
-      if (request.action === "tenant") return { saved: true };
-      throw new Error("Unexpected write");
-    },
-  } });
-  await new Promise(resolve => setImmediate(resolve));
-  state().selected = "1/5";
-  await state().choose();
-  state().tenant.rules.video_whitelist_only = true;
-  await state().saveTenant();
-  const writes = calls.filter(c => c.action === "tenant");
-  assert.equal(writes.length, 1);
-  assert.deepEqual(writes[0].payload, {
-    account: "1", group_id: "5", version: 7, paused: true, managers: ["2"],
-    rules: { advertising: false, flood: false, keywords: ["keep"], video_whitelist_only: true },
-  });
-  assert.equal(status.groups[1].rules.video_whitelist_only, undefined);
+test("retired and unknown navigation targets never select a panel or open a discard prompt", async t => {
+  const { state, calls } = await mountPage(t);
+  const before = [...calls];
+  state().form.group.card_suffix = "Unsaved draft";
+  for (const id of ["consultation", "admin-guidance", "friend-approval", "finance", "unknown"]) {
+    state().selectTab(id);
+    assert.equal(state().tab, "open");
+    assert.equal(state().pending, null);
+    assert.equal(id in state().openViews, false);
+  }
+  assert.deepEqual(calls, before);
 });
+
+for (const action of ["saveTenant", "previewRulesProvision", "previewAIAdmission"]) {
+  test(`late ${action} preview cannot attach to a different selected group`, async t => {
+    let release;
+    const groups = ["5", "6"].map(group_id => ({
+      account: "1", group_id, active: action !== "previewRulesProvision", rules_only: true,
+      present: 1, version: 1, managers: ["2"], rules: { keywords: [] },
+    }));
+    const state = mount(t, OpenService, { bridge: { async apiPost(_endpoint, request) {
+      if (request.action === "status") return {
+        mode: "integrated", settings: {}, admins: [], providers: [], groups,
+        accounts: [{ account: "1" }],
+      };
+      if (request.action === "tenant_members") return { members: [] };
+      if (request.action.endsWith("_preview")) return new Promise(resolve => { release = resolve; });
+      throw new Error("Unexpected write");
+    } } });
+    await new Promise(setImmediate);
+    state().selected = "1/5";
+    await state().choose();
+    state().selectedManagers = ["3"];
+    const pending = state()[action]();
+    assert.equal(typeof release, "function");
+    state().selected = "1/6";
+    await state().choose();
+    release({ confirmation: "old-group-confirmation" });
+    await pending;
+    assert.equal(state().pendingTenant, null);
+    assert.equal(state().pendingAdmission, null);
+    assert.equal(state().tenant.group_id, "6");
+  });
+}

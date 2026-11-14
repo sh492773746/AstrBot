@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sqlite3
+import time
 from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -34,7 +35,9 @@ def adapter(tmp_path, monkeypatch):
         diagnostics=SimpleNamespace(emit=Mock()),
     )
 
-    async def execute(operation, action, group, member, text="", *, minutes=1, action_check=None):
+    async def execute(
+        operation, action, group, member, text="", *, minutes=1, action_check=None
+    ):
         if action_check:
             await action_check()
         if action == "kick":
@@ -142,6 +145,83 @@ async def test_failed_or_unknown_mute_never_counts(adapter, status):
     assert all(
         call.args[1] == "mute" for call in adapter.execute_moderation.await_args_list
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_state", ["muted", "unmuted", "unavailable"])
+async def test_buffered_violations_recheck_active_native_mute(adapter, native_state):
+    first = await automatic.mute_and_escalate(adapter, "first", "5", "2", "1")
+    assert first["status"] == "accepted"
+    with closing(automatic.database(adapter)) as db, db:
+        row = db.execute("SELECT result FROM operations WHERE id='first'").fetchone()
+        db.execute(
+            "UPDATE operations SET result=? WHERE id='first'",
+            (json.dumps({**json.loads(row[0]), "submitted": True}),),
+        )
+    adapter.groups = {"5": "55"}
+    adapter.nim_account = "901"
+    adapter.business = SimpleNamespace(
+        request=AsyncMock(
+            return_value={
+                "groupMemberInfo": [
+                    {"userId": "1", "nimId": "901", "groupRole": "GROUP_ROLE_ADMIN"},
+                    {"userId": "2", "nimId": "22", "groupRole": "GROUP_ROLE_MEMBER"},
+                ]
+            }
+        )
+    )
+    adapter.nim = SimpleNamespace(
+        get_team_muted_members=AsyncMock(
+            return_value={"22"} if native_state == "muted" else set(),
+            side_effect=ProtocolError("mute_list_unavailable")
+            if native_state == "unavailable"
+            else None,
+        )
+    )
+    result = await automatic.mute_and_escalate(adapter, "second", "5", "2", "2")
+    if native_state == "unmuted":
+        assert result["status"] == "accepted"
+        assert result["mute_count"] == 2
+        assert adapter.execute_moderation.await_count == 2
+    else:
+        assert result["status"] == "rejected" and result["submitted"] is False
+        assert result["error"] == (
+            "automatic_existing_native_mute"
+            if native_state == "muted"
+            else "mute_list_unavailable"
+        )
+        assert result["mute_count"] == 1
+        assert adapter.execute_moderation.await_count == 1
+        # Replaying the same blocked message must not become a new attempt.
+        assert (await automatic.mute_and_escalate(adapter, "second", "5", "2", "2"))[
+            "status"
+        ] == "rejected"
+        assert adapter.execute_moderation.await_count == 1
+    adapter.nim.get_team_muted_members.assert_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["expired", "other_group", "other_member"])
+async def test_active_mute_read_is_scoped_and_does_not_delay_unrelated_actions(
+    adapter, change
+):
+    await automatic.mute_and_escalate(adapter, "first", "5", "2", "1")
+    with closing(automatic.database(adapter)) as db, db:
+        row = db.execute("SELECT result FROM operations WHERE id='first'").fetchone()
+        db.execute(
+            "UPDATE operations SET result=? WHERE id='first'",
+            (json.dumps({**json.loads(row[0]), "submitted": True}),),
+        )
+        if change == "expired":
+            db.execute(
+                "UPDATE automatic_mute_durations SET accepted_at=? WHERE operation='first'",
+                (time.time() - 61,),
+            )
+    group = "6" if change == "other_group" else "5"
+    member = "3" if change == "other_member" else "2"
+    result = await automatic.mute_and_escalate(adapter, "second", group, member, "2")
+    assert result["status"] == "accepted"
+    assert adapter.execute_moderation.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -275,9 +355,7 @@ async def test_native_boundary_rejects_retired_auto_kick_namespaces(adapter, ope
     adapter.stopping = SimpleNamespace(is_set=lambda: False)
     adapter.get_moderation_members = AsyncMock()
     with pytest.raises(ProtocolError, match="automatic_kick_not_authorized"):
-        await WangshangliaoAdapter._execute_moderation(
-            adapter, operation, "kick", 5, 2
-        )
+        await WangshangliaoAdapter._execute_moderation(adapter, operation, "kick", 5, 2)
     adapter.get_moderation_members.assert_not_awaited()
 
 

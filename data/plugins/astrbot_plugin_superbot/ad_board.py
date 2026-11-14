@@ -25,6 +25,11 @@ def claim(store, chat, kind, payload, message=None):
     """
     op = secrets.token_urlsafe(16)
     with store.tx() as db:
+        group = db.execute(
+            "SELECT enabled FROM mod_groups WHERE chat=?", (chat,)
+        ).fetchone()
+        if group and not group["enabled"]:
+            raise Rejected("群已停用，广告操作需人工核查")
         if db.execute(
             "SELECT 1 FROM ad_operations WHERE chat=? AND status IN ('executing','retry','review')",
             (chat,),
@@ -56,6 +61,13 @@ def claim(store, chat, kind, payload, message=None):
         db.execute(
             "UPDATE ad_operations SET payload=? WHERE id=?", (encode(payload), op)
         )
+        if payload.get("revision"):
+            changed = db.execute(
+                "UPDATE merchant_revisions SET status='applying',reviewer=?,operation=? WHERE id=? AND status='pending'",
+                (payload["reviewer"], op, payload["revision"]),
+            ).rowcount
+            if not changed:
+                raise Rejected("修改审核已处理")
         store.audit(
             db, "system", "ad_operation_claim", {"id": op, "chat": chat, "kind": kind}
         )
@@ -77,6 +89,12 @@ def finish(store, op, message, actor="system"):
         row = db.execute("SELECT * FROM ad_operations WHERE id=?", (op,)).fetchone()
         if row["status"] == "done":
             return
+        if actor == "system":
+            group = db.execute(
+                "SELECT enabled FROM mod_groups WHERE chat=?", (row["chat"],)
+            ).fetchone()
+            if row["status"] != "executing" or (group and not group["enabled"]):
+                return
         data = json.loads(row["payload"])
         now = store.clock()
         for change in data["changes"]:
@@ -101,6 +119,16 @@ def finish(store, op, message, actor="system"):
                     "",
                     change["id"],
                 ),
+            )
+            if data.get("revision"):
+                db.execute(
+                    "UPDATE ads SET contact=?,approved_by=? WHERE id=?",
+                    (change["contact"], data["reviewer"], change["id"]),
+                )
+        if data.get("revision"):
+            db.execute(
+                "UPDATE merchant_revisions SET status='applied' WHERE id=? AND operation=?",
+                (data["revision"], op),
             )
         if row["kind"] == "board":
             db.execute(
@@ -136,6 +164,47 @@ async def execute(ads, bot, op):
     data = json.loads(row["payload"])
     message = row["message"]
     done = json.loads(row["step"] or "[]")
+    if data.get("revision"):
+        try:
+            await ads.runtime.tenants.verify(
+                data["reviewer"],
+                row["chat"],
+                "ads",
+                "can_pin_messages" if data.get("pin") else None,
+            )
+            draft = store.db.execute(
+                "SELECT * FROM merchant_revisions WHERE id=? AND operation=? AND status='applying'",
+                (data["revision"], op),
+            ).fetchone()
+            if not draft:
+                raise Rejected("修改审核记录失效")
+            for change in data["changes"]:
+                order = store.db.execute(
+                    "SELECT * FROM ads WHERE id=?", (change["id"],)
+                ).fetchone()
+                if (
+                    not order
+                    or not order["paid"]
+                    or (order["expires"] and order["expires"] <= store.clock())
+                ):
+                    raise Rejected("广告付款或有效期发生变化")
+        except Exception as exc:
+            with store.tx() as db:
+                db.execute(
+                    "UPDATE ad_operations SET status='review',error=? WHERE id=?",
+                    ("Revision preflight: " + type(exc).__name__, op),
+                )
+                for change in data["changes"]:
+                    db.execute(
+                        "UPDATE ads SET status='review',error='修改权限或有效期复核失败，请核查' WHERE id=?",
+                        (change["id"],),
+                    )
+                if row["kind"] == "board":
+                    db.execute(
+                        "UPDATE ad_boards SET state='review',error='revision_preflight' WHERE chat=?",
+                        (row["chat"],),
+                    )
+            return
     merchant_new = [
         store.db.execute(
             "SELECT * FROM ads WHERE id=? AND tenant<>'platform'", (c["id"],)
@@ -220,9 +289,22 @@ async def execute(ads, bot, op):
     for step in steps:
         if step in done:
             continue
-        store.db.execute(
-            "UPDATE ad_operations SET status='executing' WHERE id=?", (op,)
-        )
+        with store.tx() as db:
+            current = db.execute(
+                "SELECT status FROM ad_operations WHERE id=?", (op,)
+            ).fetchone()
+            group = db.execute(
+                "SELECT enabled FROM mod_groups WHERE chat=?", (row["chat"],)
+            ).fetchone()
+            if not current or current["status"] not in ("executing", "retry"):
+                return
+            if group and not group["enabled"]:
+                db.execute(
+                    "UPDATE ad_operations SET status='review',error='群已停用' WHERE id=?",
+                    (op,),
+                )
+                return
+            db.execute("UPDATE ad_operations SET status='executing' WHERE id=?", (op,))
         try:
             if step == "send":
                 sent = await bot.send_message(chat_id=row["chat"], text=data["after"])

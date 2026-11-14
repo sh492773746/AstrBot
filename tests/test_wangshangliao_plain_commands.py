@@ -26,7 +26,7 @@ from astrbot.core.platform.sources.wangshangliao.event import WangshangliaoEvent
 from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 from astrbot.core.platform.sources.wangshangliao.test_window import TestWindow as Window
-from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError, b64
+from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 from tests.fixtures.wsl_actions import bind_action_port
 
 pytestmark = pytest.mark.usefixtures("wsl_active_policy", "wsl_command_classifier")
@@ -40,12 +40,12 @@ pytestmark = pytest.mark.usefixtures("wsl_active_policy", "wsl_command_classifie
         ("排行", "排名"),
         ("今日排行 2", "排名 2"),
         ("排名 2", "排名 2"),
-        ("帮助", "帮助"),
-        ("群管帮助", "帮助"),
-        ("sid", "我的权限"),
-        ("群列表", "群列表"),
+        ("帮助", ""),
+        ("群管帮助", ""),
+        ("sid", ""),
+        ("群列表", ""),
         ("成员搜索 小明", "成员搜索 小明"),
-        ("选择群\t1", "选择群 1"),
+        ("选择群\t1", ""),
         ("禁言 @Member", "禁言 @Member"),
         ("禁言@Member", "禁言 @Member"),
         ("禁言@Member 3", "禁言 @Member 3"),
@@ -56,14 +56,63 @@ pytestmark = pytest.mark.usefixtures("wsl_active_policy", "wsl_command_classifie
         ("全员禁言", "全员禁言"),
         ("定时禁言 23:00 08:00", "定时禁言 23:00 08:00"),
         ("确认踢出 12345678", "确认踢出 12345678"),
-        ("/群管 选择群 1", "选择群 1"),
+        ("/群管 选择群 1", ""),
         ("/排名", "排名"),
-        ("/help", "帮助"),
+        ("/help", ""),
         ("群管 成员列表", "成员列表"),
+        ("删黑", "移除黑名单"),
+        ("删白", "移除白名单"),
+        ("加白", "白名单"),
+        ("加黑", "黑名单"),
+        ("删白 Target", "移除白名单 Target"),
+        ("/删白 12345", "移除白名单 12345"),
+        ("群管 删白 Target", "移除白名单 Target"),
+        ("@Target 删白", "移除白名单 @Target"),
+        ("@Target 移除白名单", "移除白名单 @Target"),
+        ("删白 @Target", "移除白名单 @Target"),
+        ("删白@Target", "移除白名单 @Target"),
+        ("移除白名单@Target", "移除白名单 @Target"),
+        ("@Target 删黑", "移除黑名单 @Target"),
+        ("删黑 @Target", "移除黑名单 @Target"),
+        ("删黑@Target", "移除黑名单 @Target"),
+        ("@Target 加白", "白名单 @Target"),
+        ("加白 @Target", "白名单 @Target"),
+        ("加白@Target", "白名单 @Target"),
+        ("@Target 加黑", "黑名单 @Target"),
+        ("加黑 @Target", "黑名单 @Target"),
+        ("加黑@Target", "黑名单 @Target"),
     ],
 )
 def test_exact_native_commands_and_legacy_aliases(text, expected):
     assert recognize_command(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    [
+        ("删黑", "移除黑名单"),
+        ("删白", "移除白名单"),
+        ("加白", "白名单"),
+        ("加黑", "黑名单"),
+    ],
+)
+def test_list_aliases_reuse_group_manager_declarations(alias, canonical):
+    from astrbot.builtin_stars.wangshangliao_moderation.command_capabilities import (
+        COMMAND_SPECS,
+        command_help,
+    )
+    from astrbot.builtin_stars.wangshangliao_moderation.open_service import (
+        recognize_integrated,
+    )
+
+    spec = COMMAND_SPECS[canonical]
+    assert alias in spec.aliases
+    assert spec.role == "group_manager"
+    assert spec.locations == ("group",)
+    assert recognize_integrated(alias) == canonical
+    assert recognize_integrated("管理 " + alias) == canonical
+    assert alias in command_help("group", {"group_manager"})
+    assert alias not in command_help("group")
 
 
 @pytest.mark.parametrize(
@@ -93,42 +142,26 @@ def test_exact_native_commands_and_legacy_aliases(text, expected):
         "",
         None,
         "公告 " + "x" * 4096,
+        "请加黑 @Target",
+        "不要删黑",
+        "有人说加白 @Target",
+        "“加黑”",
+        "加黑 @Target\n删黑 @Target",
+        "删白 " + "x" * 65,
     ],
 )
 def test_ordinary_quoted_negated_and_multiline_messages_are_not_commands(text):
     assert recognize_command(text) == ""
 
 
-@pytest.mark.parametrize("text", ["排名", "群列表", "禁言 1", "sid"])
-def test_bare_commands_never_bypass_private_ai_developer_scope(text):
+@pytest.mark.parametrize("scope", ["private_ai", "private_commands"])
+def test_private_developer_windows_cannot_be_constructed(scope):
     receiver = SimpleNamespace(
         account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event()
     )
     sender = SimpleNamespace(account="2", stopping=asyncio.Event())
-    window = Window(receiver, sender, [], ["private_ai"], [], 300, 10)
-    receiver.test_window = window
-    assert not window.send_command(sender, "private/1/" + b64(b"901"), text, "m")
-    assert not window.admit("private/2/peer", "m", {"sender": "2", "text": text})
-    assert window.remaining == 10
-
-
-@pytest.mark.parametrize("text", ["排名", "群列表", "禁言 1", "sid"])
-def test_bare_commands_are_allowed_in_exact_private_command_developer_scope(text):
-    receiver = SimpleNamespace(
-        account="1", nim_account="901", enabled_groups={"5"}, stopping=asyncio.Event()
-    )
-    sender = SimpleNamespace(account="2", nim_account="902", stopping=asyncio.Event())
-    window = Window(receiver, sender, [], ["private_commands"], [], 300, 10)
-    receiver.test_window = window
-    assert window.send_command(sender, "private/1/" + b64(b"901"), text, "m")
-    assert (
-        window.admit(
-            "private/2/OTAy",
-            "m",
-            {"sender": "2", "transport_peer": "902", "text": text},
-        )
-        == "private_commands"
-    )
+    with pytest.raises(ProtocolError, match="test_window_arguments"):
+        Window(receiver, sender, [], [scope], [], 300, 10)
 
 
 def native_event(text, *, private=False, reply=True):
@@ -247,7 +280,9 @@ async def test_context_only_api_restriction_cannot_inherit_admin(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["群列表", "sid", "排名", "全员禁言", "选择群 1"])
-async def test_nonadmin_private_bare_commands_denied_before_plugins(monkeypatch, text):
+async def test_retired_private_bare_commands_stop_silently_before_plugins(
+    monkeypatch, text
+):
     event = native_event(text, private=True, reply=False)
     stage = WakingCheckStage()
     stage.ctx = SimpleNamespace(astrbot_config={"admins_id": [], "wake_prefix": ["/"]})
@@ -261,10 +296,9 @@ async def test_nonadmin_private_bare_commands_denied_before_plugins(monkeypatch,
     )
     await stage.process(event)
     assert event.is_stopped()
-    assert event.platform.send_reply_text.await_args.args[2] == "无权限"
+    event.platform.send_reply_text.assert_not_awaited()
     await stage.process(event)
-    assert event.platform.send_reply_text.await_count == 1
-    assert "auto_recall" not in event.platform.send_reply_text.await_args.kwargs
+    event.platform.send_reply_text.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -286,7 +320,20 @@ async def test_lottery_command_replies_follow_group_command_recall(monkeypatch, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", ["排名", "今日排名", "/排名"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "排名",
+        "今日排名",
+        "/排名",
+        "排名 2",
+        "排行 99999",
+        "今日排行 2",
+        "发言排行",
+        "发言排行榜 2",
+        "排行榜",
+    ],
+)
 async def test_bare_public_rank_without_mention_never_calls_model_or_moderation(
     monkeypatch, text
 ):
@@ -324,7 +371,6 @@ async def test_bare_public_rank_without_mention_never_calls_model_or_moderation(
         "帮助",
         "/help",
         "我的权限",
-        "群列表",
         "/群管 成员列表",
         "成员搜索 testfork",
         "规则",
@@ -658,9 +704,9 @@ async def test_ranking_beijing_day_dedup_scopes_bots_commands_spam_and_violation
         )
     before = (root / "moderation.sqlite3").read_bytes()
     result = await rankings.DailyRankings().read(adapter, "5", "2")
-    assert result.startswith("\U0001f4ac 今日发言排行\n第 1 页 / 每页 20 条\n\n")
-    assert "1. Member 2 - 3 条" in result
-    assert "2. Member 3 - 2 条" in result
+    assert result.startswith("今日发言排行\n\n")
+    assert "1:Member 2（有效发言3条）" in result
+    assert "2:Member 3（有效发言2条）" in result
     assert "北京时间" not in result
     assert "你的" not in result
     assert "仅统计" not in result
@@ -677,7 +723,7 @@ async def test_ranking_same_content_after_five_minutes_counts_again(ranking_adap
     await add_message(adapter, "1", "2", "Same TEXT", now - 400)
     await add_message(adapter, "2", "2", "same text", now - 100)
     result = await rankings.DailyRankings().read(adapter, "5", "2")
-    assert "Member 2 - 2 条" in result
+    assert "Member 2（有效发言2条）" in result
 
 
 @pytest.mark.asyncio
@@ -687,7 +733,7 @@ async def test_ranking_tie_order_independent_of_delivery_order(ranking_adapter):
     await add_message(adapter, "1", "2", "Earlier", now - 200)
     result = await rankings.DailyRankings().read(adapter, "5", "3")
     assert result.index("Member 2") < result.index("Member 3")
-    assert "2. Member 3 - 1 条" in result
+    assert "2:Member 3（有效发言1条）" in result
 
 
 @pytest.mark.asyncio
@@ -710,7 +756,7 @@ async def test_ranking_verified_leading_bot_commands_and_unknown_time_excluded(
     await add_message(adapter, "unknown", "2", "Unknown timestamp", 0)
     await add_message(adapter, "valid", "2", "Valid text", now - 100)
     result = await rankings.DailyRankings().read(adapter, "5", "2")
-    assert "Member 2 - 1 条" in result
+    assert "Member 2（有效发言1条）" in result
 
 
 @pytest.mark.asyncio
@@ -718,7 +764,7 @@ async def test_ranking_empty_scope_and_cache_rechecked_on_disable(ranking_adapte
     adapter, _, _ = ranking_adapter
     service = rankings.DailyRankings()
     result = await service.read(adapter, "5", "2")
-    assert result == "\U0001f4ac 今日发言排行\n第 1 页 / 每页 20 条\n\n暂无记录"
+    assert result == "今日发言排行\n\n暂无记录"
     adapter.config["enabled_groups"] = []
     with pytest.raises(ProtocolError, match="ranking_scope"):
         await service.read(adapter, "5", "2")
@@ -749,12 +795,14 @@ async def test_public_group_ranking_private_management_isolation():
     )
     assert await commands.run(event, "排名") == "Ranking fixture"
     event.is_private_chat = lambda: True
-    assert await commands.run(event, "排名") == "无权限"
+    assert await commands.run(event, "排名") is None
     assert commands.rankings.read.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_ranking_twenty_member_pages_and_native_identities(ranking_adapter):
+async def test_ranking_legacy_pages_always_show_top_twenty_without_mentions(
+    ranking_adapter,
+):
     adapter, _, now = ranking_adapter
     for user in range(10, 33):
         adapter.members["5"][str(user)] = str(900 + user)
@@ -762,15 +810,15 @@ async def test_ranking_twenty_member_pages_and_native_identities(ranking_adapter
     service = rankings.DailyRankings()
     first = await service.read(adapter, "5", "2", native_mentions=True)
     assert isinstance(first, MessageChain)
-    assert len([part for part in first.chain if isinstance(part, At)]) == 20
+    assert all(isinstance(part, Plain) for part in first.chain)
+    text = first.chain[0].text
+    assert len(text.splitlines()[2:]) == 20
+    assert "20:Member 29（有效发言1条）" in text
+    assert "Member 30" not in text
+    assert "UID" not in text and "第 " not in text
     second = await service.read(adapter, "5", "2", page=2, native_mentions=True)
-    identities = [str(part.qq) for part in second.chain if isinstance(part, At)]
-    assert identities == ["30", "31", "32"]
-    assert second.chain[0].text.endswith("第 2 页 / 每页 20 条\n\n")
-    assert any(isinstance(part, Plain) and part.text == "21. " for part in second.chain)
-    assert "你的" not in "".join(
-        part.text for part in second.chain if isinstance(part, Plain)
-    )
+    assert all(isinstance(part, Plain) for part in second.chain)
+    assert second.chain[0].text == text
 
 
 @pytest.mark.asyncio
@@ -779,7 +827,7 @@ async def test_ranking_unknown_mapping_does_not_forge_a_mention(ranking_adapter)
     await add_message(adapter, "message", "4", "Valid message", now - 100)
     chain = await rankings.DailyRankings().read(adapter, "5", "2", native_mentions=True)
     assert not any(isinstance(part, At) for part in chain.chain)
-    assert any(part.text == "Member 4 - 1 条" for part in chain.chain)
+    assert "1:Member 4（有效发言1条）" in chain.chain[0].text
 
 
 @pytest.mark.asyncio
@@ -816,7 +864,7 @@ async def test_native_ranking_preserves_mentions_without_prefixing_caller(monkey
 
 
 @pytest.mark.asyncio
-async def test_full_ranking_chain_keeps_row_breaks_and_native_offsets(
+async def test_full_ranking_chain_keeps_row_breaks_without_mentions_or_uids(
     ranking_adapter, monkeypatch
 ):
     adapter, _, now = ranking_adapter
@@ -834,17 +882,10 @@ async def test_full_ranking_chain_keeps_row_breaks_and_native_offsets(
     call = event.platform.send_reply_text.await_args
     text = call.args[2]
     assert text == (
-        "\U0001f4ac 今日发言排行\n第 1 页 / 每页 20 条\n\n"
-        "1. @Member 2 - 1 条\n2. @Member 3 - 1 条"
+        "今日发言排行\n\n1:Member 2（有效发言1条）\n2:Member 3（有效发言1条）"
     )
-    people = call.kwargs["mentions"]
-    assert [person["uid"] for person in people] == [902, 903]
-    encoded = text.encode("utf-16-le")
-    for person in people:
-        assert (
-            encoded[person["start"] * 2 : person["end"] * 2].decode("utf-16-le")
-            == "@" + person["nick"] + " "
-        )
+    assert not call.kwargs.get("mentions")
+    assert call.kwargs["auto_recall"] is True
 
 
 @pytest.mark.asyncio

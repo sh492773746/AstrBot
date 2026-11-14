@@ -214,12 +214,43 @@ async def test_logs_keep_recall_and_mute_receipts_separate(bot):
         if call.args[0] == "progressive_result"
     ]
     assert [(call.kwargs["action"], call.args[1]) for call in logs] == [
-        ("recall", "unknown"),
         ("mute", "accepted"),
+        ("recall", "unknown"),
     ]
     assert all(call.args[2] == "receipt-log" for call in logs)
-    assert logs[0].kwargs["failed"] is True
-    assert logs[1].kwargs["failed"] is False
+    assert logs[0].kwargs["failed"] is False
+    assert logs[1].kwargs["failed"] is True
+
+
+@pytest.mark.asyncio
+async def test_slow_recall_never_delays_an_earned_mute(bot):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def recall(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return "accepted"
+
+    bot.recall_violation.side_effect = recall
+    work = asyncio.create_task(progressive.enforce(bot, "5", "2", "slow-recall"))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        bot.execute_moderation.assert_awaited_once()
+        assert bot.execute_moderation.await_args.args[1] == "mute"
+        assert not work.done()
+    finally:
+        release.set()
+        result = await asyncio.wait_for(work, 2)
+    assert result["status"] == result["recall_status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_mute_first_is_also_used_by_the_content_pipeline(bot):
+    calls = Mock()
+    calls.attach_mock(bot.execute_moderation, "mute")
+    calls.attach_mock(bot.recall_violation, "recall")
+    assert await policy.handle(bot, "5", "content-order", payload())
+    assert [call[0] for call in calls.mock_calls] == ["mute", "recall"]
 
 
 @pytest.mark.asyncio
@@ -379,9 +410,11 @@ async def test_failed_mutes_never_increment_or_skip_recall(bot, failure):
 @pytest.mark.parametrize(
     "change", ["automation", "recall", "grants", "peer", "account"]
 )
-async def test_revoke_during_recall_stops_mute(bot, change):
-    async def recall(*_, authorize=None):
-        await authorize()
+async def test_revoke_during_mute_stops_later_recalls(bot, change):
+    original = bot.execute_moderation.side_effect
+
+    async def mute(*args, **kwargs):
+        receipt = await original(*args, **kwargs)
         if change == "automation":
             bot.config["moderation"]["automation_enabled"] = False
         elif change == "recall":
@@ -392,12 +425,27 @@ async def test_revoke_during_recall_stops_mute(bot, change):
             bot.members["5"]["2"] = "other"
         else:
             bot.account = "another"
-        return "accepted"
+        return receipt
 
-    bot.recall_violation.side_effect = recall
+    bot.execute_moderation.side_effect = mute
     with pytest.raises(ProtocolError):
         await progressive.enforce(bot, "5", "2", "1")
+    bot.execute_moderation.assert_awaited_once()
+    bot.recall_violation.assert_not_awaited()
+    with closing(automatic.database(bot)) as db:
+        row = db.execute("SELECT result FROM progressive_actions").fetchone()
+    assert json.loads(row[0])["status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_revocation_before_submission_stops_mute_and_recall(bot):
+    def revoke():
+        bot.config["moderation"]["permissions"] = {}
+
+    with pytest.raises(ProtocolError):
+        await progressive.enforce(bot, "5", "2", "1", execution_check=revoke)
     bot.execute_moderation.assert_not_awaited()
+    bot.recall_violation.assert_not_awaited()
 
 
 @pytest.mark.asyncio

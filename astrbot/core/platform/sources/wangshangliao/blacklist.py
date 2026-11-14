@@ -113,7 +113,7 @@ class BlacklistIntent:
         action: Mute-only action selected by the store.
         minutes: Group-configured blacklist mute duration.
         policy_version: Duration policy generation, invalidating unsubmitted work.
-        trigger: Trusted rejoin evidence or an explicit native administrator command.
+        trigger: Trusted rejoin, native command, prefix or keyword enrollment.
     """
 
     id: str
@@ -190,6 +190,9 @@ class BlacklistStore:
                     account TEXT,group_id TEXT,message TEXT,peers TEXT NOT NULL,
                     event_at REAL NOT NULL,state TEXT NOT NULL,
                     PRIMARY KEY(account,group_id,message))""",
+                """CREATE INDEX IF NOT EXISTS blacklist_pending_group
+                    ON blacklist_notices(account,group_id,event_at,message)
+                    WHERE state='pending'""",
                 """CREATE TABLE IF NOT EXISTS blacklist_intents(
                     id TEXT PRIMARY KEY,instance TEXT NOT NULL,
                     account TEXT NOT NULL,group_id TEXT NOT NULL,
@@ -264,17 +267,17 @@ class BlacklistStore:
                 (account, group),
             ).fetchone()
             entries = db.execute(
-                "SELECT id,member,peer,name,cycle,version,kicks,created,status,actor,"
-                "actor_peer,(SELECT CASE WHEN i.status='unknown' AND i.finished=0 "
-                "THEN 'pending' ELSE i.status END FROM blacklist_intents i "
-                "WHERE i.account=blacklist_entries.account "
-                "AND i.group_id=blacklist_entries.group_id "
-                "AND i.member=blacklist_entries.member "
-                "AND i.entry=blacklist_entries.id "
-                "ORDER BY CASE WHEN i.status IN ('unknown','accepted') THEN 0 ELSE 1 END,"
-                "i.rowid DESC LIMIT 1) AS enforcement_status "
-                "FROM blacklist_entries WHERE account=? AND group_id=? "
-                "AND status='active' ORDER BY created,id",
+                "SELECT e.id,e.member,e.peer,e.name,e.cycle,e.version,e.kicks,"
+                "e.created,e.status,e.actor,e.actor_peer,"
+                "CASE WHEN i.status='unknown' AND i.finished=0 "
+                "THEN 'pending' ELSE i.status END AS enforcement_status,"
+                "i.result AS enforcement_result "
+                "FROM blacklist_entries e LEFT JOIN blacklist_intents i ON i.id=("
+                "SELECT p.id FROM blacklist_intents p WHERE p.account=e.account "
+                "AND p.group_id=e.group_id AND p.member=e.member AND p.entry=e.id "
+                "ORDER BY CASE WHEN p.status IN ('unknown','accepted') THEN 0 ELSE 1 END,"
+                "p.rowid DESC LIMIT 1) WHERE e.account=? AND e.group_id=? "
+                "AND e.status='active' ORDER BY e.created,e.id",
                 (account, group),
             ).fetchall()
             return (row["version"] if row else 0), [dict(row) for row in entries]
@@ -565,17 +568,17 @@ class BlacklistStore:
                     ),
                 )
             entries = db.execute(
-                "SELECT id,member,peer,name,cycle,version,kicks,created,status,actor,"
-                "actor_peer,(SELECT CASE WHEN i.status='unknown' AND i.finished=0 "
-                "THEN 'pending' ELSE i.status END FROM blacklist_intents i "
-                "WHERE i.account=blacklist_entries.account "
-                "AND i.group_id=blacklist_entries.group_id "
-                "AND i.member=blacklist_entries.member "
-                "AND i.entry=blacklist_entries.id "
-                "ORDER BY CASE WHEN i.status IN ('unknown','accepted') THEN 0 ELSE 1 END,"
-                "i.rowid DESC LIMIT 1) AS enforcement_status "
-                "FROM blacklist_entries WHERE account=? AND group_id=? "
-                "AND status='active' ORDER BY created,id",
+                "SELECT e.id,e.member,e.peer,e.name,e.cycle,e.version,e.kicks,"
+                "e.created,e.status,e.actor,e.actor_peer,"
+                "CASE WHEN i.status='unknown' AND i.finished=0 "
+                "THEN 'pending' ELSE i.status END AS enforcement_status,"
+                "i.result AS enforcement_result "
+                "FROM blacklist_entries e LEFT JOIN blacklist_intents i ON i.id=("
+                "SELECT p.id FROM blacklist_intents p WHERE p.account=e.account "
+                "AND p.group_id=e.group_id AND p.member=e.member AND p.entry=e.id "
+                "ORDER BY CASE WHEN p.status IN ('unknown','accepted') THEN 0 ELSE 1 END,"
+                "p.rowid DESC LIMIT 1) WHERE e.account=? AND e.group_id=? "
+                "AND e.status='active' ORDER BY e.created,e.id",
                 (account, group),
             ).fetchall()
             return version, [dict(row) for row in entries]
@@ -646,11 +649,12 @@ class BlacklistStore:
                 )
             return bool(changed)
 
-    def pending(self, account):
+    def pending(self, account, *, group=None):
         """Read persisted pending join wakeups for one robot account.
 
         Args:
             account: Robot business identity.
+            group: Optional exact business group for an independent worker.
 
         Returns:
             Wakeup dictionaries with account, group, message, peers and event_at.
@@ -660,8 +664,9 @@ class BlacklistStore:
             rows = db.execute(
                 "SELECT account,group_id AS 'group',message,peers,event_at,state,scope "
                 "FROM blacklist_notices WHERE account=? AND state='pending' "
-                "ORDER BY event_at,message",
-                (account,),
+                + (" AND group_id=?" if group is not None else "")
+                + " ORDER BY event_at,message",
+                (account, _identity(group)) if group is not None else (account,),
             ).fetchall()
             return [
                 {
@@ -783,8 +788,102 @@ class BlacklistStore:
             trigger="command",
         )
 
+    def reserve_prefix(self, account, group, member, peer, entry, guard):
+        """Reserve one seven-day mute per enrollment under an operator prefix rule.
+
+        Args:
+            account: Authenticated receiving robot.
+            group: Explicitly authorized business group.
+            member: Current ordinary member's verified UID.
+            peer: Freshly verified native transport identity.
+            entry: Exact active enrollment ID, not a fabricated join round.
+            guard: Current operator rule, nickname and lifecycle authorization.
+
+        Returns:
+            Durable capability, or None for duplicate, unresolved or changed work.
+
+        Raises:
+            ProtocolError: If the enrollment or guard is malformed.
+        """
+        account, group, member = map(_identity, (account, group, member))
+        if (
+            not isinstance(entry, str)
+            or len(entry) != 32
+            or any(char not in "0123456789abcdef" for char in entry)
+            or not isinstance(peer, str)
+            or not peer.strip()
+            or len(peer.encode()) > 1024
+            or not callable(guard)
+        ):
+            raise ProtocolError("blacklist_prefix")
+        return self._reserve(
+            account,
+            group,
+            member,
+            peer,
+            "prefix/" + entry,
+            time.time(),
+            guard,
+            trigger="prefix",
+            expected_entry=entry,
+        )
+
+    def reserve_keyword(self, account, group, member, peer, entry, message, guard):
+        """Bind one keyword mute per enrollment to its original inbox message.
+
+        Args:
+            account: Authenticated receiving robot.
+            group: Enabled business group.
+            member: Verified ordinary member.
+            peer: Frozen native transport identity.
+            entry: Active enrollment to bind, never a membership application.
+            message: Proven original inbox message.
+            guard: Current deterministic rule and lifecycle authorization.
+
+        Returns:
+            Durable capability, or None for duplicate or unresolved work.
+
+        Raises:
+            ProtocolError: If identity or evidence references are malformed.
+        """
+        account, group, member = map(_identity, (account, group, member))
+        if (
+            not isinstance(entry, str)
+            or len(entry) != 32
+            or any(c not in "0123456789abcdef" for c in entry)
+            or not isinstance(message, str)
+            or not 1 <= len(message.encode()) <= 128
+            or not message.isprintable()
+            or not isinstance(peer, str)
+            or not peer.strip()
+            or len(peer.encode()) > 1024
+            or not callable(guard)
+        ):
+            raise ProtocolError("blacklist_keyword")
+        return self._reserve(
+            account,
+            group,
+            member,
+            peer,
+            "keyword/" + message,
+            time.time(),
+            guard,
+            trigger="keyword",
+            expected_entry=entry,
+        )
+
     def _reserve(
-        self, account, group, member, peer, join_id, event_at, guard, *, trigger
+        self,
+        account,
+        group,
+        member,
+        peer,
+        join_id,
+        event_at,
+        guard,
+        *,
+        trigger,
+        expected_entry=None,
     ):
         """Persist an evidence-scoped capability before any native mutation."""
         with self._transaction(guard) as db:
@@ -793,13 +892,28 @@ class BlacklistStore:
                 "AND member=? AND status='active'",
                 (account, group, member),
             ).fetchone()
-            if entry is None or entry["peer"] != peer or event_at < entry["created"]:
+            if (
+                entry is None
+                or entry["peer"] != peer
+                or event_at < entry["created"]
+                or expected_entry is not None
+                and entry["id"] != expected_entry
+            ):
                 return None
             if db.execute(
                 "SELECT 1 FROM blacklist_intents WHERE account=? AND group_id=? "
                 "AND member=? AND (join_id=? OR status='accepted' AND action='kick')",
                 (account, group, member, join_id),
             ).fetchone():
+                return None
+            if (
+                trigger == "keyword"
+                and db.execute(
+                    "SELECT 1 FROM blacklist_intents WHERE account=? AND group_id=? "
+                    "AND member=? AND entry=? AND trigger='keyword' LIMIT 1",
+                    (account, group, member, entry["id"]),
+                ).fetchone()
+            ):
                 return None
             unresolved = db.execute(
                 "SELECT i.action,i.finished,"
@@ -827,6 +941,10 @@ class BlacklistStore:
                 (account, group),
             ).fetchone()
             if policy and event_at < policy["effective_at"]:
+                return None
+            if trigger == "prefix" and (
+                policy is None or policy["mute_minutes"] != 10080
+            ):
                 return None
             intent = BlacklistIntent(
                 secrets.token_hex(16),
@@ -995,9 +1113,13 @@ def authorize_intent(
         or type(intent.policy_version) is not int
         or intent.policy_version < 0
         or not isinstance(intent.trigger, str)
-        or intent.trigger not in {"join", "command"}
+        or intent.trigger not in {"join", "command", "prefix", "keyword"}
         or not isinstance(intent.join_id, str)
         or (intent.trigger == "command") != intent.join_id.startswith("command/")
+        or (intent.trigger == "prefix") != intent.join_id.startswith("prefix/")
+        or (intent.trigger == "keyword") != intent.join_id.startswith("keyword/")
+        or intent.trigger == "prefix"
+        and (intent.join_id != "prefix/" + intent.entry or minutes != 10080)
     ):
         raise ProtocolError("blacklist_intent_invalid")
     store = BlacklistStore(instance)

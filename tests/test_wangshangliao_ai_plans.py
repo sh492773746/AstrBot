@@ -232,15 +232,35 @@ def test_legacy_personal_usage_preserved_not_old_group_attributed(plans):
     assert plans.snapshot("nim/1001", "1", now=NOW)["used"] == 1
 
 
-def test_notifications_persist_dedup_and_do_not_rollover(plans):
+def test_retired_notice_api_and_table_stay_absent_without_resetting_quota(plans):
     for index in range(20):
         charge(plans, str(index), now=NOW + index * 6)
-    notices = plans.queue_notices("nim/1001", "1", "99", now=NOW + 200)
-    assert len(notices) == 1 and "私" not in notices[0]["kind"]
-    assert plans.claim_notice(notices[0]["id"])
-    plans.finish_notice(notices[0]["id"], "failed")
+    state = plans.snapshot("nim/1001", "1", now=NOW + 200)
+    assert state["used"] == state["daily"] == 20 and state["remaining"] == 0
+    with plans.store.connect() as db:
+        assert not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='ai_quota_notices'"
+        ).fetchone()
+        original = "\n".join(db.iterdump())
+    for name in ("queue_notices", "claim_notice", "finish_notice"):
+        assert not hasattr(plans, name)
+    assert "notices" not in plans.status()
     reopened = AIPlans(OpenStore(plans.store.path.parent))
-    assert not reopened.queue_notices("nim/1001", "1", "99", now=NOW + 201)
+    for name in ("queue_notices", "claim_notice", "finish_notice"):
+        assert not hasattr(reopened, name)
+    assert "notices" not in reopened.status()
+    assert reopened.snapshot("nim/1001", "1", now=NOW + 201) == state
+    with pytest.raises(OpenError, match="personal_quota"):
+        charge(reopened, "still-full", now=NOW + 201)
+    next_day = reopened.snapshot("nim/1001", "1", now=NOW + 86400)
+    assert next_day["remaining"] == 20 and next_day["used"] == 0
+    assert next_day["cost_micro"] == state["cost_micro"]
+    with reopened.store.connect() as db:
+        assert not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='ai_quota_notices'"
+        ).fetchone()
+        assert "\n".join(db.iterdump()) == original
+        assert db.execute("SELECT COUNT(*) FROM ai_charges").fetchone()[0] == 20
 
 
 def test_plan_confirmation_changed_contact_or_pool_fails(plans):
@@ -376,18 +396,28 @@ def test_confirmation_expiry_actor_and_replay(plans):
     assert len(plans.status()["subscriptions"]) == 1
 
 
-def test_cost_threshold_notices_are_once_per_period(plans):
+def test_cost_thresholds_do_not_queue_retired_notices_or_release_budget(plans):
     charge(plans, now=NOW)
     with plans.store.connect(write=True) as db:
         db.execute("UPDATE ai_charges SET charged_micro=2400000")
-    notices = plans.queue_notices("nim/1001", "1", "99", now=NOW + 6)
-    assert len(notices) == 1 and notices[0]["kind"].endswith("/80")
-    assert plans.claim_notice(notices[0]["id"])
-    plans.finish_notice(notices[0]["id"], "accepted")
+    state = plans.snapshot("nim/1001", "1", now=NOW + 6)
+    assert state["cost_micro"] == 2_400_000 and state["budget_micro"] == 3_000_000
+    for name in ("queue_notices", "claim_notice", "finish_notice"):
+        assert not hasattr(plans, name)
+    assert "notices" not in plans.status()
+    assert plans.snapshot("nim/1001", "1", now=NOW + 6) == state
     with plans.store.connect(write=True) as db:
         db.execute("UPDATE ai_charges SET charged_micro=3000000")
-    notices = plans.queue_notices("nim/1001", "1", "99", now=NOW + 12)
-    assert len(notices) == 1 and notices[0]["kind"].endswith("/100")
+    state = plans.snapshot("nim/1001", "1", now=NOW + 12)
+    assert state["cost_micro"] == state["budget_micro"] == 3_000_000
+    assert state["used"] == 1 and state["remaining"] == 19
+    with pytest.raises(OpenError, match="plan_budget"):
+        charge(plans, "budget-full", now=NOW + 12)
+    with plans.store.connect() as db:
+        assert not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='ai_quota_notices'"
+        ).fetchone()
+        assert db.execute("SELECT COUNT(*) FROM ai_charges").fetchone()[0] == 1
 
 
 def test_upgrade_preserves_prepaid_future_renewals(plans):
@@ -535,7 +565,7 @@ async def test_native_receive_menu_cannot_hijack_shared_pool_consent(setup, tmp_
 
 
 @pytest.mark.asyncio
-async def test_group_quota_notices_use_private_channel_only(setup, monkeypatch):
+async def test_group_quota_has_no_retired_notice_api_or_table(setup):
     value, _, event = setup
     plans = value.plans
     value.store.link_principal("2", "nim/902")
@@ -548,18 +578,19 @@ async def test_group_quota_notices_use_private_channel_only(setup, monkeypatch):
                 for i in range(20)
             ],
         )
-    pm = AsyncMock(side_effect=RuntimeError("private_send_failed"))
-    monkeypatch.setattr(
-        "astrbot.builtin_stars.wangshangliao_moderation.open_service.send_onboarding_text",
-        pm,
-    )
+    state = plans.snapshot("nim/902", "2")
+    assert state["used"] == state["daily"] == 20 and state["remaining"] == 0
+    with value.store.connect() as db:
+        original = "\n".join(db.iterdump())
+    assert not hasattr(value, "notify_quota")
+    for name in ("queue_notices", "claim_notice", "finish_notice"):
+        assert not hasattr(plans, name)
     event.send = AsyncMock()
-    await value.notify_quota(
-        event.platform, "nim/902", "2", reason="personal_quota", event=event
-    )
-    assert pm.await_count == 1
+    assert "notices" not in plans.status()
     event.send.assert_not_awaited()
-    await value.notify_quota(
-        event.platform, "nim/902", "2", reason="personal_quota", event=event
-    )
-    assert pm.await_count == 1
+    assert plans.snapshot("nim/902", "2") == state
+    with value.store.connect() as db:
+        assert not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='ai_quota_notices'"
+        ).fetchone()
+        assert "\n".join(db.iterdump()) == original

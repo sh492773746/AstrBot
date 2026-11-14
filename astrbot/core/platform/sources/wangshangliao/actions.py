@@ -14,7 +14,12 @@ from .blacklist import (
 )
 from .database import account_guard
 from .group_scope import group_revision
-from .policy import authorize_action
+from .policy import (
+    DELEGATED_MUTE_MAX_MINUTES,
+    authorize_action,
+    validate_delegated_mute,
+)
+from .raid import RaidIntent, authorize_raid
 from .wire import ProtocolError
 
 ACTION_VERSION = 1
@@ -57,6 +62,9 @@ class ActionRequest:
         mention_name: Original leading label, resolved to a member nickname on send.
         group_revision: Original group-specific policy revision.
         blacklist_intent: Stored canonical-join capability, never a prefix grant.
+        recall_departed: Explicit manual historical recall of an absent sender.
+        raid_intent: Stored, short-duration newcomer defense capability.
+        delegated_mute: Explicit mute-only delegation requiring reauthorization.
     """
 
     version: int
@@ -78,6 +86,9 @@ class ActionRequest:
     blacklist_intent: BlacklistIntent | None = None
     blacklist_fixture: object | None = None
     blacklist_guard: object | None = None
+    recall_departed: bool = False
+    raid_intent: RaidIntent | None = None
+    delegated_mute: bool = False
 
     @classmethod
     def bind(cls, adapter, operation, action, group, **parameters):
@@ -158,9 +169,40 @@ async def dispatch(adapter, request, *, authorize=None):
             or 1 <= request.minutes <= BLACKLIST_MUTE_MINUTES
             and request.action == "mute"
             and request.blacklist_intent is not None
+            or request.delegated_mute is True
+            and 1 <= request.minutes <= DELEGATED_MUTE_MAX_MINUTES
         )
     ):
         raise ProtocolError("action_parameters_invalid")
+    validate_delegated_mute(
+        request.operation,
+        request.action,
+        request.minutes,
+        request.delegated_mute,
+        request.expected_nim,
+        authorize,
+    )
+    if request.delegated_mute and (
+        request.blacklist_intent is not None or request.raid_intent is not None
+    ):
+        raise ProtocolError("delegated_mute_authority_invalid")
+    raid_action = (
+        request.operation.startswith("raid/") or request.raid_intent is not None
+    )
+    if raid_action:
+        if not callable(authorize):
+            raise ProtocolError("raid_authorization_required")
+        await asyncio.to_thread(
+            authorize_raid,
+            request.instance,
+            request.raid_intent,
+            request.account,
+            request.operation,
+            request.action,
+            request.group,
+            request.member,
+            request.minutes,
+        )
     member_action = request.action in {
         "mute",
         "unmute",
@@ -216,6 +258,12 @@ async def dispatch(adapter, request, *, authorize=None):
         raise ProtocolError("action_warning_invalid")
     if request.action != "warning" and request.mention_name is not None:
         raise ProtocolError("action_warning_invalid")
+    if (
+        type(request.recall_departed) is not bool
+        or request.recall_departed
+        and (request.action != "recall" or authorize is None)
+    ):
+        raise ProtocolError("action_recall_authority_required")
     blacklist_action = (
         request.operation.startswith("blacklist/")
         or request.blacklist_intent is not None
@@ -265,6 +313,11 @@ async def dispatch(adapter, request, *, authorize=None):
         guard()
         if request.group_revision != group_revision(adapter.config, str(request.group)):
             raise ProtocolError("action_scope_changed")
+        if request.delegated_mute and (
+            adapter.members.get(str(request.group), {}).get(str(request.member))
+            != request.expected_nim
+        ):
+            raise ProtocolError("delegated_mute_target_changed")
         if blacklist_action:
             await asyncio.to_thread(
                 authorize_intent,
@@ -293,24 +346,49 @@ async def dispatch(adapter, request, *, authorize=None):
                 != request.expected_nim
             ):
                 raise ProtocolError("blacklist_target_changed")
+        if raid_action:
+            await asyncio.to_thread(
+                authorize_raid,
+                request.instance,
+                request.raid_intent,
+                request.account,
+                request.operation,
+                request.action,
+                request.group,
+                request.member,
+                request.minutes,
+            )
+            if request.expected_nim != request.raid_intent.peer:
+                raise ProtocolError("raid_identity_changed")
         if request.action in {"recall", "warning"}:
             authorize_action(
                 adapter.config,
                 str(request.group),
                 "recall" if request.action == "recall" else "mute",
             )
-            if (
-                not adapter.config.get("moderation", {}).get("automation_enabled")
-                or adapter.members.get(str(request.group), {}).get(str(request.member))
+            if not adapter.config.get("moderation", {}).get("automation_enabled") or (
+                adapter.members.get(str(request.group), {}).get(str(request.member))
                 != request.expected_nim
+                and not (
+                    request.recall_departed
+                    and str(request.member)
+                    not in adapter.members.get(str(request.group), {})
+                )
             ):
                 raise ProtocolError("action_automation_changed")
 
     # Schedule callbacks reserve executions only while the native group lock is held.
     await check(invoke_authorize=not scheduled)
     if request.action == "recall":
+        parameters = (
+            {"departed_peer": request.expected_nim} if request.recall_departed else {}
+        )
         status = await adapter.recall_violation(
-            str(request.group), request.message, str(request.member), authorize=check
+            str(request.group),
+            request.message,
+            str(request.member),
+            authorize=check,
+            **parameters,
         )
         result = {"status": status}
     elif request.action == "warning":
@@ -408,6 +486,27 @@ async def dispatch(adapter, request, *, authorize=None):
             blacklist_intent=request.blacklist_intent,
             blacklist_fixture=request.blacklist_fixture,
             blacklist_guard=request.blacklist_guard,
+        )
+    elif raid_action:
+        result = await adapter.execute_moderation(
+            request.operation,
+            request.action,
+            request.group,
+            request.member,
+            minutes=request.minutes,
+            action_check=check,
+            raid_intent=request.raid_intent,
+        )
+    elif request.delegated_mute:
+        result = await adapter.execute_moderation(
+            request.operation,
+            request.action,
+            request.group,
+            request.member,
+            minutes=request.minutes,
+            action_check=check,
+            delegated_mute=True,
+            expected_nim=request.expected_nim,
         )
     else:
         result = await adapter.execute_moderation(

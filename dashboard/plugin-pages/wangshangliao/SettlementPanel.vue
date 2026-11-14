@@ -528,7 +528,7 @@ onUnmounted(() => {
               <div class="member">
                 <small>{{ row.self_join ? '成员' : '被邀请人' }}</small><strong>{{ row.member_name }}</strong><small>账号 {{ row.member }}</small>
                 <small class="entry-inviter">{{ row.self_join ? '入群方式：主动入群，无邀请人' : `${row.state === 'paid' && row.verification === 'conflict' ? '原登记收款人' : '邀请人'}：${row.inviter ? row.inviter_name || '名称待核验' : '来源待核对'}` }}<span v-if="row.inviter">（账号 {{ row.inviter }}）</span></small>
-                <small v-if="row.member_class === 'agent' || row.member_class === 'ordinary'">{{ row.member_class === 'agent' ? '代理商价格' : '普通成员价格' }} · 私信核验后人工切换</small>
+                <small v-if="row.member_class === 'agent' || row.member_class === 'ordinary'">{{ row.member_class === 'agent' ? '代理商价格' : '普通成员价格' }} · 凭据核验后人工切换</small>
                 <small v-if="row.attribution_source === 'cashier_confirmation'">归属：结账员人工确认</small>
                 <small v-if="row.payment_kind === 'exception'" class="warning">异常付款补记</small>
                 <small v-if="state === 'unassigned'">原结账状态：{{ stateNames[row.state] }}</small>
@@ -608,7 +608,7 @@ onUnmounted(() => {
           <ul class="confirm-list"><li v-for="item in selectionSnapshot" :key="item.id"><span><small>被邀请人</small>{{ item.member_name }}<small>账号 {{ item.member }}</small></span><b>¥{{ money(item.amount) }}</b></li></ul>
           <ul v-if="operation === 'reprice' && priceConfirmation" class="confirm-list"><li v-for="price in priceConfirmation.items" :key="price.id"><span>{{ selectionSnapshot.find(item => item.id === price.id)?.member_name }}<small>原价 ¥{{ money(price.original_amount) }} · 记录版本 {{ price.version }}</small></span><b>目标 ¥{{ money(price.target_amount) }}</b></li></ul>
           <v-alert v-if="operation === 'correct'" type="warning" variant="tonal">撤回后，符合核验条件的记录转回待结账；核验时间未到、发言条件未满足或价格未配置的继续核验；已退群或曾退群的记录改为已作废。仅撤回登记，不会自动退回已支付款项，原结账记录保留在操作日志中。</v-alert>
-          <v-alert v-if="operation === 'reprice'" type="info" variant="tonal">{{ selectionSnapshot[0]?.pricing_status === 'no_reward' ? '该普通成员不参与返现。' : '当前金额已保留在账本。' }}请确认私信证明后，再切换为{{ priceCategory === 'agent' ? '代理商' : '普通成员' }}价格。</v-alert>
+          <v-alert v-if="operation === 'reprice'" type="info" variant="tonal">{{ selectionSnapshot[0]?.pricing_status === 'no_reward' ? '该普通成员不参与返现。' : '当前金额已保留在账本。' }}请确认业务凭据后，再切换为{{ priceCategory === 'agent' ? '代理商' : '普通成员' }}价格。</v-alert>
           <v-alert v-if="operation === 'exception'" type="warning" variant="tonal">仅补记管理员已实际完成的外部付款，不会转账。可补记未满三小时、未发言或已退群的记录；收款身份、邀请归属、价格及风控仍须核验。原资格证据和异常原因将保留。</v-alert>
           <v-checkbox v-if="operation === 'exception'" v-model="actualPaymentConfirmed" label="我确认已向上述收款人实际完成外部付款" :disabled="saving" color="primary" hide-details />
           <v-alert v-if="operation === 'assign'" type="info" variant="tonal">{{ selectionSnapshot[0]?.state === 'paid' ? '仅补充归属，保留原付款金额、时间和已结账状态，不会再次转入待结账。' : '确认归属后，核验满三小时的记录转入待结账；未满期限的记录继续核验。' }}</v-alert>

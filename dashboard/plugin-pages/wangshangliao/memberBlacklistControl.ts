@@ -6,6 +6,15 @@ export type BlacklistEntry = BlacklistMember & {
   phase: string;
   status: string;
   cycle: number;
+  error?: string;
+  provider_code?: number;
+  error_phase?: "submission" | "readback";
+  current_state?: {
+    membership: "present" | "absent" | "identity_changed";
+    mute: "muted" | "not_muted" | "unavailable";
+    checked_at: number;
+    error?: string;
+  };
 };
 export type BlacklistScope = {
   account: string;

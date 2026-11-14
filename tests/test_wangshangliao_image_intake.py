@@ -89,8 +89,41 @@ def test_image_cannot_hide_command_text_or_duplicate_attachments():
     assert wire.image_metadata(wire.ApplicationMessage.FromString(raw)) is None
 
 
+@pytest.mark.parametrize("placeholder", [{"width": 0}, {"height": 0}, {"size": 0}])
+def test_group_inspection_can_recover_native_placeholders_but_private_intake_cannot(
+    placeholder,
+):
+    message = wire.ApplicationMessage.FromString(
+        image_message(**placeholder).SerializeToString()
+    )
+    assert wire.image_metadata(message) is None
+    result = wire.image_metadata(message, allow_sticker=True, allow_incomplete=True)
+    assert result["asset"] == "123456789"
+    for field, value in placeholder.items():
+        assert result[field] == value
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ({"asset": {"uri": "https://invalid.test"}}, "asset"),
+        ({"width": 20000}, "dimensions"),
+        ({"size": 6 * 1024 * 1024}, "size"),
+    ],
+)
+def test_image_metadata_errors_remain_specific_and_bounded(change, reason):
+    message = wire.ApplicationMessage.FromString(
+        image_message(**change).SerializeToString()
+    )
+    with pytest.raises(wire.ProtocolError, match="image_metadata_" + reason):
+        wire.image_metadata(message, allow_incomplete=True, explain=True)
+
+
 @pytest.mark.asyncio
-async def test_private_native_image_is_preserved_without_ai_or_management(tmp_path):
+@pytest.mark.parametrize("group_image", [False, True])
+async def test_private_native_image_is_preserved_without_ai_or_management(
+    tmp_path, group_image
+):
     adapter = WangshangliaoAdapter(
         {"id": "image-ingress", "account_id": "99"}, {}, asyncio.Queue()
     )
@@ -104,6 +137,11 @@ async def test_private_native_image_is_preserved_without_ai_or_management(tmp_pa
     adapter.diagnostics.emit = Mock()
     try:
         message = image_message()
+        if group_image:
+            message.session = 2
+            message.target.id = 5
+            adapter.groups = {"5": "1005"}
+            adapter.members = {"5": {"1": "1001"}}
         sealed = nacl.bindings.crypto_aead_chacha20poly1305_encrypt(
             lz4.block.compress(message.SerializeToString(), store_size=True),
             struct.pack("<Q", 321),
@@ -114,7 +152,10 @@ async def test_private_native_image_is_preserved_without_ai_or_management(tmp_pa
             {
                 "b": wire.b64(
                     wire.Envelope(
-                        header=1 << 34 | 99 << 4 | 1 << 2 | 1,
+                        header=1 << 34
+                        | (5 if group_image else 99) << 4
+                        | (2 if group_image else 1) << 2
+                        | 1,
                         timestamp=int(time.time()),
                         nonce=123,
                         aad=321,
@@ -126,8 +167,8 @@ async def test_private_native_image_is_preserved_without_ai_or_management(tmp_pa
         )
         await adapter.ingest(
             {
-                0: "0",
-                1: "1099",
+                0: "1" if group_image else "0",
+                1: "1005" if group_image else "1099",
                 2: "1001",
                 7: str(int(time.time() * 1000)),
                 8: "100",
@@ -142,10 +183,14 @@ async def test_private_native_image_is_preserved_without_ai_or_management(tmp_pa
         payload = json.loads(payload)
         assert payload["kind"] == "image" and not payload["text"]
         assert payload["image"]["asset"] == "123456789"
-        assert payload["sender"] == "1" and payload["transport_peer"] == "1001"
+        assert payload["sender"] == "1"
+        if not group_image:
+            assert payload["transport_peer"] == "1001"
         assert state == "business_suspended"
         assert adapter._event_queue.empty()
-        adapter.nim.acknowledge.assert_awaited_once_with(0, "private-image")
+        adapter.nim.acknowledge.assert_awaited_once_with(
+            1 if group_image else 0, "private-image"
+        )
     finally:
         await adapter.ledger.close()
 

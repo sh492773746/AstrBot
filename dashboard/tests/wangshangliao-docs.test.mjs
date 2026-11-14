@@ -69,8 +69,6 @@ test('image references exist and HTML generation packages all guides', () => {
       assert.ok(!/href="[^"]+\.md(?:#[^"]*)?"/.test(html), guide.filename);
     }
     for (const name of assets.keys()) assert.ok(existsSync(join(directory, name)), name);
-    const plugin = readFileSync(join(directory, 'wangshangliao-plugin.html'), 'utf8');
-    assert.ok(plugin.includes('href="xiaoman-group-dialogs.json"'));
     const dialogs = JSON.parse(readFileSync(join(directory, 'xiaoman-group-dialogs.json'), 'utf8'));
     assert.ok(Array.isArray(dialogs) && dialogs.length > 0);
   } finally {

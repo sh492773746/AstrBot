@@ -2,6 +2,8 @@
 
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
+DELEGATED_MUTE_MAX_MINUTES = 3 * 24 * 60
+
 ACTIONS = {
     "mute",
     "unmute",
@@ -13,6 +15,38 @@ ACTIONS = {
     "rename",
     "cleanup",
 }
+
+
+def validate_delegated_mute(
+    operation, action, minutes, enabled, expected_nim, authorize
+):
+    """Validate the narrow, trusted in-process delegation contract.
+
+    Args:
+        operation: Original delegate-prefixed idempotency identifier.
+        action: Fixed member action, never a group toggle or kick.
+        minutes: Explicit whole-minute duration, at most three days.
+        enabled: Explicit delegation marker; never sufficient on its own.
+        expected_nim: Frozen real-mention target identity.
+        authorize: Trusted callback rechecking grants and targets at submission.
+
+    Raises:
+        ProtocolError: If the marker, scope, duration or callback is missing.
+    """
+    if type(enabled) is not bool or (
+        (enabled or operation.startswith("delegate-mute/"))
+        and (
+            not enabled
+            or not operation.startswith("delegate-mute/")
+            or action != "mute"
+            or type(minutes) is not int
+            or not 1 <= minutes <= DELEGATED_MUTE_MAX_MINUTES
+            or not isinstance(expected_nim, str)
+            or not expected_nim
+            or not callable(authorize)
+        )
+    ):
+        raise ProtocolError("delegated_mute_authority_invalid")
 
 
 def validate_policy(policy: dict) -> None:

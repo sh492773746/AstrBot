@@ -4,7 +4,6 @@ import asyncio
 import copy
 import errno
 import json
-import re
 import sqlite3
 import threading
 import time
@@ -22,14 +21,6 @@ from astrbot.builtin_stars.wangshangliao_moderation.command_capabilities import 
     CAPABILITIES,
     command_help,
 )
-from astrbot.builtin_stars.wangshangliao_moderation.conversation_guidance import (
-    GUIDANCE_REPLY_CONTRACT,
-    MANUAL_PREFIX,
-    READ_ONLY_GUIDANCE,
-    admin_manual_documents,
-    consultation_prompt,
-    routed_consultation_prompt,
-)
 from astrbot.builtin_stars.wangshangliao_moderation.member_blacklist import REQUEST
 from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import OpenCall, OpenRPC
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
@@ -40,7 +31,6 @@ from astrbot.core.platform.sources.wangshangliao.group_scope import group_revisi
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 from astrbot.dashboard.responses import ApiError
-from tests.test_wangshangliao_command_menu import leaves, step
 from tests.test_wangshangliao_command_parity import setup as setup
 
 pytestmark = pytest.mark.usefixtures("wsl_active_policy", "wsl_command_classifier")
@@ -168,6 +158,118 @@ async def native_join(scope):
     return value, event, rows, store, current
 
 
+@pytest.mark.asyncio
+async def test_unrelated_join_never_fetches_full_rosters_or_membership_logs(
+    native_join,
+):
+    value, event, _, store, _ = native_join
+    store.finish_notice("1", "5", "notice-101", "processed")
+    adapter = event.platform
+    store.observe(
+        "1",
+        "5",
+        "unrelated-join",
+        ["999"],
+        time.time(),
+        guard=lambda: None,
+        scope=value.member_blacklist.notice_scope(adapter, value.tenants[("1", "5")]),
+    )
+    value.roster.reset_mock()
+    adapter.get_moderation_members.reset_mock()
+    adapter.business.request.reset_mock()
+    await value.member_blacklist.process(adapter)
+    assert not store.pending("1")
+    value.roster.assert_not_awaited()
+    adapter.get_moderation_members.assert_not_awaited()
+    adapter.business.request.assert_not_awaited()
+    adapter.execute_action.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_group_workers_do_not_wait_for_other_groups_and_remain_bounded(scope):
+    value, event, _, _ = scope
+    adapter = event.platform
+    value.adapters = lambda: [adapter]
+    value.active = True
+    adapter.connection_state = "online"
+    worker = value.member_blacklist
+    entered, release = asyncio.Event(), asyncio.Event()
+    seen = []
+
+    async def process(_adapter, *, group):
+        seen.append(group)
+        if group == "5":
+            entered.set()
+            await release.wait()
+
+    worker.process = AsyncMock(side_effect=process)
+    try:
+        worker.tick()
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.sleep(0)
+        assert "6" in seen
+        assert len(worker.tasks) <= 4
+        original = worker.tasks[("1", "5")]
+        worker.tick()
+        assert worker.tasks[("1", "5")] is original
+    finally:
+        release.set()
+        await worker.close()
+
+
+@pytest.mark.asyncio
+async def test_new_join_wakes_its_group_before_periodic_discovery(scope):
+    value, event, _, store = scope
+    adapter = event.platform
+    value.adapters = lambda: [adapter]
+    adapter.connection_state = "online"
+    value.active = True
+    worker = value.member_blacklist
+    worker.process = AsyncMock()
+    worker.last_poll[("1", "5")] = time.monotonic()
+    await worker.receive(
+        adapter,
+        "5",
+        "immediate-join",
+        {"event_at": int(time.time() * 1000), "member_peers": ["903"]},
+    )
+    assert ("1", "5") in worker.tasks
+    await asyncio.gather(*worker.tasks.values())
+    assert any(call.kwargs == {"group": "5"} for call in worker.process.await_args_list)
+    assert store.pending("1", group="5")[0]["message"] == "immediate-join"
+    assert store.pending("1", group="6") == []
+
+
+@pytest.mark.asyncio
+async def test_native_blacklist_command_works_with_chat_replies_disabled(scope):
+    value, event, _, store = scope
+    adapter = event.platform
+    adapter.config["_business_active"] = True
+    adapter.config["reply_groups"]["5"] = False
+    original = dict(event.get_extra("wangshangliao_payload"))
+    event.message_str = "@Target 黑名单"
+    mention(event, text=event.message_str)
+    incoming = event.get_extra("wangshangliao_payload")
+    incoming.update(
+        sender="2",
+        name="Manager",
+        created_at=original["created_at"],
+        recall_route={
+            "peer": "902",
+            "client": "command-client",
+            "time": str(original["created_at"]),
+        },
+        _open_revision=group_revision(adapter.config, "5"),
+    )
+    command = managed_group_control(adapter, "5", incoming)
+    assert command == "黑名单 @Target"
+    event.set_extra("_wsl_managed_group_control", command)
+    await value.on_event(event)
+    assert store.read("1", "5")[1][0]["member"] == "3"
+    adapter.execute_action.assert_awaited()
+    assert not adapter.config["reply_groups"]["5"]
+
+
 def mention(event, *, peer="903", text="黑名单 @Target", nick="Target"):
     """Install authenticated structured mention evidence.
 
@@ -216,6 +318,121 @@ def enroll(event, store):
     store.set_member(
         "1", "5", "3", "903", "Target", True, event.actor_identity, lambda: None
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state",
+    [
+        "muted",
+        "not_muted",
+        "absent",
+        "identity_changed",
+        "timeout",
+        "revoked",
+        "native",
+    ],
+)
+async def test_unknown_dashboard_read_reports_current_state_without_rewriting_receipt(
+    scope, monkeypatch, state
+):
+    value, event, rows, store = scope
+    enroll(event, store)
+    intent = store.reserve_command("1", "5", "3", "903", "old-command", lambda: None)
+    original = {
+        "status": "unknown",
+        "submitted": True,
+        "error": "business_rejected",
+        "provider_code": -1,
+        "error_phase": "submission",
+    }
+    store.done(intent, original)
+    if state == "absent":
+        rows.pop("3")
+    elif state == "identity_changed":
+        rows["3"]["nimId"] = "999"
+
+    async def read_mutes(adapter, group, *, authorize, expected_members):
+        assert adapter is event.platform and group == "5"
+        assert expected_members == {"3": "903"}
+        authorize()
+        if state == "timeout":
+            raise TimeoutError("secret")
+        if state == "revoked":
+            raise OpenError("blacklist_permission")
+        return {"3"} if state == "muted" else set()
+
+    query = AsyncMock(side_effect=read_mutes)
+    monkeypatch.setattr(member_blacklist, "muted_member_ids", query)
+    options = {
+        "actor": "dashboard/test",
+        "session": "dashboard/test",
+    }
+    if state == "native":
+        options.update(
+            actor=event.actor_identity.principal,
+            session=value.navigation.key(event),
+            event=event,
+        )
+    work = value.member_blacklist.run(event.platform, "5", "read", **options)
+    if state == "revoked":
+        with pytest.raises(OpenError, match="blacklist_permission"):
+            await work
+    else:
+        result = await work
+        row = result["members"][0]
+        assert row["status"] == "unknown"
+        assert row["error"] == "business_rejected" and row["provider_code"] == -1
+        assert "enforcement_result" not in row
+        if state == "native":
+            assert "current_state" not in row
+        else:
+            current = row["current_state"]
+            assert current["membership"] == (
+                state if state in {"absent", "identity_changed"} else "present"
+            )
+            assert current["mute"] == (
+                state if state in {"muted", "not_muted"} else "unavailable"
+            )
+            assert current["checked_at"] > 0
+            if state == "timeout":
+                assert current["error"] == "transport_timeout"
+        assert query.await_count == int(
+            state not in {"absent", "identity_changed", "native"}
+        )
+    event.platform.execute_action.assert_not_awaited()
+    with closing(sqlite3.connect(store.path)) as db:
+        status, result = db.execute(
+            "SELECT status,result FROM blacklist_intents WHERE id=?", (intent.id,)
+        ).fetchone()
+    assert status == "unknown" and json.loads(result) == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error,fragment",
+    [
+        ("blacklist_member_unavailable", "完整成员目录中已无此人，可能已经退群"),
+        ("business_rejected", "平台响应异常，不能据此认定成员已退群"),
+        ("transport_timeout", "请求超时，不能据此认定成员已退群或禁言失败"),
+    ],
+)
+async def test_direct_unknown_command_preserves_specific_feedback(
+    scope, error, fragment
+):
+    value, event, _, _ = scope
+    mention(event)
+    event.platform.execute_action.return_value = {
+        "status": "unknown",
+        "submitted": True,
+        "error": error,
+        "provider_code": -1,
+    }
+    reply = await value.member_blacklist.command(event, "黑名单")
+    assert "禁言结果待核对" in reply and fragment in reply
+    assert "平台代码：-1" in reply
+    assert "已核实禁言" not in reply and "平台已受理禁言" not in reply
+    event.platform.execute_action.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -380,8 +597,9 @@ async def test_direct_mute_uses_current_duration_and_complete_receipt(scope, min
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["mention_before", "mention_after", "reply"])
 @pytest.mark.parametrize("outcome", ["accepted", "unknown", "rejected"])
+@pytest.mark.parametrize("spelling", ["黑名单", "加黑"])
 async def test_bound_bot_admin_blacklist_runs_through_public_event_handler(
-    scope, monkeypatch, source, outcome
+    scope, monkeypatch, source, outcome, spelling
 ):
     from astrbot.core import astrbot_config
 
@@ -409,14 +627,16 @@ async def test_bound_bot_admin_blacklist_runs_through_public_event_handler(
         event.set_extra(
             "wangshangliao_payload",
             {
-                "text": "黑名单",
+                "text": spelling,
                 "reply": {"server": "original", "client": "client-original"},
             },
         )
     else:
         mention(
             event,
-            text="@Target 黑名单" if source == "mention_before" else "黑名单 @Target",
+            text=f"@Target {spelling}"
+            if source == "mention_before"
+            else f"{spelling} @Target",
         )
     incoming = event.get_extra("wangshangliao_payload")
     incoming.update(
@@ -480,8 +700,9 @@ async def test_bound_bot_admin_blacklist_runs_through_public_event_handler(
 @pytest.mark.parametrize(
     "source", ["mention_before", "mention_after", "compact", "reply"]
 )
+@pytest.mark.parametrize("spelling", ["解除黑名单", "删黑"])
 async def test_remove_alias_uses_verified_target_and_cleans_admin_command(
-    release_scope, monkeypatch, source
+    release_scope, monkeypatch, source, spelling
 ):
     from astrbot.core import astrbot_config
 
@@ -512,7 +733,7 @@ async def test_remove_alias_uses_verified_target_and_cleans_admin_command(
         event.set_extra(
             "wangshangliao_payload",
             {
-                "text": "解除黑名单",
+                "text": spelling,
                 "reply": {"server": "original", "client": "client-original"},
             },
         )
@@ -520,9 +741,9 @@ async def test_remove_alias_uses_verified_target_and_cleans_admin_command(
         mention(
             event,
             text={
-                "mention_before": "@Target 解除黑名单",
-                "mention_after": "解除黑名单 @Target",
-                "compact": "解除黑名单@Target",
+                "mention_before": f"@Target {spelling}",
+                "mention_after": f"{spelling} @Target",
+                "compact": f"{spelling}@Target",
             }[source],
         )
     incoming = event.get_extra("wangshangliao_payload")
@@ -691,7 +912,6 @@ async def test_pending_release_rechecks_blacklist_and_native_authority(
         ("黑名单列表", True),
         ("移除黑名单 @Target", True),
         ("解除黑名单 @Target", True),
-        ("黑名单禁言时长 7天", True),
         ("规则", True),
     ],
 )
@@ -831,16 +1051,13 @@ async def test_reply_reference_must_be_same_group_and_agree_with_mentions(
 
 
 @pytest.mark.asyncio
-async def test_private_search_preview_confirmation_and_absent_member_removal(scope):
+async def test_dashboard_search_preview_confirmation_and_absent_member_removal(scope):
     value, event, rows, store = scope
-    event.is_private_chat = lambda: True
-    event.get_group_id = lambda: ""
-    event.eligible = True
-    session = value.navigation.key(event)
     args = {
-        "actor": event.actor_identity.principal,
-        "session": session,
-        "event": event,
+        "actor": "dashboard/fixture",
+        "session": ("dashboard", "fixture", "5"),
+        "event": None,
+        "tenant_version": value.tenants[("1", "5")]["version"],
     }
     searched = await value.member_blacklist.run(
         event.platform, "5", "search", mode="add", query="Target", **args
@@ -848,11 +1065,6 @@ async def test_private_search_preview_confirmation_and_absent_member_removal(sco
     preview = await value.member_blacklist.run(
         event.platform, "5", "preview", selection=searched["selection"], index=1, **args
     )
-    with pytest.raises(OpenError, match="blacklist_confirmation"):
-        await value.member_blacklist.run(
-            event.platform, "5", "commit", token=preview["token"], **args
-        )
-    event.message_obj.message_id = "fresh-confirmation"
     await value.member_blacklist.run(
         event.platform, "5", "commit", token=preview["token"], **args
     )
@@ -963,52 +1175,6 @@ async def test_read_exposes_duration_and_hides_historical_kick_phase(scope):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("private", [False, True])
-@pytest.mark.parametrize(
-    "duration,minutes", [("1分钟", 1), ("24小时", 1440), ("29天", 41760)]
-)
-async def test_native_duration_preview_requires_fresh_confirmation(
-    scope, private, duration, minutes
-):
-    value, event, _, store = scope
-    if private:
-        event.is_private_chat = lambda: True
-        event.get_group_id = lambda: ""
-        event.eligible = True
-        await step(value, event, "群列表", native=True)
-        await step(value, event, "选择群 1", native=True)
-    before = store.settings("1", "5")
-    reply = await step(value, event, "黑名单禁言时长 " + duration, native=True)
-    assert "预览" in reply and f"改为{minutes}分钟" in reply
-    assert "不追罚旧名单或重设已有禁言" in reply
-    token = re.search(r"确认黑名单 ([A-Za-z0-9_-]+)", reply)[1]
-    assert store.settings("1", "5") == before
-    with pytest.raises(OpenError, match="blacklist_confirmation"):
-        await value.member_blacklist.command(event, "确认黑名单 " + token)
-    reply = await step(value, event, "确认黑名单 " + token, native=True)
-    assert "已保存" in reply and f"{minutes}分钟" in reply
-    assert store.settings("1", "5")["mute_minutes"] == minutes
-    assert not store.read("1", "5")[1]
-    assert store.settings("1", "6")["mute_minutes"] == 41760
-    assert "已保存" not in await step(value, event, "确认黑名单 " + token, native=True)
-    event.platform.execute_action.assert_not_awaited()
-    value.context.get_provider.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_private_duration_requires_selected_group(scope):
-    value, event, _, store = scope
-    event.is_private_chat = lambda: True
-    event.get_group_id = lambda: ""
-    event.eligible = True
-    reply = await value.member_blacklist.command(event, "黑名单禁言时长 1小时")
-    assert "请先发送「群列表」「选择群 序号」" in reply
-    assert not value.member_blacklist.pending
-    assert store.settings("1", "5")["mute_minutes"] == 41760
-    event.platform.execute_action.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("minutes", [0, -1, 41761, 1.5, True, "60", None])
 async def test_settings_preview_rejects_non_whole_or_out_of_range_minutes(
     scope, minutes
@@ -1027,18 +1193,6 @@ async def test_settings_preview_rejects_non_whole_or_out_of_range_minutes(
     assert not value.member_blacklist.pending
     assert store.settings("1", "5")["mute_minutes"] == 41760
     event.platform.execute_action.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "duration", ["0分钟", "41761分钟", "697小时", "30天", "1.5小时"]
-)
-async def test_native_duration_range_errors_never_create_drafts(scope, duration):
-    value, event, _, store = scope
-    reply = await value.member_blacklist.command(event, "黑名单禁言时长 " + duration)
-    assert "1—41760整分钟" in reply
-    assert not value.member_blacklist.pending
-    assert store.settings("1", "5")["mute_minutes"] == 41760
 
 
 @pytest.mark.asyncio
@@ -1213,34 +1367,6 @@ async def test_dashboard_rpc_duration_preview_and_commit_preserve_member_history
     assert result["version"] == 2 and result["policy_version"] > 0
     assert store.read("1", "5")[1] == entries
     event.platform.execute_action.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("private", [False, True])
-async def test_menu_duration_setting_uses_group_selection_and_token_confirmation(
-    scope, private
-):
-    value, event, _, store = scope
-    if private:
-        event.is_private_chat = lambda: True
-        event.get_group_id = lambda: ""
-        event.eligible = True
-    path = next(path for item, path in leaves() if item.command == "黑名单禁言时长")
-    await step(value, event, "菜单", native=True)
-    for number in path:
-        reply = await step(value, event, str(number), native=True)
-    if private:
-        assert "授权群" in reply and "Group 5" in reply
-        reply = await step(value, event, "1", native=True)
-    assert "时长" in reply and "41760" in reply
-    reply = await step(value, event, "24小时", native=True)
-    assert "预览" in reply and "1440分钟" in reply and "确认执行" in reply
-    assert store.settings("1", "5")["mute_minutes"] == 41760
-    reply = await step(value, event, "1", native=True)
-    assert "已保存" in reply and "1440分钟" in reply
-    assert store.settings("1", "5")["mute_minutes"] == 1440
-    event.platform.execute_action.assert_not_awaited()
-    value.context.get_provider.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1728,9 +1854,6 @@ async def test_accepted_receipt_is_not_overwritten_when_cleanup_is_cancelled(
         ("黑名单列表", "黑名单列表"),
         ("添加黑名单 Target", "添加黑名单 Target"),
         ("选择黑名单 1", "选择黑名单 1"),
-        ("黑名单禁言时长 60分钟", "黑名单禁言时长 60分钟"),
-        ("黑名单禁言时长 24小时", "黑名单禁言时长 24小时"),
-        ("黑名单禁言时长 29天", "黑名单禁言时长 29天"),
     ],
 )
 def test_fixed_syntax_retains_original_target_for_verification(text, expected):
@@ -1779,25 +1902,14 @@ def test_rpc_duration_payload_accepts_safe_boundaries(minutes):
     assert result.minutes == minutes
 
 
-def test_blacklist_guidance_catalog_and_manual_describe_mute_only_policy():
-    capability = CAPABILITIES["黑名单禁言时长"]
-    assert capability["role"] == "group_manager" and capability["preview"]
-    assert set(capability["locations"]) == {"private", "group"}
-    texts = [
-        command_help("group", {"group_manager"}),
-        admin_manual_documents()[MANUAL_PREFIX + "成员黑名单"],
-        READ_ONLY_GUIDANCE,
-        GUIDANCE_REPLY_CONTRACT,
-        consultation_prompt(""),
-        routed_consultation_prompt({"kind": "admin", "management": [], "finance": []}),
-    ]
-    for text in texts:
-        assert "41760" in text and "不踢人" in text
-        assert "不追罚" in text and "已有禁言" in text
-        assert "前三次" not in text and "第四次" not in text
-        assert "解除黑名单" in text and "分别反馈结果" in text
-        assert "私信或后台移除只移出名单" in text
-    assert "黑名单禁言时长 N分钟/小时/天" in texts[1]
+def test_blacklist_catalog_preserves_group_actions_without_duration_command():
+    capability = CAPABILITIES["黑名单"]
+    assert capability["role"] == "group_manager"
+    assert set(capability["locations"]) == {"group"}
+    assert "黑名单禁言时长" not in CAPABILITIES
+    reference = command_help("group", {"group_manager"})
+    assert "黑名单" in reference and "解除黑名单" in reference
+    assert "黑名单禁言时长" not in reference
 
 
 @pytest.mark.asyncio

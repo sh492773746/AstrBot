@@ -32,7 +32,6 @@ function load(name) {
   return module.exports.default;
 }
 const App = load("App");
-const FriendApproval = load("FriendApproval");
 const settle = async () => { await new Promise(setImmediate); await nextTick(); };
 
 test("moderation audit renders submission state and sanitized failure labels", () => {
@@ -185,43 +184,19 @@ test("empty scope settles both loading indicators after superseding reads", asyn
   assert.equal(state.scheduleState.schedule, null);
 });
 
-test("failed approval refresh removes stale version and disables subsequent writes", async t => {
-  let fail = false;
-  const writes = [];
-  const bridge = {
-    async apiGet() {
-      if (fail) throw new Error("Approval status unavailable");
-      return { enabled: true, version: 1, active: true, paused_reason: "" };
-    },
-    async apiPost(endpoint, body) { writes.push(body); return {}; },
-  };
-  const state = mount(t, FriendApproval, () => ({
-    bot: { id: "fixture", revision: "1", account_id: "1" }, bridge, t: zh => zh,
-  }));
-  await settle();
-  assert.equal(state.approval.version, 1);
-  fail = true;
-  await state.load();
-  assert.equal(state.approval, null);
-  await state.save(false);
-  await state.reconcile();
-  assert.deepEqual(writes, []);
-});
-
-test("approval responses for a previous bot cannot overwrite its replacement", async t => {
-  const old = deferred();
-  const bot = ref({ id: "old", revision: "1", account_id: "1" });
-  const bridge = {
-    async apiGet(_endpoint, params) {
-      return params.bot_id === "old" ? old.promise : { enabled: false, version: 7 };
-    },
-    async apiPost() { throw new Error("Read-only test"); },
-  };
-  const state = mount(t, FriendApproval, () => ({ bot: bot.value, bridge, t: zh => zh }));
-  bot.value = { id: "new", revision: "2", account_id: "2" };
-  await settle();
-  old.resolve({ enabled: true, version: 1 });
-  await settle();
-  assert.equal(state.approval.version, 7);
-  assert.equal(state.approval.enabled, false);
+test("legacy private destinations and test scopes are excluded from editable settings", async t => {
+  const { state } = await mountPage(t, (method, endpoint) => {
+    if (method === "GET" && endpoint === "settings") return {
+      open_mode: "legacy", providers: [], bots: [{
+        id: "fixture", enabled_groups: ["5"], moderation: {}, revision: "1",
+        reply_private: true, ai_routes: { admin_provider_id: "old-private" },
+        proactive_send: { enabled: true, targets: ["5", "private/42"] },
+        developer_test: { scopes: ["private_commands", "private_ai", "group_rules"] },
+      }],
+    };
+  });
+  assert.deepEqual([...state.form.proactive_send.targets], ["5"]);
+  assert.deepEqual([...state.form.developer_test.scopes], ["group_rules"]);
+  assert.equal("reply_private" in state.form, false);
+  assert.equal("admin_provider_id" in state.form, false);
 });

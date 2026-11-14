@@ -102,6 +102,22 @@ test("initialization and refresh only read, retaining absent members and unknown
   assert.equal(state().durationUnit, 1440);
 });
 
+test("current mute evidence stays separate from the unknown original receipt", async t => {
+  const current = {
+    ...entry, error: "business_rejected", provider_code: -1,
+    current_state: { membership: "present", mute: "muted", checked_at: 1794326023 },
+  };
+  const { state, calls } = mount(t, () => ({
+    version: 1, members: [current], mute_minutes: 41760,
+  }));
+  await flush();
+  assert.equal(state().members[0].status, "unknown");
+  assert.equal(state().members[0].current_state.mute, "muted");
+  assert.equal(state().reasons.business_rejected, "平台返回异常，不能据此认定成员已退群");
+  assert.match(descriptor.template.content, /当前状态不证明原请求成功或原禁言时长；未重复处罚/);
+  assert.deepEqual(calls.map(call => call.operation), ["read"]);
+});
+
 for (const [savedMinutes, unit, value] of [[41760, 1440, 29], [120, 60, 2], [61, 1, 61], [1, 1, 1]]) {
   test(`read displays the server duration ${savedMinutes} without changing it`, async t => {
     const { state, calls } = mount(t, p => p.operation === "read"

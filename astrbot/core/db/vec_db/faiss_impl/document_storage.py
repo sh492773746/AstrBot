@@ -92,11 +92,24 @@ class DocumentStorage:
             except BaseException:
                 pass
 
-            await conn.execute(
-                text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_doc_id_unique ON documents(doc_id)",
-                ),
-            )
+            indexes = (await conn.execute(text("PRAGMA index_list(documents)"))).all()
+            has_unique_doc_id = False
+            for index in indexes:
+                if not index[2] or index[4]:
+                    continue
+                quoted = index[1].replace('"', '""')
+                columns = (
+                    await conn.execute(text(f'PRAGMA index_info("{quoted}")'))
+                ).all()
+                if len(columns) == 1 and columns[0][2] == "doc_id":
+                    has_unique_doc_id = True
+                    break
+            if not has_unique_doc_id:
+                await conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_doc_id_unique ON documents(doc_id)",
+                    ),
+                )
 
             await self._initialize_fts5(conn)
             await conn.commit()

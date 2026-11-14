@@ -37,23 +37,6 @@ class CashbackRuntime:
                 pass
             return "返现记录暂时查询不了，请稍后再试。"
 
-    async def private_invitation_reply(self, event):
-        service = getattr(self, "service", None)
-        if service is None:
-            return "邀请返现查询暂不可用，请稍后再试。"
-        try:
-            return await service.private_queries.read(event)
-        except Exception as exc:
-            from .observability import record_event
-
-            record_event(
-                event,
-                "private_invitation_query",
-                "rejected",
-                error=type(exc).__name__,
-            )
-            return "邀请返现查询暂不可用，请稍后再试。"
-
     async def start(self):
         from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 

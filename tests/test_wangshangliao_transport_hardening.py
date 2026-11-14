@@ -33,8 +33,8 @@ from astrbot.core.platform.sources.wangshangliao.progression_store import (
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def offline(monkeypatch, tmp_path):
+@pytest.fixture(autouse=True)
+def offline(monkeypatch, tmp_path):
     def forbidden(*args, **kwargs):
         raise AssertionError("real_network_forbidden")
 
@@ -136,7 +136,7 @@ class Response:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "route", ["/v1/group/get-group-list", "/v1/friend/friend-apply-list"]
+    "route", ["/v1/group/get-group-list", "/v1/group/get-group-members"]
 )
 @pytest.mark.parametrize(
     "envelope,expected,number",
@@ -209,6 +209,84 @@ async def test_secondary_security_codes_follow_typed_official_enum_not_message(
     assert "未设置" not in str(raised.value) and "secret" not in str(raised.value)
     assert client.jwt == "synthetic-offline-fixture" and client.mac == b"m" * 16
     assert not client.lock.locked()
+    post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_retired_friend_route_is_rejected_before_io():
+    post = Mock(side_effect=AssertionError("retired route must not send"))
+    with pytest.raises(BusinessError, match="unsupported_route"):
+        await http_client(post).request("/v1/friend/friend-apply-list", {})
+    post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_http_timeout_has_distinct_safe_reason_and_submission_evidence():
+    client = http_client(Mock(side_effect=TimeoutError("secret endpoint")))
+    with pytest.raises(BusinessError, match="transport_timeout") as raised:
+        await client.request("/v1/group/set-member-mute", {})
+    assert raised.value.submitted is True
+    assert not raised.value.provider_rejected
+    assert "secret" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route,code,rejected,reason",
+    [
+        ("/v1/group/set-member-mute", 1021, True, "member_mute_rejected"),
+        ("/v1/group/get-group-members", 1021, False, "business_rejected"),
+        ("/v1/group/set-member-mute", -1, False, "business_rejected"),
+    ],
+)
+async def test_member_mute_refusal_is_route_scoped_and_sanitized(
+    route, code, rejected, reason
+):
+    class Refusal(Response):
+        async def iter_chunked(self, size):
+            yield json.dumps({"code": code, "msg": "secret provider body"}).encode()
+
+    post = Mock(return_value=Refusal())
+    with pytest.raises(BusinessError) as raised:
+        await http_client(post).request(route, {})
+    assert str(raised.value) == reason
+    assert raised.value.number == code
+    assert raised.value.submitted is True
+    assert raised.value.provider_rejected is rejected
+    post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_member_mute_refusal_is_persisted_and_never_replayed():
+    class Refusal(Response):
+        async def iter_chunked(self, size):
+            yield b'{"code":1021,"msg":"secret provider body"}'
+
+    post = Mock(return_value=Refusal())
+    client = http_client(post)
+    native_request = client.request
+
+    async def request(route, params, **kwargs):
+        if route == "/v1/group/get-group-list":
+            return {"owner": [{"groupId": 5, "me": {"role": "GROUP_ROLE_ADMIN"}}]}
+        if route == "/v1/group/get-group-members":
+            return {
+                "groupMemberInfo": [
+                    {"userId": 2, "nimId": 22, "groupRole": "GROUP_ROLE_MEMBER"}
+                ]
+            }
+        return await native_request(route, params, **kwargs)
+
+    client.request = request
+    result = await moderation.execute(client, "fixture", "1", "refused", "mute", 5, 2)
+    assert result["status"] == "rejected" and result["submitted"] is True
+    assert result["provider_code"] == 1021
+    assert result["error"] == "member_mute_rejected"
+    assert "secret" not in json.dumps(result)
+    assert (
+        await moderation.execute(client, "fixture", "1", "refused", "mute", 5, 2)
+        == result
+    )
     post.assert_called_once()
 
 
@@ -339,7 +417,6 @@ async def test_segments_bound_complete_serialized_application(bot, monkeypatch, 
         text += "x" * 5000
     if kind == "private":
         target = "private/2/MjI"
-        await bot.ledger.ingest("1", target, "inbound", {"sender": "2"})
     messages = []
     seal = wire.seal_message
 
@@ -348,6 +425,19 @@ async def test_segments_bound_complete_serialized_application(bot, monkeypatch, 
         return seal(key, inner, *args)
 
     monkeypatch.setattr(wire, "seal_message", capture)
+    if kind == "private":
+        for _ in range(2):
+            with pytest.raises(wire.ProtocolError, match="private_messages_retired"):
+                await bot.send_reply_text(
+                    target, "long-result", text, mentions=mentions
+                )
+        assert messages == []
+        bot.nim.request.assert_not_awaited()
+        assert await bot.ledger.receipt("long-result") is None
+        assert await bot.ledger.receipt("long-result/part/0") is None
+        async with bot.ledger.db.execute("SELECT COUNT(*) FROM inbox") as cursor:
+            assert (await cursor.fetchone())[0] == 0
+        return
     assert (
         await bot.send_reply_text(target, "long-result", text, mentions=mentions)
         == "accepted"
@@ -372,6 +462,48 @@ async def test_segments_bound_complete_serialized_application(bot, monkeypatch, 
         == "accepted"
     )
     assert bot.nim.request.await_count == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["send_text", "send_reply_text"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_private_send_rejects_before_lock_authorization_or_persistence(
+    bot, monkeypatch, method, asynchronous
+):
+    guard = (AsyncMock if asynchronous else Mock)(
+        side_effect=AssertionError("private_authorization_must_not_run")
+    )
+    seal = Mock(side_effect=AssertionError("private_encoding_must_not_run"))
+    monkeypatch.setattr(wire, "seal_message", seal)
+    bot.quote_message = AsyncMock(
+        side_effect=AssertionError("private_quote_must_not_run")
+    )
+    bot.send_lock = BlockingLock()
+    await bot.send_lock.lock.acquire()
+    changes = bot.ledger.db.total_changes
+    try:
+        with pytest.raises(wire.ProtocolError, match="private_messages_retired"):
+            await asyncio.wait_for(
+                getattr(bot, method)(
+                    "private/2/MjI",
+                    "retired-send",
+                    "x" * 9000,
+                    authorize=guard,
+                    proactive=True,
+                    auto_recall=True,
+                    reply_to="123",
+                ),
+                1,
+            )
+        assert not bot.send_lock.waiting.is_set()
+        guard.assert_not_called()
+        seal.assert_not_called()
+        bot.quote_message.assert_not_awaited()
+        bot.nim.request.assert_not_awaited()
+        assert bot.ledger.db.total_changes == changes
+        assert await bot.ledger.receipt("retired-send") is None
+    finally:
+        bot.send_lock.lock.release()
 
 
 @pytest.mark.asyncio
@@ -421,6 +553,8 @@ async def test_accepted_moderation_is_not_downgraded_by_failed_readback(pre_io):
     )
     assert receipt["status"] == "accepted"
     assert receipt["submitted"] is True
+    assert receipt["error_phase"] == "readback"
+    assert receipt["error"] == ("reauth_required" if pre_io else "transport_timeout")
     assert (
         await moderation.execute(
             client, "fixture", "1", "notice-readback", "announce", 5, text="notice"

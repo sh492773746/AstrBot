@@ -21,6 +21,15 @@ from astrbot.core.platform.sources.wangshangliao.storage import instance_dir
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
 
 from .activity_store import database
+from .lottery_rules import (
+    DEFAULT_ENTRY_PHRASE,
+    PACKET_LABELS,
+    packet_plan,
+    validate_entry_phrase,
+    validate_luckiest_bonus,
+    validate_reserved_members,
+)
+from .lottery_time import START_GRACE_SECONDS, beijing_time, parse_start_at
 from .observability import record
 from .policy import require_group_admin
 
@@ -36,6 +45,7 @@ ADMIN_COMMANDS = {
     "抽奖奖励",
     "中奖人数",
     "抽奖倒计时",
+    "抽奖开始时间",
     "参与上限",
     "抽奖邀请门槛",
     "领奖联系人",
@@ -95,6 +105,45 @@ class GroupActivities:
         self.context = context
         self.locks = {}
         self.cashback = None
+        self.entry_phrases = {}
+
+    async def entry_command(self, event):
+        """Resolve a frozen group entry phrase using a bounded, short-lived cache.
+
+        Args:
+            event: Authenticated group event before command dispatch.
+
+        Returns:
+            The canonical participation command or an empty string.
+        """
+        if event.is_private_chat():
+            return ""
+        text = getattr(event, "message_str", "").strip()
+        if not text or len(text) > 33:
+            return ""
+        adapter, group = event.platform, event.get_group_id()
+        key = (adapter.config["id"], adapter.account, group)
+        cached = self.entry_phrases.get(key)
+        now = time.monotonic()
+        if cached is None or cached[0] < now:
+            path = instance_dir(adapter.config["id"]) / "activities.sqlite3"
+            if not path.is_file():
+                return ""
+            async with AsyncDatabase(
+                lambda: database(adapter), guard=account_guard(adapter)
+            ) as db:
+                row = await db.fetchone(
+                    "SELECT entry_phrase FROM lotteries WHERE account=? AND group_id=? "
+                    "AND status='open' ORDER BY created DESC LIMIT 1",
+                    (adapter.account, group),
+                )
+            phrase = row["entry_phrase"] if row else ""
+            if len(self.entry_phrases) >= 256:
+                self.entry_phrases.pop(next(iter(self.entry_phrases)))
+            self.entry_phrases[key] = (now + 30, phrase)
+        else:
+            phrase = cached[1]
+        return "参加抽奖" if text == phrase else ""
 
     @staticmethod
     def invitation_tracking_notice(rule):
@@ -349,6 +398,7 @@ class GroupActivities:
                 "领奖联系人",
                 "中奖人数",
                 "抽奖倒计时",
+                "抽奖开始时间",
                 "参与上限",
                 "抽奖邀请门槛",
             }:
@@ -359,7 +409,14 @@ class GroupActivities:
                     "参与上限": ("capacity", 0, 10000),
                     "抽奖邀请门槛": ("invite_gate", 0, 10000),
                 }
-                if action in text_fields:
+                if action == "抽奖开始时间":
+                    value = "" if argument == "立即" else argument.replace(" ", "T")
+                    try:
+                        parse_start_at(value, future=True)
+                    except ValueError as exc:
+                        return str(exc)
+                    field = "start_at"
+                elif action in text_fields:
                     value = clean(argument)
                     if not value or value != argument or len(value.encode()) > 512:
                         return "奖品和联系人须为1至128字的单行文字。"
@@ -377,7 +434,7 @@ class GroupActivities:
                 ) as db:
                     if await db.fetchone(
                         "SELECT 1 FROM lotteries WHERE account=? AND group_id=? "
-                        "AND status IN ('announcing','open','blocked','drawing')",
+                        "AND status IN ('scheduled','schedule_blocked','announcing','open','blocked','drawing')",
                         (adapter.account, group),
                     ):
                         return "活动已开启，请先结束或取消；不会修改正在进行的抽奖。"
@@ -409,16 +466,28 @@ class GroupActivities:
                 ) as db:
                     row = await db.fetchone(
                         "SELECT * FROM lotteries WHERE account=? AND group_id=? "
-                        "AND status IN ('announcing','open','blocked','drawing') "
+                        "AND status IN ('scheduled','schedule_blocked','announcing','open','blocked','drawing') "
                         "ORDER BY created DESC LIMIT 1",
                         (adapter.account, group),
                     )
                 if not row:
                     return "没有进行中的抽奖。"
                 if action == "立即开奖":
+                    if row["status"] in {"scheduled", "schedule_blocked"}:
+                        return "本期尚未发布，不能提前开奖；可取消后重新设置开始时间。"
                     if row["status"] not in {"open", "blocked"}:
                         return "通知或开奖结果尚不明确，请查“抽奖状态”，不会重复开奖。"
-                    if row["packet_mode"] != "prize" and time.time() < row["ends"]:
+                    if row["draw_on_full"]:
+                        async with AsyncDatabase(
+                            lambda: database(adapter), guard=db_guard
+                        ) as db:
+                            entries = await db.fetchone(
+                                "SELECT COUNT(*) FROM lottery_entries WHERE lottery=?",
+                                (row["id"],),
+                            )
+                        if entries[0] < row["capacity"]:
+                            return "本期须报满设定人数后开奖，不提前公布。"
+                    elif row["packet_mode"] != "prize" and time.time() < row["ends"]:
                         return "红包抽奖须到设定时间统一公布结果；满员也不提前开奖。"
                     self.authorize(
                         adapter,
@@ -457,6 +526,8 @@ class GroupActivities:
                             (row["id"],),
                         )
                     )
+                if row["status"] in {"scheduled", "schedule_blocked"}:
+                    return "已取消定时抽奖，未向群内发送活动。"
                 try:
                     self.authorize(adapter, group, posting=True)
                     await adapter.send_reply_text(
@@ -468,6 +539,11 @@ class GroupActivities:
                             "\n仅记录未支出，不代表已发生真实扣款或退款。"
                             if row["packet_mode"] != "prize"
                             and row["packet_amounts"] != "[]"
+                            else ""
+                        )
+                        + (
+                            f"\n人气王额外奖励未支出：{Decimal(row['luckiest_bonus']) / 100:.2f} 元。"
+                            if row["luckiest_bonus"]
                             else ""
                         ),
                         proactive=True,
@@ -551,7 +627,7 @@ class GroupActivities:
                 )
             money = (
                 f"\n总金额：{Decimal(settings['total_amount']) / 100:.2f} 元"
-                f"\n红包类型：{'拼手气' if settings['packet_mode'] == 'lucky' else '普通红包'}"
+                f"\n红包类型：{PACKET_LABELS.get(settings['packet_mode'], settings['packet_mode'])}"
                 if settings["packet_mode"] != "prize"
                 else ""
             )
@@ -562,6 +638,18 @@ class GroupActivities:
                 f"参与上限：{settings['capacity'] or '不限'}\n"
                 f"邀请门槛：{settings['invite_gate']} 人\n"
                 f"领奖联系人：{settings['contact'] or '未设置'}"
+                f"\n报名口令：{settings['entry_phrase']}"
+                + (
+                    f"\n人气王额外奖励：{Decimal(settings['luckiest_bonus']) / 100:.2f} 元"
+                    "（红包最高者；并列随机选1人，不占原奖池）"
+                    if settings["luckiest_bonus"]
+                    else ""
+                )
+                + (
+                    f"\n开始时间：{settings['start_at'].replace('T', ' ')}（北京时间）"
+                    if settings["start_at"]
+                    else "\n开始时间：立即发送"
+                )
                 + (
                     f"\n活动备注：\n{clean(settings['remarks'], 500, multiline=True)}"
                     if settings["remarks"]
@@ -790,6 +878,8 @@ class GroupActivities:
         if action == "抽奖状态":
             now = time.time()
             labels = {
+                "scheduled": "待定时发布，尚未开放报名",
+                "schedule_blocked": "定时发布已阻止，请取消后重新核对权限和开始时间，不自动补发",
                 "announcing": "发布通知中",
                 "open": "报名中",
                 "blocked": "暂停，待管理员检查",
@@ -800,13 +890,37 @@ class GroupActivities:
                 "cancelled": "已取消",
             }
             label = labels.get(row["status"], row["status"])
-            if row["status"] == "open" and now >= row["ends"]:
+            if (
+                row["status"] == "open"
+                and not row["draw_on_full"]
+                and now >= row["ends"]
+            ):
                 label = "报名已截止，等待开奖"
             return (
                 f"第{row['number']}期抽奖\n抽奖状态：{label}\n奖品：{row['prize']}\n"
                 f"中奖名额：{row['winners']} 人\n已报名：{count} 人\n"
-                f"剩余：{max(0, int(row['ends'] - now))} 秒\n"
-                f"领奖联系人：{row['contact']}"
+                + (
+                    f"距离发布：{max(0, int(row['starts'] - now))} 秒\n"
+                    if row["status"] == "scheduled"
+                    else "定时发布未执行，尚无开奖倒计时。\n"
+                    if row["status"] == "schedule_blocked"
+                    else f"开奖条件：报满{row['capacity']}人后公布，无倒计时。\n"
+                    if row["draw_on_full"]
+                    else f"剩余：{max(0, int(row['ends'] - now))} 秒\n"
+                )
+                + f"领奖联系人：{row['contact']}"
+                f"\n报名口令：{row['entry_phrase']}"
+                + (
+                    f"\n人气王额外奖励：{Decimal(row['luckiest_bonus']) / 100:.2f} 元"
+                    "（红包最高者；并列随机选1人，不占原奖池）"
+                    if row["luckiest_bonus"]
+                    else ""
+                )
+                + (
+                    f"\n开始时间：{beijing_time(row['starts'])}"
+                    if row["starts"]
+                    else ""
+                )
                 + (
                     f"\n活动备注：\n{clean(row['remarks'], 500, multiline=True)}"
                     if row["remarks"]
@@ -821,8 +935,20 @@ class GroupActivities:
                     else ""
                 )
             )
-        if row["status"] != "open" or time.time() >= row["ends"]:
+        if (
+            row["status"] != "open"
+            or not row["draw_on_full"]
+            and time.time() >= row["ends"]
+        ):
             return "当前没有开放报名的抽奖。"
+        phrase = row["entry_phrase"]
+        entered = getattr(event, "message_str", DEFAULT_ENTRY_PHRASE).strip()
+        if entered != phrase and not (
+            phrase == DEFAULT_ENTRY_PHRASE
+            and entered
+            in {"参加抽奖", "/参加抽奖", "参与抽奖", "/" + DEFAULT_ENTRY_PHRASE}
+        ):
+            return f"本期请在群内发送“{phrase}”报名。"
         if uid == adapter.account or is_managed_account(uid) and not test_entrant:
             return "机器人账号不参与抽奖。"
         if test_entrant:
@@ -834,7 +960,8 @@ class GroupActivities:
             type(stamp) not in (int, float)
             or not row["created"] <= stamp / 1000 <= time.time() + 5
             or time.time() - stamp / 1000 > 300
-            or stamp / 1000 >= row["ends"]
+            or not row["draw_on_full"]
+            and stamp / 1000 >= row["ends"]
         ):
             return "报名消息已过期，请在活动期间重新发送“参加抽奖”。"
         members = await self.roster(adapter, group)
@@ -845,13 +972,39 @@ class GroupActivities:
             raise ProtocolError("lottery_test_member_role")
         if test_entrant and str(member["nimId"]) != str(test_window.sender.nim_account):
             raise ProtocolError("lottery_test_member_identity")
+        identities = {
+            str(value)
+            for value in (uid, member.get("nimId"), member.get("accountId"))
+            if value is not None
+        }
+        display_name = ""
+        for candidate in (
+            member.get("groupMemberNick") or "",
+            member.get("userNick") or "",
+            member.get("nickname") or "",
+            member.get("name") or "",
+            event.get_sender_name(),
+        ):
+            if not isinstance(candidate, str):
+                continue
+            candidate = clean(candidate, 48)
+            normalized = unicodedata.normalize("NFKC", candidate)
+            if normalized.isdecimal():
+                normalized = str(int(normalized))
+            if candidate and normalized not in identities:
+                display_name = candidate
+                break
         async with AsyncDatabase(
             lambda: database(adapter), write=True, guard=db_guard
         ) as db:
             current = await db.fetchone(
                 "SELECT status,ends FROM lotteries WHERE id=?", (row["id"],)
             )
-            if current["status"] != "open" or time.time() >= current["ends"]:
+            if (
+                current["status"] != "open"
+                or not row["draw_on_full"]
+                and time.time() >= current["ends"]
+            ):
                 return "报名已截止。"
             if await db.fetchone(
                 "SELECT 1 FROM lottery_entries WHERE lottery=? AND member=?",
@@ -881,7 +1034,12 @@ class GroupActivities:
                     ),
                 )
             )
-        return "参加抽奖成功。"
+        event.set_extra("wsl_lottery_entry_result", True)
+        return (
+            self.announcement_text(row, ends=row["ends"])
+            + f"\n\n已参与人数：{count + 1}"
+            + f"\n{display_name + '，' if display_name else ''}参加抽奖成功。"
+        )
 
     async def start(self, event, group, *, test_window=None):
         """Snapshot settings and announce one newly opened lottery.
@@ -894,21 +1052,62 @@ class GroupActivities:
         Returns:
             Creation or once-only announcement status.
         """
-        adapter = event.platform
+        return await self._start(
+            event.platform,
+            group,
+            event.get_sender_id(),
+            event.unified_msg_origin,
+            clean(event.get_sender_name()),
+            str(event.message_obj.message_id),
+            test_window=test_window,
+        )
+
+    async def _start(
+        self,
+        adapter,
+        group,
+        owner,
+        session,
+        owner_name,
+        operation_id,
+        *,
+        test_window=None,
+        control_actor="",
+        precondition=None,
+    ):
+        """Freeze a native or authenticated dashboard request without fabricating messages.
+
+        Args:
+            adapter: Exact online account.
+            group: Authorized business group.
+            owner: Verified responsible native manager.
+            session: Native conversation or explicit dashboard actor.
+            owner_name: Verified manager name.
+            operation_id: Native message ID or bounded dashboard request ID.
+            test_window: Original controlled fixture, if applicable.
+            control_actor: Explicit dashboard audit actor, empty for native commands.
+            precondition: Revalidate dashboard authority and frozen draft revision.
+
+        Returns:
+            Creation or once-only publication status.
+        """
         identifier = ""
         self.authorize(adapter, group, posting=True, test_window=test_window)
-        db_guard = account_guard(
-            adapter,
-            lambda: self.authorize(
+
+        def authorize():
+            if precondition is not None:
+                precondition()
+            self.authorize(
                 adapter,
                 group,
-                event.get_sender_id() if self.context else "",
-                event.unified_msg_origin,
+                owner if self.context else "",
+                session,
                 posting=True,
                 test_window=test_window,
                 test_lottery=identifier,
-            ),
-        )
+            )
+
+        db_guard = account_guard(adapter, authorize)
         if test_window is not None:
             members = await self.roster(adapter, group)
             db_guard()
@@ -917,7 +1116,7 @@ class GroupActivities:
                 or members["31846829"].get("groupRole") != "GROUP_ROLE_OWNER"
                 or members["43506527"].get("groupRole") != "GROUP_ROLE_ADMIN"
                 or members["23691273"].get("groupRole") != "GROUP_ROLE_MEMBER"
-                or str(event.get_sender_id()) != "31846829"
+                or str(owner) != "31846829"
                 or str(members["43506527"]["nimId"]) != str(adapter.nim_account)
                 or str(members["23691273"]["nimId"])
                 != str(test_window.sender.nim_account)
@@ -928,7 +1127,11 @@ class GroupActivities:
             ):
                 raise ProtocolError("lottery_test_roster")
         command = hashlib.sha256(
-            f"{adapter.account}/{event.unified_msg_origin}/{event.message_obj.message_id}".encode()
+            (
+                f"{adapter.account}/{session}/{operation_id}"
+                if not control_actor
+                else f"{adapter.account}/{group}/{control_actor}/{operation_id}"
+            ).encode()
         ).hexdigest()
         async with AsyncDatabase(
             lambda: database(adapter), write=True, guard=db_guard
@@ -943,41 +1146,58 @@ class GroupActivities:
                 (adapter.account, group),
             )
             if not settings or not settings["prize"] or not settings["contact"]:
-                return "请先私聊设置“抽奖奖励 奖品名称”和“领奖联系人 联系方式”。"
-            if settings["packet_mode"] != "prize" and (
-                settings["packet_mode"] not in {"ordinary", "lucky"}
+                return (
+                    "请先在网页填写并保存活动名称和领奖联系人。"
+                    if control_actor
+                    else "请先私聊设置“抽奖奖励 奖品名称”和“领奖联系人 联系方式”。"
+                )
+            try:
+                phrase = validate_entry_phrase(settings["entry_phrase"])
+                starts = parse_start_at(settings["start_at"], future=True)
+                validate_luckiest_bonus(
+                    settings["luckiest_bonus"], settings["packet_mode"]
+                )
+                if settings["integer_packets"] and settings["luckiest_bonus"] % 100:
+                    raise ValueError("整数元红包的额外奖励也须为整元")
+                if starts and test_window is not None:
+                    return "受控短时验收不创建跨窗口定时抽奖。"
+                tiers = json.loads(settings["prize_tiers"])
+                reserved_members = json.loads(settings["reserved_members"])
+                validate_reserved_members(reserved_members, tiers)
+                if reserved_members and settings["packet_mode"] != "tiered":
+                    raise ValueError("指定档位成员仅支持分档拼手气")
+                amounts = (
+                    packet_plan(
+                        settings["total_amount"],
+                        settings["capacity"],
+                        settings["packet_mode"],
+                        tiers,
+                        integer_packets=bool(settings["integer_packets"]),
+                    )
+                    if settings["packet_mode"] != "prize"
+                    else []
+                )
+            except (ValueError, TypeError) as exc:
+                return f"请先在后台检查报名口令、红包金额、份数、固定档位、额外奖励及开始时间：{exc}"
+            if settings["draw_on_full"] and (
+                settings["packet_mode"] == "prize"
                 or not 1 <= settings["capacity"] <= 100
-                or not settings["capacity"] <= settings["total_amount"] <= 99999999
             ):
-                return "请先在后台设置红包总金额和1至100位参加人数，每人至少0.01元。"
+                return "满员开奖仅支持1至100份的红包活动。"
             if test_window is not None and not settings["prize"].startswith(
                 "WSL_TEST_"
             ):
                 raise ProtocolError("lottery_test_prize")
             if await db.fetchone(
                 "SELECT 1 FROM lotteries WHERE account=? AND group_id=? AND status "
-                "IN ('announcing','open','blocked','drawing')",
+                "IN ('scheduled','schedule_blocked','announcing','open','blocked','drawing',"
+                "'notice_unknown','result_unknown')",
                 (adapter.account, group),
             ):
                 return "已有进行中的抽奖，请先结束或取消。"
             if settings["capacity"] and settings["winners"] > settings["capacity"]:
                 return "中奖人数不能大于参与上限；参与上限0表示不限。"
             identifier = uuid.uuid4().hex
-            amounts = []
-            if settings["packet_mode"] != "prize":
-                total, count = settings["total_amount"], settings["capacity"]
-                if settings["packet_mode"] == "ordinary":
-                    share, remainder = divmod(total, count)
-                    amounts = [share + (index < remainder) for index in range(count)]
-                else:
-                    cuts = [
-                        0,
-                        *sorted(
-                            secrets.SystemRandom().sample(range(1, total), count - 1)
-                        ),
-                        total,
-                    ]
-                    amounts = [right - left for left, right in zip(cuts, cuts[1:])]
             if test_window is not None:
                 adapter._lottery_test_fixture = (identifier, test_window)
             elif group == "1459282":
@@ -986,62 +1206,167 @@ class GroupActivities:
                 await db.execute(
                     "INSERT INTO lotteries(id,command,account,group_id,owner,session,owner_name,"
                     "prize,winners,duration,capacity,invite_gate,contact,status,ends,created,"
-                    "total_amount,packet_mode,by_invites,remarks,packet_amounts)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'announcing',?,?,?,?,?,?,?)",
+                    "total_amount,packet_mode,by_invites,remarks,packet_amounts,entry_phrase,prize_tiers,"
+                    "reserved_members,start_at,starts,luckiest_bonus,integer_packets,draw_on_full,control_actor)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         identifier,
                         command,
                         adapter.account,
                         group,
-                        event.get_sender_id(),
-                        event.unified_msg_origin,
-                        clean(event.get_sender_name()),
+                        owner,
+                        session,
+                        owner_name,
                         settings["prize"],
                         settings["winners"],
                         settings["duration"],
                         settings["capacity"],
                         settings["invite_gate"],
                         settings["contact"],
-                        time.time() + settings["duration"],
+                        "scheduled" if starts else "announcing",
+                        0
+                        if settings["draw_on_full"]
+                        else (starts or time.time()) + settings["duration"],
                         time.time(),
                         settings["total_amount"],
                         settings["packet_mode"],
                         settings["by_invites"],
                         settings["remarks"],
                         json.dumps(amounts),
+                        phrase,
+                        settings["prize_tiers"],
+                        settings["reserved_members"],
+                        settings["start_at"],
+                        starts,
+                        settings["luckiest_bonus"],
+                        settings["integer_packets"],
+                        settings["draw_on_full"],
+                        control_actor,
                     ),
                 )
             )
+        if starts:
+            return (
+                f"已预约抽奖：{settings['prize']}，{beijing_time(starts)}发布并开放报名，"
+                + (
+                    f"报满{settings['capacity']}人后公布，无倒计时。"
+                    if settings["draw_on_full"]
+                    else f"发布成功后{settings['duration'] // 60}分钟统一开奖。"
+                )
+                + "到时重新核对权限；尚未发布，不接受报名。"
+            )
+        async with AsyncDatabase(lambda: database(adapter), guard=db_guard) as db:
+            row = await db.fetchone("SELECT * FROM lotteries WHERE id=?", (identifier,))
+        return await self.announce(
+            adapter, row, test_window=test_window, precondition=precondition
+        )
+
+    @staticmethod
+    def announcement_text(settings, *, ends):
+        """Render frozen public activity terms without participant identities.
+
+        Args:
+            settings: Frozen lottery row, never a mutable next-activity draft.
+            ends: Exact public draw time; ignored for full-capacity draws.
+
+        Returns:
+            Plain activity text shared by publication and successful entry replies.
+        """
+        phrase = settings["entry_phrase"]
+        tiers = json.loads(settings["prize_tiers"])
         packet = (
-            f"总金额：{Decimal(settings['total_amount']) / 100:.2f} 元\n"
-            f"红包类型：{'拼手气' if settings['packet_mode'] == 'lucky' else '普通红包'}\n"
-            f"红包份数：{settings['capacity']} 份；到期未领取的金额退回（未支出），不重新分摊。\n"
-            "到设定时间统一公布结果，满员也不提前开奖。\n"
+            f"{PACKET_LABELS[settings['packet_mode']]}红包："
+            + (
+                f"{settings['total_amount'] // 100}元"
+                if settings["integer_packets"]
+                else f"{Decimal(settings['total_amount']) / 100:.2f}元"
+            )
+            + f"｜{settings['capacity']}份"
+            + ("｜每份整数元" if settings["integer_packets"] else "")
+            + "\n"
             if settings["packet_mode"] != "prize"
-            else ""
+            else f"中奖名额：{settings['winners']}人\n"
         )
         gate = (
             f"有效邀请门槛：{settings['invite_gate']} 人\n"
             if settings["by_invites"]
             else ""
         )
-        text = (
-            f"🎉 抽奖开始！\n奖品：{settings['prize']}\n中奖名额：{settings['winners']} 人\n"
+        return (
+            f"🎉 {settings['prize']}\n"
             + packet
             + (
-                f"倒计时：{settings['duration'] // 60} 分钟\n"
-                f"参与上限：{settings['capacity'] or '不限'} 人\n"
+                "人气王额外奖励："
+                + (
+                    f"{settings['luckiest_bonus'] // 100}元"
+                    if settings["integer_packets"]
+                    else f"{Decimal(settings['luckiest_bonus']) / 100:.2f} 元"
+                )
+                + "（最高红包者；最高金额并列时随机选1人，不占原奖池）。\n"
+                + f"总预算：{Decimal(settings['total_amount'] + settings['luckiest_bonus']) / 100:.2f} 元。\n"
+                if settings["luckiest_bonus"]
+                else ""
+            )
+            + (
+                f"开奖：报满{settings['capacity']}人后公布。\n"
+                if settings["draw_on_full"]
+                else f"开奖：{beijing_time(ends)}，满员也不提前开奖。\n"
             )
             + gate
-            + "群内发送“参与玩家福利抽奖”即可报名。\n"
+            + f"群内发送“{phrase}”即可报名。\n"
+            + (
+                "固定金额："
+                + "、".join(
+                    f"{tier['count']}份×{Decimal(tier['amount']) / 100:.2f}元"
+                    for tier in tiers
+                )
+                + "；其余份额随机分配，固定份额也可能未领取。\n"
+                if settings["packet_mode"] == "tiered"
+                else ""
+            )
             + (f"领奖联系人：{settings['contact']}")
             + (
                 f"\n活动备注：\n{clean(settings['remarks'], 500, multiline=True)}"
-                "\n备注要求由管理员核验，机器人不自动审核头像或昵称。"
                 if settings["remarks"]
                 else ""
             )
+            + (
+                "\n未领取金额退回（未支出），不重新分摊。"
+                if settings["packet_mode"] != "prize" and not settings["draw_on_full"]
+                else ""
+            )
         )
+
+    async def announce(self, adapter, settings, *, test_window=None, precondition=None):
+        """Publish one durably claimed announcement without retrying unknowns.
+
+        Args:
+            adapter: Current account and group authorization context.
+            settings: Frozen lottery row already in announcing state.
+            test_window: Optional original immediate controlled-test window.
+            precondition: Optional dashboard authority recheck before publication.
+
+        Returns:
+            A human-readable publication outcome.
+        """
+        group, identifier = settings["group_id"], settings["id"]
+        amounts = json.loads(settings["packet_amounts"])
+
+        def authorize():
+            if precondition is not None:
+                precondition()
+            self.authorize(
+                adapter,
+                group,
+                settings["owner"] if self.context else "",
+                settings["session"],
+                posting=True,
+                test_window=test_window,
+                test_lottery=identifier,
+            )
+
+        db_guard = account_guard(adapter, authorize)
+        text = self.announcement_text(settings, ends=time.time() + settings["duration"])
         status = "unknown"
         try:
             db_guard()
@@ -1061,7 +1386,9 @@ class GroupActivities:
                     (
                         "open" if status == "accepted" else "notice_unknown",
                         "" if status == "accepted" else status,
-                        time.time() + settings["duration"],
+                        0
+                        if settings["draw_on_full"]
+                        else time.time() + settings["duration"],
                         settings["total_amount"]
                         if amounts and status != "accepted"
                         else 0,
@@ -1070,16 +1397,78 @@ class GroupActivities:
                 )
         if not updated:
             return "本期抽奖状态已变化，未重新开启；请查询“抽奖状态”。"
+        self.entry_phrases.pop((adapter.config["id"], adapter.account, group), None)
         return (
             f"抽奖已开启：{settings['prize']}，{settings['winners']} 个名额，"
-            f"{settings['duration'] // 60} 分钟后开奖。群通知已受理；"
-            "发送“抽奖状态”可查询进度。"
+            + (
+                f"报满{settings['capacity']}人后开奖。群通知已受理；"
+                if settings["draw_on_full"]
+                else f"{settings['duration'] // 60} 分钟后开奖。群通知已受理；"
+            )
+            + "发送“抽奖状态”可查询进度。"
             if status == "accepted"
             else "群通知未确认，报名未开启；不会重复发送。"
         )
 
+    async def publish_scheduled(self, adapter, row):
+        """Revalidate and atomically claim one due publication under its group lock.
+
+        Args:
+            adapter: Online account processing scheduled activity work.
+            row: Frozen scheduled lottery from this account's database.
+        """
+        if row["starts"] > time.time():
+            return
+        group = row["group_id"]
+        guard = account_guard(adapter)
+        error = ""
+        try:
+            self.authorize(adapter, group, row["owner"], row["session"], posting=True)
+            if time.time() - row["starts"] > START_GRACE_SECONDS:
+                raise ProtocolError("scheduled_start_missed")
+            members = await self.roster(adapter, group)
+            if members.get(row["owner"], {}).get("groupRole") not in {
+                "GROUP_ROLE_OWNER",
+                "GROUP_ROLE_ADMIN",
+            }:
+                raise ProtocolError("activity_owner_revoked")
+            self.authorize(adapter, group, row["owner"], row["session"], posting=True)
+            if time.time() - row["starts"] > START_GRACE_SECONDS:
+                raise ProtocolError("scheduled_start_missed")
+        except ProtocolError as exc:
+            error = str(exc)
+        except Exception:
+            error = "scheduled_start_verification_failed"
+        async with AsyncDatabase(
+            lambda: database(adapter), write=True, guard=guard
+        ) as db:
+            updated = await db.execute(
+                "UPDATE lotteries SET status=?,error=?,ends=? "
+                "WHERE id=? AND account=? AND status='scheduled'",
+                (
+                    "schedule_blocked" if error else "announcing",
+                    error,
+                    0 if row["draw_on_full"] else time.time() + row["duration"],
+                    row["id"],
+                    adapter.account,
+                ),
+            )
+        if error and updated:
+            record(
+                adapter,
+                "lottery_schedule",
+                "blocked",
+                str(row["id"]),
+                group=group,
+                failed=True,
+                error="operation_failed",
+            )
+        if not updated or error:
+            return
+        await self.announce(adapter, row)
+
     def result_text(self, row, winners):
-        """Render a unified winner list and native mention spans.
+        """Render frozen activity terms, results and native mention spans.
 
         Args:
             row: Frozen lottery record.
@@ -1089,31 +1478,89 @@ class GroupActivities:
             Display text and transport mention spans.
         """
         row = dict(row)
-        if row.get("packet_mode") == "lucky":
+        mode = row.get("packet_mode", "prize")
+        if mode in {"lucky", "tiered"}:
             winners = sorted(winners, key=lambda winner: winner["amount"], reverse=True)
         chance = len(winners) / row["total"] * 100 if row["total"] else 0
-        text = f"🎊 抽奖开奖啦！\n总共参与{row['total']}人，综合中奖率{chance:.2f}%\n\n"
+        lines = [
+            clean(row["prize"]),
+            "活动类型：关键词抽奖"
+            + (f"（{PACKET_LABELS[mode]}）" if mode in PACKET_LABELS else ""),
+            f"参与关键词：{clean(row.get('entry_phrase') or DEFAULT_ENTRY_PHRASE)}",
+        ]
+        starts = row.get("starts") or row.get("created")
+        ends = row.get("ends", 0)
+        if starts is not None:
+            lines.append(f"开始时间：{beijing_time(starts)}")
+        if row.get("draw_on_full"):
+            lines.append(f"开奖条件：报满{row['capacity']}人")
+        elif ends:
+            lines.append(f"定时开奖：{beijing_time(ends)}")
+        lines.extend(["距离结束：已开奖", "奖品列表："])
+        if mode == "tiered":
+            tiers = json.loads(row.get("prize_tiers", "[]"))
+            for tier in sorted(tiers, key=lambda tier: tier["amount"], reverse=True):
+                amount = f"{Decimal(tier['amount']) / 100:.2f}".rstrip("0").rstrip(".")
+                lines.append(f"{amount}元现金红包 × {tier['count']}")
+            remaining = row.get("capacity", 0) - sum(tier["count"] for tier in tiers)
+            if remaining > 0:
+                lines.append(f"随机红包 × {remaining}")
+        elif mode in PACKET_LABELS:
+            amount = f"{Decimal(row.get('total_amount', 0)) / 100:.2f}".rstrip(
+                "0"
+            ).rstrip(".")
+            lines.append(
+                f"{PACKET_LABELS[mode]}：{amount}元，共{row.get('capacity', len(winners))}份"
+            )
+        else:
+            lines.append(f"{clean(row['prize'])} × {row.get('winners', len(winners))}")
+        if row.get("luckiest_bonus"):
+            amount = f"{Decimal(row['luckiest_bonus']) / 100:.2f}".rstrip("0").rstrip(
+                "."
+            )
+            lines.append(f"人气王额外奖励：{amount}元 × 1")
+        lines.extend(
+            [
+                f"已参与人数：{row['total']}",
+                "活动开奖啦！",
+                f"总共参与：{row['total']}，综合中奖率{chance:.2f}%",
+                "恭喜以下用户中奖：" if winners else "暂无中奖用户。",
+            ]
+        )
+        text = "\n".join(lines) + "\n"
         mentions = []
-        for index, winner in enumerate(winners, 1):
-            text += f"{index}. "
-            start = len(text.encode("utf-16-le")) // 2
-            nick = clean(winner["name"]) or winner["uid"]
-            text += f"@{nick} "
-            mentions.append(
-                {
-                    "uid": int(winner["peer"]),
-                    "nick": nick,
-                    "start": start,
-                    "end": len(text.encode("utf-16-le")) // 2,
-                }
-            )
+        for winner in winners:
+            nick = clean(winner.get("name") or "", 48)
+            normalized = unicodedata.normalize("NFKC", nick)
+            if normalized.isdecimal():
+                normalized = str(int(normalized))
+            if nick and normalized not in {str(winner["uid"]), str(winner["peer"])}:
+                start = len(text.encode("utf-16-le")) // 2
+                text += f"@{nick} "
+                mentions.append(
+                    {
+                        "uid": int(winner["peer"]),
+                        "nick": nick,
+                        "start": start,
+                        "end": len(text.encode("utf-16-le")) // 2,
+                    }
+                )
+            else:
+                text += "未获取昵称 "
+            if "amount" in winner:
+                amount = f"{Decimal(winner['amount']) / 100:.2f}".rstrip("0").rstrip(
+                    "."
+                )
             text += (
-                f"获得：{Decimal(winner['amount']) / 100:.2f} 元（待发放）\n"
+                f"获得奖品：{amount}元现金红包\n"
                 if "amount" in winner
-                else f"获得：{row['prize']}\n"
+                else f"获得奖品：{clean(row['prize'])}\n"
             )
-        if not winners:
-            text += "暂无中奖用户。\n"
+            if winner.get("bonus_amount"):
+                text += (
+                    f"   人气王额外奖励：{Decimal(winner['bonus_amount']) / 100:.2f} 元；"
+                    f"合计：{Decimal(winner['amount'] + winner['bonus_amount']) / 100:.2f} 元（待发放）\n"
+                )
         if (
             row.get("packet_mode") != "prize"
             and row.get("packet_amounts", "[]") != "[]"
@@ -1126,9 +1573,19 @@ class GroupActivities:
                 f"退回（未支出）：{Decimal(row['unclaimed_amount']) / 100:.2f} 元\n"
                 "仅为分配与未支出记录，不代表已真实付款或退款。\n"
             )
+        if row.get("luckiest_bonus"):
+            bonus = sum(winner.get("bonus_amount", 0) for winner in winners)
+            allocated = sum(winner.get("amount", 0) for winner in winners)
+            text += (
+                f"\n人气王额外奖励（待发放）：{Decimal(bonus) / 100:.2f} 元\n"
+                f"本期待发放合计（红包＋额外奖励）：{Decimal(allocated + bonus) / 100:.2f} 元\n"
+                f"额外奖励未支出：{Decimal(row['luckiest_bonus'] - bonus) / 100:.2f} 元\n"
+            )
         if row.get("remarks"):
             text += f"\n活动备注：\n{clean(row['remarks'], 500, multiline=True)}\n"
-        text += f"\n抽奖创建者：{row['owner_name'] or row['owner']}\n联系 {row['contact']} 领取奖品。"
+        text += f"\n联系 {clean(row['contact'])} 领取奖品。"
+        if mode in PACKET_LABELS:
+            text += "\n以上红包均待发放，由领奖联系人核实发放。"
         return text, mentions
 
     async def draw(self, adapter, identifier, *, test_window=None):
@@ -1170,8 +1627,21 @@ class GroupActivities:
             lambda: database(adapter), write=False, guard=db_guard
         ) as db:
             row = await db.fetchone("SELECT * FROM lotteries WHERE id=?", (identifier,))
-        if not row or row["status"] != "open" or time.time() < row["ends"]:
+        if (
+            not row
+            or row["status"] != "open"
+            or not row["draw_on_full"]
+            and time.time() < row["ends"]
+        ):
             return "尚未到开奖时间，或已经处理。"
+        if row["draw_on_full"]:
+            async with AsyncDatabase(lambda: database(adapter), guard=db_guard) as db:
+                entered = await db.fetchone(
+                    "SELECT COUNT(*) FROM lottery_entries WHERE lottery=?",
+                    (identifier,),
+                )
+            if entered[0] < row["capacity"]:
+                return "尚未报满，不提前开奖。"
         group = row["group_id"]
         self.authorize(adapter, group, row["owner"], row["session"], posting=True)
         if row["account"] != adapter.account:
@@ -1201,7 +1671,7 @@ class GroupActivities:
             )
             if not current or current["status"] != "open":
                 return "开奖已处理，不重复抽取。"
-            if time.time() < current["ends"]:
+            if not row["draw_on_full"] and time.time() < current["ends"]:
                 return "尚未到开奖时间，或已经处理。"
             entries = await db.fetchall(
                 "SELECT * FROM lottery_entries WHERE lottery=?", (identifier,)
@@ -1228,6 +1698,13 @@ class GroupActivities:
                 )
                 and r["member"] != adapter.account
             ]
+            if row["draw_on_full"] and len(valid) != row["capacity"]:
+                await db.execute(
+                    "UPDATE lotteries SET status='blocked',error='lottery_full_members_changed' "
+                    "WHERE id=? AND status='open'",
+                    (identifier,),
+                )
+                return "满员后成员资格已变化，已暂停开奖，请管理员核对。"
             fixed_packets = row["packet_amounts"] != "[]"
             try:
                 fixed_amounts = json.loads(row["packet_amounts"])
@@ -1245,27 +1722,94 @@ class GroupActivities:
                         for amount in fixed_amounts
                     )
                     or sum(fixed_amounts) != row["total_amount"]
-                    or row["packet_mode"] not in {"ordinary", "lucky"}
+                    or row["packet_mode"] not in PACKET_LABELS
+                    or row["integer_packets"]
+                    and any(amount % 100 for amount in fixed_amounts)
                 )
             ):
                 raise ProtocolError("lottery_amount_invalid")
-            winners = secrets.SystemRandom().sample(
-                valid,
+            if row["packet_mode"] == "tiered":
+                try:
+                    tiers = json.loads(row["prize_tiers"])
+                    reserved_members = json.loads(row["reserved_members"])
+                    packet_plan(
+                        row["total_amount"],
+                        row["capacity"],
+                        row["packet_mode"],
+                        tiers,
+                        generate=False,
+                        integer_packets=bool(row["integer_packets"]),
+                    )
+                    if not fixed_packets or any(
+                        fixed_amounts.count(tier["amount"]) < tier["count"]
+                        for tier in tiers
+                    ):
+                        raise ValueError("missing_fixed_tiers")
+                    validate_reserved_members(reserved_members, tiers)
+                except (ValueError, TypeError):
+                    raise ProtocolError("lottery_amount_invalid") from None
+            else:
+                reserved_members = []
+            try:
+                validate_luckiest_bonus(row["luckiest_bonus"], row["packet_mode"])
+            except ValueError:
+                raise ProtocolError("lottery_bonus_invalid") from None
+            random = secrets.SystemRandom()
+            reserved_winners = []
+            if reserved_members:
+                valid_by_member = {entry["uid"]: entry for entry in valid}
+                missing = [
+                    reserved
+                    for reserved in reserved_members
+                    if reserved["member"] not in valid_by_member
+                    or valid_by_member[reserved["member"]]["peer"] != reserved["peer"]
+                ]
+                if missing:
+                    await db.execute(
+                        "UPDATE lotteries SET status='blocked',"
+                        "error='lottery_reserved_member_unavailable' "
+                        "WHERE id=? AND status='open'",
+                        (identifier,),
+                    )
+                    names = "、".join(
+                        reserved["name"] or reserved["member"]
+                        for reserved in missing[:3]
+                    )
+                    return f"指定成员未有效报名或身份已变化：{names}。已暂停开奖，请管理员核对。"
+                reserved_winners = [
+                    valid_by_member[reserved["member"]] for reserved in reserved_members
+                ]
+            winner_count = (
                 min(row["capacity"], len(valid))
                 if row["packet_mode"] != "prize" and fixed_packets
                 else len(valid)
                 if row["packet_mode"] != "prize"
-                else min(row["winners"], len(valid)),
+                else min(row["winners"], len(valid))
             )
+            reserved_ids = {winner["uid"] for winner in reserved_winners}
+            remaining_candidates = [
+                entry for entry in valid if entry["uid"] not in reserved_ids
+            ]
+            winners = reserved_winners + random.sample(
+                remaining_candidates, winner_count - len(reserved_winners)
+            )
+            random.shuffle(winners)
             unclaimed = 0
             if row["packet_mode"] != "prize" and fixed_packets:
+                winner_by_member = {winner["uid"]: winner for winner in winners}
+                remaining_amounts = list(fixed_amounts)
+                for reserved in reserved_members:
+                    try:
+                        remaining_amounts.remove(reserved["amount"])
+                    except ValueError:
+                        raise ProtocolError("lottery_amount_invalid") from None
+                    winner_by_member[reserved["member"]]["amount"] = reserved["amount"]
+                unassigned = [winner for winner in winners if "amount" not in winner]
                 for winner, amount in zip(
-                    winners, fixed_amounts[: len(winners)], strict=True
+                    unassigned, remaining_amounts[: len(unassigned)], strict=True
                 ):
                     winner["amount"] = amount
-                unclaimed = row["total_amount"] - sum(
-                    winner["amount"] for winner in winners
-                )
+                unclaimed = sum(remaining_amounts[len(unassigned) :])
             elif winners and row["packet_mode"] != "prize":
                 # Preserve allocations promised by already-open pre-migration draws.
                 total, count = row["total_amount"], len(winners)
@@ -1285,6 +1829,12 @@ class GroupActivities:
                     amounts = [right - left for left, right in zip(cuts, cuts[1:])]
                 for winner, amount in zip(winners, amounts, strict=True):
                     winner["amount"] = amount
+            if winners and row["luckiest_bonus"]:
+                highest = max(winner["amount"] for winner in winners)
+                luckiest = secrets.SystemRandom().choice(
+                    [winner for winner in winners if winner["amount"] == highest]
+                )
+                luckiest["bonus_amount"] = row["luckiest_bonus"]
             (
                 await db.execute(
                     "UPDATE lotteries SET status='drawing',results=?,total=?,"
@@ -1827,8 +2377,9 @@ class GroupActivities:
             lambda: database(adapter), write=False, guard=db_guard
         ) as db:
             rows = await db.fetchall(
-                "SELECT * FROM lotteries WHERE account=? AND status IN ('announcing','open','drawing')",
-                (adapter.account,),
+                "SELECT * FROM lotteries WHERE account=? AND status IN ('announcing','open','drawing') "
+                "UNION ALL SELECT * FROM lotteries WHERE account=? AND status='scheduled' AND starts<=?",
+                (adapter.account, adapter.account, time.time()),
             )
             rules = await db.fetchall(
                 "SELECT group_id FROM invite_rules WHERE account=? "
@@ -1840,12 +2391,15 @@ class GroupActivities:
             try:
                 require_group_admin(adapter.config, group)
             except ProtocolError:
-                continue
+                if row["status"] != "scheduled":
+                    continue
             async with self.lock(adapter, group):
                 if not still_active():
                     return
                 try:
-                    if row["status"] in {"announcing", "drawing"}:
+                    if row["status"] == "scheduled":
+                        await self.publish_scheduled(adapter, row)
+                    elif row["status"] in {"announcing", "drawing"}:
                         prefix = (
                             "lottery-start"
                             if row["status"] == "announcing"
@@ -1886,6 +2440,16 @@ class GroupActivities:
                             failed=status in {"notice_unknown", "result_unknown"},
                             aggregate=False,
                         )
+                    elif row["draw_on_full"]:
+                        async with AsyncDatabase(
+                            lambda: database(adapter), guard=db_guard
+                        ) as db:
+                            entered = await db.fetchone(
+                                "SELECT COUNT(*) FROM lottery_entries WHERE lottery=?",
+                                (row["id"],),
+                            )
+                        if entered[0] >= row["capacity"]:
+                            await self.draw(adapter, row["id"])
                     elif row["ends"] <= time.time():
                         await self.draw(adapter, row["id"])
                 except Exception as exc:

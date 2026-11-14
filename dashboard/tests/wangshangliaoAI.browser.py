@@ -72,9 +72,13 @@ async def main():
                             await page.route("**/api/**", lambda route: route.abort())
                             await page.goto(
                                 "http://127.0.0.1:3027/tests/fixtures/wangshangliao-management.html",
+                                wait_until="domcontentloaded",
+                                timeout=30000,
                             )
                             if built is not None:
-                                await page.locator("#section-ai").wait_for()
+                                await page.locator("#section-ai").wait_for(
+                                    timeout=30000
+                                )
                                 assets = await page.evaluate(
                                     """html => {
                                       const doc = new DOMParser().parseFromString(html, "text/html");
@@ -109,71 +113,14 @@ async def main():
                                     await page.add_style_tag(content=style)
                                 await page.add_script_tag(content=assets["scripts"][0])
                             await page.locator("#section-ai").click()
-                            await page.locator("#tab-consultation").click()
-                            control = page.get_by_label(
-                                "客服咨询 · 回复随机性", exact=True
-                            )
-                            await expect(control).to_have_value("existing")
-                            await control.select_option("1")
-                            await expect(control).to_have_value("1")
-                            for label in ("表达范围", "回复长度", "保留对话轮数"):
+                            for retired in (
+                                "consultation",
+                                "admin-guidance",
+                                "friend-approval",
+                            ):
                                 await expect(
-                                    page.get_by_label(f"客服咨询 · {label}", exact=True)
-                                ).to_be_visible()
-                            await expect(
-                                page.get_by_label("客服咨询 · AstrBot配置", exact=True)
-                            ).to_have_text("测试配置")
-                            await expect(
-                                page.locator(
-                                    'select[aria-label$=" · AstrBot配置"], select[aria-label$=" · 人格"]'
-                                )
-                            ).to_have_count(0)
-                            await page.get_by_label(
-                                "业务归属", exact=True
-                            ).select_option("2")
-                            await expect(
-                                page.get_by_label("客服咨询 · AstrBot配置", exact=True)
-                            ).to_have_text("测试业务负责人专属配置")
-                            await expect(
-                                page.get_by_label("客服咨询 · 人格", exact=True)
-                            ).to_have_text("测试业务负责人专属人格")
-                            await expect(
-                                page.get_by_text("无关Telegram配置", exact=True)
-                            ).to_have_count(0)
-                            await expect(
-                                page.get_by_text("无关人格", exact=True)
-                            ).to_have_count(0)
-                            await page.screenshot(
-                                path=f"/tmp/wsl-ai-{'built-' if built is not None else ''}consultation-{width}.png",
-                                full_page=True,
-                            )
-                            await page.locator("#tab-admin-guidance").click()
-                            await expect(
-                                page.get_by_label("管理员指引 · 回复随机性", exact=True)
-                            ).to_have_value("0")
-                            await expect(
-                                page.get_by_label("管理员指引 · 人格", exact=True)
-                            ).to_have_text("内置安全人格")
-                            await expect(
-                                page.locator(
-                                    'select[aria-label$=" · AstrBot配置"], select[aria-label$=" · 人格"]'
-                                )
-                            ).to_have_count(0)
-                            await expect(
-                                page.get_by_label("管理员指引 · 回复长度", exact=True)
-                            ).to_have_value("2")
-                            await expect(
-                                page.get_by_role(
-                                    "button", name="保存管理员指引配置", exact=True
-                                )
-                            ).to_be_enabled()
-                            await page.screenshot(
-                                path=f"/tmp/wsl-ai-{'built-' if built is not None else ''}admin-guidance-{width}.png",
-                                full_page=True,
-                            )
-                            assert await page.evaluate(
-                                "document.documentElement.scrollWidth <= innerWidth"
-                            )
+                                    page.locator(f"#tab-{retired}")
+                                ).to_have_count(0)
                             await page.locator("#tab-group-ai").click()
                             await page.get_by_label("群聊", exact=True).select_option(
                                 "1/5"
@@ -251,12 +198,6 @@ async def main():
                             candidates = page.locator(".member-grants .member-list")
                             await expect(candidates).to_contain_text("管理甲")
                             await expect(candidates).not_to_contain_text("成员乙")
-                            await expect(
-                                page.get_by_text(
-                                    "前三次撤回并警告，之后递进禁言5／15／60分钟",
-                                    exact=True,
-                                )
-                            ).to_be_visible()
                             await page.screenshot(
                                 path=f"/tmp/wsl-ai-{'built-' if built is not None else ''}managers-{width}.png",
                                 full_page=True,
@@ -277,10 +218,7 @@ async def main():
                                     None,
                                     "status",
                                     "tenant_members",
-                                    "support_settings",
-                                    "support_editor",
                                     "business_rules",
-                                    "owner_support",
                                     "page_schema",
                                 }
                                 for call in calls

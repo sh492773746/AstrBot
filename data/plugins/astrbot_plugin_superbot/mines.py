@@ -11,6 +11,7 @@ from telegram import InlineKeyboardMarkup, InputFile
 from telegram.error import BadRequest, Forbidden, RetryAfter
 
 from .game_switches import blocker
+from .message_policy import retention
 from .panel_idle import PanelIdle
 from .slots import STAKES, group_stakes
 from .store import Rejected, encode
@@ -84,7 +85,7 @@ class Mines:
             (self.store.clock(),),
         )
 
-    def check(self, chat):
+    def check(self, chat, *, admission=True):
         """Validate group-local admission switches.
 
         Args:
@@ -98,7 +99,7 @@ class Mines:
             "WHERE m.chat=? AND m.enabled=1 AND g.enabled=1",
             (str(chat),),
         ).fetchone()
-        reason = blocker(self.store, chat, "mines", bool(row))
+        reason = blocker(self.store, chat, "mines", bool(row), admission=admission)
         if reason:
             raise Rejected(reason)
         return row["version"]
@@ -157,7 +158,7 @@ class Mines:
             if action in {"join", "leave"}:
                 if status != "open" or not deadline or deadline <= now or row["fault"]:
                     raise Rejected("当前不在报名期，请查看桌面板。")
-                self.check(row["chat"])
+                self.check(row["chat"], admission=action == "join")
                 person = next((p for p in people if p["uid"] == str(uid)), None)
                 if action == "join":
                     if state.get("rules") == "mines-2":
@@ -205,7 +206,7 @@ class Mines:
             elif action == "start":
                 if status != "open" or not deadline or deadline > now:
                     raise Rejected("尚未到报名截止时间。")
-                self.check(row["chat"])
+                self.check(row["chat"], admission=False)
                 alive = [p["uid"] for p in people if p["status"] == "alive"]
                 if len(alive) < 3:
                     action = "cancel"
@@ -685,7 +686,7 @@ class Mines:
                 )
                 if row["status"] == "open":
                     try:
-                        self.check(row["chat"])
+                        self.check(row["chat"], admission=False)
                     except Rejected:
                         cancel = True
                 if cancel:
@@ -780,12 +781,24 @@ class Mines:
                     if sending and previous and previous != message_id:
                         db.execute(
                             "INSERT OR IGNORE INTO gt_delete(chat,message,source,due,next) VALUES(?,?,?,?,?)",
-                            (row["chat"], previous, previous, now + 60, now + 60),
+                            (
+                                row["chat"],
+                                previous,
+                                previous,
+                                now + retention(self.runtime, "game_result"),
+                                now + retention(self.runtime, "game_result"),
+                            ),
                         )
                     if row["status"] in {"settled", "cancelled"}:
                         db.execute(
                             "INSERT OR IGNORE INTO gt_delete(chat,message,source,due,next) VALUES(?,?,?,?,?)",
-                            (row["chat"], message_id, message_id, now + 60, now + 60),
+                            (
+                                row["chat"],
+                                message_id,
+                                message_id,
+                                now + retention(self.runtime, "game_result"),
+                                now + retention(self.runtime, "game_result"),
+                            ),
                         )
             except asyncio.CancelledError:
                 # Interrupted sends remain claimed; constructor marks them for review.
@@ -888,7 +901,13 @@ class Mines:
                     self.store.put(db, cache_key, animation.file_id)
                 db.execute(
                     "INSERT OR IGNORE INTO gt_delete(chat,message,source,due,next) VALUES(?,?,?,?,?)",
-                    (row["chat"], sent.message_id, sent.message_id, now + 60, now + 60),
+                    (
+                        row["chat"],
+                        sent.message_id,
+                        sent.message_id,
+                        now + retention(self.runtime, "animation"),
+                        now + retention(self.runtime, "animation"),
+                    ),
                 )
         except asyncio.CancelledError:
             raise

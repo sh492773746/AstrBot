@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from .community import FEATURES, REASONS
+from .group_identity import group_label
 from .store import Rejected, encode
 
 WRITE_ACTIONS = {
@@ -72,6 +73,31 @@ async def group_command(runtime, update, command):
 
 
 async def action(ui, update, payload, token=""):
+    from .moderation import moderation_request
+
+    op = payload["action"]
+    public = {
+        "cm_public_groups",
+        "cm_public",
+        "cm_rules",
+        "cm_notes",
+        "cm_note",
+        "cm_mine",
+        "cm_my_warnings",
+        "cm_report",
+        "cm_report_reason",
+        "cm_report_detail",
+        "cm_submit",
+    }
+    if op in public:
+        return await _action(ui, update, payload, token)
+    async with moderation_request(
+        ui.runtime, str(update.effective_user.id), str(payload.get("chat", ""))
+    ):
+        return await _action(ui, update, payload, token)
+
+
+async def _action(ui, update, payload, token=""):
     """Dispatch server-stored callbacks with separate public and admin paths.
 
     Args:
@@ -88,7 +114,7 @@ async def action(ui, update, payload, token=""):
     op, chat = payload["action"], str(payload.get("chat", ""))
     page = max(0, min(int(payload.get("page", 0)), 100000))
     store.clear_dialog(uid)
-    back = [("返回群管理", {"action": "mod_group", "chat": chat})]
+    back = [("返回群管", {"action": "semantic_group_menu", "chat": chat})]
     if op == "cm_public_groups":
         rows = store.db.execute(
             "SELECT chat,title FROM mod_groups WHERE enabled=1 ORDER BY chat LIMIT 9 OFFSET ?",
@@ -268,7 +294,12 @@ async def action(ui, update, payload, token=""):
             ],
         )
     # Everything below this boundary is scoped group administration.
-    await runtime.moderation.check(uid, chat, "view")
+    info, _ = await runtime.moderation.check(uid, chat, "view")
+    group_name = group_label(info, runtime.moderation.row(chat)["title"])
+    if op == "cm_home":
+        return await action(
+            ui, update, {"action": "cm_settings", "chat": chat, "section": "content"}
+        )
     policy = service.policy(chat)
     cfg = policy["config"]
     if op in {"cm_ai", "cm_ai_save"}:
@@ -326,7 +357,7 @@ async def action(ui, update, payload, token=""):
         return await ui.render(
             update,
             "套用基础配置：开启举报、欢迎、群规、常用说明及人工警告。\n"
-            "会替换本群现有欢迎、群规和说明；日志配置、广告杀手、累计升级和入群验证均不变。\n"
+            "会替换本群现有欢迎、群规和说明；日志配置、广告执行开关、累计升级和入群验证均不变。\n"
             "人工警告只开放管理员操作，不会因此开启自动处罚。确认后可逐项修改。",
             [
                 (
@@ -367,7 +398,7 @@ async def action(ui, update, payload, token=""):
         for key in keys:
             buttons.append(
                 (
-                    f"{FEATURES[key]}：{'开启' if cfg['enabled'][key] else '关闭'}",
+                    f"{'🟢' if cfg['enabled'][key] else '🔴'} {FEATURES[key]}：{'开启' if cfg['enabled'][key] else '关闭'}",
                     {
                         "action": "cm_toggle",
                         "chat": chat,
@@ -401,6 +432,7 @@ async def action(ui, update, payload, token=""):
                 )
         return await ui.render(
             update,
+            f"{'欢迎与群规' if section == 'content' else '群管设置'} · {group_name}\n"
             "按群配置，改动预览后确认保存。欢迎可使用 {name}、{group}。",
             buttons + back,
         )
@@ -441,7 +473,7 @@ async def action(ui, update, payload, token=""):
             )
         return await ui.render(
             update,
-            f"当前{FEATURES[field]}：\n{cfg[field]}\n\n发送新的正文，最多2500字。",
+            f"{group_name}\n当前{FEATURES[field]}：\n{cfg[field]}\n\n发送新的正文，最多2500字。",
             back,
         )
     if op in {"cm_toggle", "cm_note_delete", "cm_preview", "cm_save"}:
@@ -459,8 +491,8 @@ async def action(ui, update, payload, token=""):
         if op == "cm_save":
             await service.save(uid, chat, payload["version"], proposed)
             return await ui.render(update, "已保存。", back)
-        text = "确认保存本群配置？\n" + "，".join(
-            FEATURES[k] + ("开启" if v else "关闭")
+        text = f"确认保存 · {group_name}\n" + "，".join(
+            FEATURES[k] + ("🟢 开启" if v else "🔴 关闭")
             for k, v in proposed["enabled"].items()
         )
         for key in ("welcome", "rules"):
@@ -916,6 +948,17 @@ async def action(ui, update, payload, token=""):
 
 
 async def input_text(ui, update, dialog, text):
+    from .moderation import moderation_request
+
+    if dialog.get("kind") == "report_detail":
+        return await _input_text(ui, update, dialog, text)
+    async with moderation_request(
+        ui.runtime, str(update.effective_user.id), str(dialog.get("chat", ""))
+    ):
+        return await _input_text(ui, update, dialog, text)
+
+
+async def _input_text(ui, update, dialog, text):
     """Advance only explicit custom-text forms.
 
     Args:

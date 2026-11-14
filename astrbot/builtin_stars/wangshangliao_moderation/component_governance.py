@@ -18,7 +18,6 @@ from astrbot.dashboard.responses import ApiError
 from .command_capabilities import COMMAND_SPECS
 from .open_store import OpenError
 from .rule_replies import RuleConfiguration
-from .service_settings import SupportConfiguration
 
 PLUGIN = "wangshangliao_moderation"
 ACCOUNTS = {"31846829", "43506527", "23691273"}
@@ -82,7 +81,6 @@ class Governance:
             ("control", "write", 30),
             ("scheduled", "write", 30),
             ("activities", "send", 30),
-            ("private_ai", "model", 45),
             ("group_ai", "model", 45),
             ("pc28", "read", 10),
         ):
@@ -95,18 +93,14 @@ class Governance:
             )
         for spec in COMMAND_SPECS.values():
             components.register(spec)
-        for name, model, capability in (
-            ("business_rules", RuleConfiguration, "wsl.rules"),
-            ("support_settings", SupportConfiguration, "wsl.control"),
-        ):
-            components.register(
-                PageSpec(
-                    id="wsl.page." + name,
-                    plugin=PLUGIN,
-                    capability=capability,
-                    fields=model.model_json_schema(),
-                )
+        components.register(
+            PageSpec(
+                id="wsl.page.business_rules",
+                plugin=PLUGIN,
+                capability="wsl.rules",
+                fields=RuleConfiguration.model_json_schema(),
             )
+        )
 
     def policy(self):
         """Read the additive server-owned pilot switch."""
@@ -146,6 +140,8 @@ class Governance:
 
     def eligible(self, adapter, group="", event=None):
         """Require both an explicit server canary and the original live test window."""
+        if event is not None and event.is_private_chat():
+            return False
         if not self.policy()["enabled"] or str(adapter.account) not in ACCOUNTS:
             return False
         window = getattr(adapter, "test_window", None)
@@ -155,12 +151,10 @@ class Governance:
             scope = event.get_extra("wsl_test_scope")
             if not scope or event.get_sender_id() != window.sender.account:
                 return False
-            if event.is_private_chat():
-                return scope in {"private_ai", "private_commands"}
             if scope not in {"group_ai", "group_commands", "group_rules"}:
                 return False
         if not group:
-            return "private_commands" in getattr(window, "scopes", ())
+            return False
         return group == GROUP and GROUP in window.groups
 
     async def run(
@@ -191,7 +185,12 @@ class Governance:
 
         Returns:
             Unmodified operation result.
+
+        Raises:
+            OpenError: If the capability or event belongs to retired private work.
         """
+        if name == "private_ai" or event is not None and event.is_private_chat():
+            raise OpenError("private_messages_retired")
         if not self.eligible(adapter, group, event):
             return await operation()
         frozen = account_guard(adapter)
@@ -223,4 +222,6 @@ class Governance:
 
     def page(self, name):
         """Return one fixed page schema; no function objects leave the registry."""
+        if name == "support_settings":
+            raise OpenError("private_messages_retired")
         return components.specs["wsl.page." + name].model_dump(mode="json")

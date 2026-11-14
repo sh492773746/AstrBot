@@ -63,13 +63,7 @@ async def test_recall_routing_and_no_repeat(tmp_path):
         assert fields[2] == b"905" and fields[11] == b"123" and fields[3] == b"902"
         with pytest.raises(wire.ProtocolError, match="recall_identity"):
             await WangshangliaoAdapter.recall_violation(adapter, "5", "124", "2")
-        roster = adapter.get_moderation_members.return_value
-
-        async def revoke_during_lookup(group):
-            adapter.config["moderation"]["enabled"] = False
-            return roster
-
-        adapter.get_moderation_members.side_effect = revoke_during_lookup
+        adapter.config["moderation"]["enabled"] = False
         with pytest.raises(wire.ProtocolError, match="moderation_permission"):
             await WangshangliaoAdapter.recall_violation(adapter, "5", "123", "2")
         assert adapter.nim.request.await_count == 1

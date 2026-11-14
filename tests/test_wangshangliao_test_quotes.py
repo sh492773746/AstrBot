@@ -364,6 +364,7 @@ async def test_closing_a_run_does_not_close_a_replacement_developer_window(rehea
     await call(rehearsal, "close")
     assert rehearsal.receiver.test_window is replacement
     assert original is not replacement and replacement.active()
+    assert not hasattr(rehearsal.adapters[ACCOUNTS[2]], "test_command_window")
 
 
 @pytest.mark.asyncio

@@ -54,6 +54,10 @@ try {
     assert.match(await list.textContent(), /结果未知 · 待核对，不自动重试/);
     assert.match(await list.textContent(), /执行出错 · 待核对/);
     assert.match(await list.textContent(), /名单有效 · 执行状态未提供/);
+    assert.match(await list.textContent(), /当前目录中已不在群/);
+    assert.match(await list.textContent(), /平台代码 -1/);
+    assert.match(await list.textContent(), /当前状态不证明原请求成功或原禁言时长；未重复处罚/);
+    await panel.screenshot({ path: join(output, `blacklist-receipt-${width}.png`) });
 
     const search = async (query = "同名") => {
       await panel.getByRole("searchbox").fill(query);

@@ -62,11 +62,16 @@ def managed_accounts(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", ["黑名单 @Target", "@Target 黑名单", "黑名单"])
+@pytest.mark.parametrize(
+    "text", ["黑名单 @Target", "@Target 黑名单", "黑名单", "@Target 白名单"]
+)
+@pytest.mark.parametrize("chat_enabled", [True, False])
 async def test_assigned_managed_admin_dispatches_and_replies_without_test_window(
-    tmp_path, managed_accounts, text
+    tmp_path, managed_accounts, text, chat_enabled
 ):
-    adapter = WangshangliaoAdapter(config(), {}, asyncio.Queue())
+    settings = config()
+    settings["reply_groups"]["5"] = chat_enabled
+    adapter = WangshangliaoAdapter(settings, {}, asyncio.Queue())
     adapter.ledger = Ledger(tmp_path / "messages.sqlite3")
     await adapter.ledger.open()
     adapter.connection_state = "online"

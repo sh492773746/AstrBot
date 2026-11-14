@@ -13,6 +13,7 @@ import time
 import uuid
 import warnings
 from collections import Counter
+from contextlib import nullcontext
 
 import aiohttp
 import lz4.block
@@ -44,6 +45,7 @@ class AdvertisementMedia:
 
     def __init__(self, rules):
         self.rules, self.store = rules, rules.store
+        self._cleanup_cursor = None
         with self.store.connect(write=True) as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS business_rule_images(
@@ -139,50 +141,9 @@ class AdvertisementMedia:
                 ):
                     reusable = {"id": row["id"], "thumbnail": row["thumbnail"]}
                     break
-            referenced = set()
-            saved = db.execute(
-                "SELECT config FROM business_rules WHERE account=? AND group_id=?",
-                (account, group),
-            ).fetchall()
-            drafts = db.execute(
-                "SELECT config FROM business_rule_drafts "
-                "WHERE account=? AND group_id=? AND expires>?",
-                (account, group, now),
-            ).fetchall()
-            for row in [*saved, *drafts]:
-                config = json.loads(row["config"])
-                referenced.update(
-                    item
-                    for rule in [*config.get("keywords", []), *config["ads"]]
-                    for item in rule.get("images", [])
-                )
-            referenced.update(
-                row["image_id"]
-                for row in db.execute(
-                    "SELECT image_id FROM business_rule_image_sends "
-                    "WHERE account=? AND group_id=?",
-                    (account, group),
-                )
+            self.cleanup(
+                account, group, db=db, keep=(reusable["id"],) if reusable else ()
             )
-            if reusable:
-                referenced.add(reusable["id"])
-            stale = db.execute(
-                "SELECT id FROM business_rule_images WHERE account=? AND group_id=? "
-                "AND created<? AND state IN ('','ready')",
-                (account, group, now - 86400),
-            ).fetchall()
-            # Admission and deletion share this lock so queued sends remain pinned
-            # even before their durable reference transaction acquires the writer.
-            with self._inflight_lock:
-                referenced.update(
-                    image_id
-                    for (path, owner, target, image_id) in self._inflight
-                    if (path, owner, target) == (self.store.path, account, group)
-                )
-                db.executemany(
-                    "DELETE FROM business_rule_images WHERE id=?",
-                    [(row["id"],) for row in stale if row["id"] not in referenced],
-                )
             if reusable:
                 return reusable
             count = db.execute(
@@ -209,6 +170,90 @@ class AdvertisementMedia:
                 ),
             )
         return {"id": image_id, "thumbnail": thumbnail}
+
+    def cleanup(self, account=None, group=None, *, db=None, keep=()):
+        """Prune a bounded batch without deleting referenced or uncertain assets.
+
+        Args:
+            account: Optional exact robot scope, paired with group.
+            group: Optional exact group scope, paired with account.
+            db: Optional caller-owned writer transaction during an upload.
+            keep: Image IDs reused by that upload before its draft is saved.
+
+        Returns:
+            Number of deleted local images. Remote assets are never deleted.
+        """
+        if (account is None) != (group is None):
+            raise ValueError("advertisement_cleanup_scope")
+        context = nullcontext(db) if db is not None else self.store.connect(write=True)
+        with context as db:
+            now = time.time()
+            sql = (
+                "SELECT id,account,group_id,created FROM business_rule_images "
+                "WHERE created<? AND state IN ('','ready')"
+            )
+            parameters = (now - 86400,)
+            if account is not None:
+                sql += " AND account=? AND group_id=?"
+                parameters += (account, group)
+            elif self._cleanup_cursor is not None:
+                sql += " AND (created>? OR (created=? AND id>?))"
+                created, image_id = self._cleanup_cursor
+                parameters += (created, created, image_id)
+            stale = db.execute(
+                sql + " ORDER BY created,id LIMIT 500", parameters
+            ).fetchall()
+            referenced = set()
+            for owner, target in {(row["account"], row["group_id"]) for row in stale}:
+                configs = db.execute(
+                    "SELECT config FROM business_rules WHERE account=? AND group_id=? "
+                    "UNION ALL SELECT config FROM business_rule_drafts "
+                    "WHERE account=? AND group_id=? AND expires>?",
+                    (owner, target, owner, target, now),
+                )
+                for row in configs:
+                    config = json.loads(row["config"])
+                    referenced.update(
+                        (owner, target, image_id)
+                        for rule in [*config.get("keywords", []), *config["ads"]]
+                        for image_id in rule.get("images", [])
+                    )
+                referenced.update(
+                    (owner, target, row["image_id"])
+                    for row in db.execute(
+                        "SELECT image_id FROM business_rule_image_sends "
+                        "WHERE account=? AND group_id=?",
+                        (owner, target),
+                    )
+                )
+            referenced.update((account, group, image_id) for image_id in keep)
+            # Serialize admission with deletion even before a send's durable pin.
+            with self._inflight_lock:
+                referenced.update(
+                    (owner, target, image_id)
+                    for (path, owner, target, image_id) in self._inflight
+                    if path == self.store.path
+                )
+                candidates = [
+                    (row["id"],)
+                    for row in stale
+                    if (row["account"], row["group_id"], row["id"]) not in referenced
+                ]
+                db.executemany(
+                    "DELETE FROM business_rule_images WHERE id=?", candidates
+                )
+            db.execute(
+                "DELETE FROM business_rule_drafts WHERE rowid IN ("
+                "SELECT rowid FROM business_rule_drafts WHERE expires<=? LIMIT 500)",
+                (now,),
+            )
+            if account is None:
+                self._cleanup_cursor = (
+                    (stale[-1]["created"], stale[-1]["id"])
+                    if len(stale) == 500
+                    else None
+                )
+            return len(candidates)
 
     def validate(self, account, group, config, db):
         """Reject references that are missing or belong to another scope."""
@@ -418,7 +463,17 @@ class AdvertisementMedia:
                 }
         return None
 
-    async def send(self, adapter, group, image_id, key, authorize, *, proactive=True):
+    async def send(
+        self,
+        adapter,
+        group,
+        image_id,
+        key,
+        authorize,
+        *,
+        proactive=True,
+        retain_recall=False,
+    ):
         """Upload once and send one reviewed rule image with durable intent.
 
         Args:
@@ -428,6 +483,7 @@ class AdvertisementMedia:
             key: Stable slot-specific operation key.
             authorize: Frozen rule, tenant and current send-authority guard.
             proactive: Require proactive grants for scheduled sends (the default).
+            retain_recall: Retain the accepted native route for ad replacement.
 
         Returns:
             Native receipt status; ambiguous uploads or sends are not retried.
@@ -442,7 +498,13 @@ class AdvertisementMedia:
             self._inflight[reference] += 1
         try:
             result = await self._send(
-                adapter, group, image_id, key, authorize, proactive=proactive
+                adapter,
+                group,
+                image_id,
+                key,
+                authorize,
+                proactive=proactive,
+                retain_recall=retain_recall,
             )
             if result in {"accepted", "verified", "rejected", "not_sent"}:
                 async with AsyncDatabase(self._connect, write=True) as db:
@@ -468,7 +530,9 @@ class AdvertisementMedia:
         db.row_factory = sqlite3.Row
         return db
 
-    async def _send(self, adapter, group, image_id, key, authorize, *, proactive):
+    async def _send(
+        self, adapter, group, image_id, key, authorize, *, proactive, retain_recall
+    ):
         """Perform native delivery while the caller pins the immutable reference.
 
         Args:
@@ -478,6 +542,7 @@ class AdvertisementMedia:
             key: Stable native operation key.
             authorize: Frozen rule and current authority guard.
             proactive: Whether scheduled-send grants are required.
+            retain_recall: Whether to preserve the native self-recall route.
 
         Returns:
             Existing native intent outcome, without retrying unknown work.
@@ -554,6 +619,7 @@ class AdvertisementMedia:
             raise OpenError("advertisement_image_scope")
         nim, business, ledger = adapter.nim, adapter.business, adapter.ledger
         team = adapter.groups.get(group)
+        own_peer = str(getattr(adapter, "nim_account", ""))
 
         def check():
             guard()
@@ -563,6 +629,15 @@ class AdvertisementMedia:
                 or adapter.nim is not nim
                 or adapter.business is not business
                 or adapter.ledger is not ledger
+                or (
+                    retain_recall
+                    and (
+                        not own_peer
+                        or str(adapter.nim_account) != own_peer
+                        or str(adapter.members.get(group, {}).get(account, ""))
+                        != own_peer
+                    )
+                )
                 or (
                     proactive
                     and (
@@ -686,7 +761,29 @@ class AdvertisementMedia:
                         or receipt.get(11, client_id.encode()) != client_id.encode()
                     ):
                         raise wire.ProtocolError("receipt_shape")
-                    await ledger.finish(key, "accepted", receipt[12].decode())
+                    recall = None
+                    if retain_recall:
+                        if not receipt[12].isdigit():
+                            raise wire.ProtocolError("reply_recall_identity")
+                        recall = (
+                            account,
+                            group,
+                            str(team),
+                            own_peer,
+                            client_id,
+                            receipt[7].decode(),
+                            time.time(),
+                        )
+                    await ledger.finish(
+                        key,
+                        "accepted",
+                        receipt[12].decode(),
+                        **(
+                            {"recall": recall, "recall_state": "retained"}
+                            if recall is not None
+                            else {}
+                        ),
+                    )
                     return "accepted"
                 except BaseException:
                     await ledger.finish(key, "unknown")

@@ -62,24 +62,41 @@ def activate(store, group="5", actor="1"):
     return store.tenant("99", group)
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-def test_video_policy_is_scoped_typed_and_cannot_be_silently_dropped(store, enabled):
+def test_raid_switch_requires_dashboard_preview_and_preserves_other_rules(store):
     row = activate(store)
-    rules = {**row["rules"], "video_whitelist_only": enabled}
-    store.change("99", "5", row["version"], "1", rules=rules)
-    saved = store.tenant("99", "5")
-    assert saved["rules"]["video_whitelist_only"] is enabled
-    assert "video_whitelist_only" not in store.tenant("99", "6")["rules"]
-    with pytest.raises(OpenError, match="tenant_rules_refresh"):
-        store.change("99", "5", saved["version"], "1", rules=row["rules"])
-    with pytest.raises(OpenError, match="tenant_invalid"):
+    rules = {**row["rules"], "raid_defense_enabled": True}
+    with pytest.raises(OpenError, match="raid_arguments"):
+        store.change("99", "5", row["version"], "1", rules=rules)
+    with pytest.raises(OpenError, match="confirmation_invalid"):
         store.change(
-            "99",
-            "5",
-            saved["version"],
-            "1",
-            rules={**saved["rules"], "video_whitelist_only": 1},
+            "99", "5", row["version"], "dashboard/root", rules=rules, control=True
         )
+    token = store.preview_control(
+        "99",
+        "5",
+        row["version"],
+        "dashboard/root",
+        rules,
+        row["managers"],
+        False,
+    )
+    store.change(
+        "99",
+        "5",
+        row["version"],
+        "dashboard/root",
+        rules=rules,
+        managers=row["managers"],
+        paused=False,
+        control=True,
+        confirmation=token,
+    )
+    saved = store.tenant("99", "5")
+    assert saved["rules"] == rules
+    assert {
+        key: value for key, value in saved.items() if key not in {"version", "rules"}
+    } == {key: value for key, value in row.items() if key not in {"version", "rules"}}
+    assert not store.tenant("99", "6")["rules"].get("raid_defense_enabled", False)
 
 
 def test_invite_operator_and_owner_never_grant_role(store):
@@ -659,7 +676,7 @@ async def test_retired_socket_never_starts_or_forwards(tmp_path, monkeypatch):
     value = service(tmp_path)
     rpc = OpenRPC(value, tmp_path / "control.sock")
     monkeypatch.setenv("ASTRBOT_WSL_OPEN_SOCKET", str(rpc.path))
-    monkeypatch.setenv("ASTRBOT_WSL_CONTROL_UID", "1000")
+    monkeypatch.setenv("ASTRBOT_WSL_CONTROL_UID", str(__import__("os").getuid()))
     with pytest.raises(OpenError, match="isolated_mode_retired"):
         await rpc.start()
     with pytest.raises(OpenError, match="isolated_mode_retired"):

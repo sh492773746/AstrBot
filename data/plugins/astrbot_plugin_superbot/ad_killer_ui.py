@@ -33,8 +33,9 @@ async def action(moderation_ui, update, payload, token=""):
     await runtime.moderation.check(uid, chat, "delete")
     row = runtime.ad_killer.policy(chat)
     config = json.loads(row["config"])
-    back = [("返回群管理", {"action": "mod_group", "chat": chat})]
-    home = [("返回广告杀手", {"action": "mod_ak_home", "chat": chat})]
+    back = [("返回广告与刷屏", {"action": "semantic_ads", "chat": chat})]
+    home = [("返回检测规则", {"action": "mod_ak_rules", "chat": chat})]
+    switch_back = [("返回执行开关", {"action": "mod_ak_home", "chat": chat})]
     if operation.startswith("mod_ak_fp"):
         from .ad_fingerprint_ui import action as fingerprint_action
 
@@ -42,10 +43,6 @@ async def action(moderation_ui, update, payload, token=""):
     if operation.startswith("mod_ak_ai"):
         raise Rejected("AI 广告识别已停用，请使用样本与行为识别")
     if operation == "mod_ak_home":
-        rules = "\n".join(
-            f"{RULES[key]}：{'开启' if entry['enabled'] else '关闭'} · {ACTIONS[entry['action']]}"
-            for key, entry in config["rules"].items()
-        )
         buttons = [
             (
                 "启用自动执行" if not row["enabled"] else "停用自动执行",
@@ -55,7 +52,27 @@ async def action(moderation_ui, update, payload, token=""):
                     "version": row["version"],
                     "change": {"enabled": not bool(row["enabled"])},
                 },
+            )
+        ]
+        if row["error"]:
+            buttons.append(("故障核查", {"action": "mod_ak_recovery", "chat": chat}))
+        return await ui.render(
+            update,
+            f"执行开关 · {'🟢 已开启' if row['enabled'] else '🔴 已关闭'}\n"
+            "只有此开关和对应检测规则都开启，才会对命中的消息自动执行。"
+            + (
+                f"\n故障：{row['error']}。已暂停自动处罚，请先核查远端结果。"
+                if row["error"]
+                else ""
             ),
+            buttons + back,
+        )
+    if operation == "mod_ak_rules":
+        rules = "\n".join(
+            f"{RULES[key]}：{'🟢 开启' if entry['enabled'] else '🔴 关闭'} · {ACTIONS[entry['action']]}"
+            for key, entry in config["rules"].items()
+        )
+        buttons = [
             *[
                 (label, {"action": "mod_ak_rule", "chat": chat, "rule": key})
                 for key, label in RULES.items()
@@ -65,17 +82,10 @@ async def action(moderation_ui, update, payload, token=""):
             ("命中记录", {"action": "mod_ak_hits", "chat": chat, "page": 0}),
             ("🛡 样本与行为识别", {"action": "mod_ak_fp", "chat": chat}),
         ]
-        if row["error"]:
-            buttons.append(("故障核查", {"action": "mod_ak_recovery", "chat": chat}))
         return await ui.render(
             update,
-            f"广告杀手 · {'已启用' if row['enabled'] else '未启用'}\n{rules}\n"
-            "默认只撤回；禁言、踢出及封禁均需逐项确认。"
-            + (
-                f"\n故障：{row['error']}。已暂停自动处罚，请先核查远端结果。"
-                if row["error"]
-                else ""
-            ),
+            f"检测规则 · 执行开关{'🟢 已开启' if row['enabled'] else '🔴 已关闭'}\n{rules}\n"
+            "只开启规则不会自动执行；默认仅撤回，升级处罚需逐项确认。",
             buttons + back,
         )
     if operation == "mod_ak_rule":
@@ -108,7 +118,7 @@ async def action(moderation_ui, update, payload, token=""):
         ]
         return await ui.render(
             update,
-            f"{RULES[key]} · {'开启' if selected['enabled'] else '关闭'}\n"
+            f"{RULES[key]} · {'🟢 开启' if selected['enabled'] else '🔴 关闭'}\n"
             f"处罚：{ACTIONS[selected['action']]}\n"
             + (
                 "只处理普通成员手动转发的频道内容；关联频道自动同步、匿名频道身份不自动处罚。\n"
@@ -269,6 +279,7 @@ async def action(moderation_ui, update, payload, token=""):
         else:
             raise Rejected("配置选项无效")
         validate(updated)
+        switch_only = set(change) == {"enabled"}
         if (
             enabled
             and any(
@@ -292,7 +303,8 @@ async def action(moderation_ui, update, payload, token=""):
         )
         return await ui.render(
             update,
-            f"确认保存本群规则？\n{'启用后立即自动执行' if enabled else '自动执行关闭'}\n"
+            f"确认保存{'执行开关' if switch_only else '本群规则'}？\n"
+            f"{'总开关已开启，命中的已开启规则会立即执行' if enabled else '自动执行关闭'}\n"
             f"{penalties}\n累计升级：{'开启' if updated['escalation']['enabled'] else '关闭'}，"
             f"{updated['escalation']['count']}次→{ACTIONS[updated['escalation']['action']]}\n"
             "误判后消息无法恢复；踢出可重新加入，封禁不能自行重进且可能影响历史消息。"
@@ -308,7 +320,13 @@ async def action(moderation_ui, update, payload, token=""):
                         "config": updated,
                     },
                 ),
-                ("返回广告杀手", {"action": "mod_ak_home", "chat": chat}),
+                (
+                    "返回执行开关" if switch_only else "返回检测规则",
+                    {
+                        "action": "mod_ak_home" if switch_only else "mod_ak_rules",
+                        "chat": chat,
+                    },
+                ),
             ],
         )
     if operation == "mod_ak_save":
@@ -328,7 +346,14 @@ async def action(moderation_ui, update, payload, token=""):
                 chat, uid, payload["version"], config, payload["enabled"]
             )
         return await action(
-            moderation_ui, update, {"action": "mod_ak_home", "chat": chat}
+            moderation_ui,
+            update,
+            {
+                "action": "mod_ak_home"
+                if config == json.loads(row["config"])
+                else "mod_ak_rules",
+                "chat": chat,
+            },
         )
     if operation == "mod_ak_recovery":
         if not row["error"]:
@@ -361,7 +386,7 @@ async def action(moderation_ui, update, payload, token=""):
                     },
                 )
             ]
-            + home,
+            + switch_back,
         )
     if operation == "mod_ak_recovery_preview":
         if not row["error"] or row["version"] != payload["version"]:
@@ -376,7 +401,7 @@ async def action(moderation_ui, update, payload, token=""):
             f"请确认：已人工核实 Telegram 群 {chat} 的当前状态与 {count} 条待核查记录，"
             "并已手动处理必要的禁言、踢出或封禁后果。\n"
             "确认只标记本模块记录为已人工核查并保持规则关闭；"
-            "不会自动重试、自动恢复广告杀手或处理其他群管故障。",
+            "不会自动重试、自动恢复执行开关或处理其他群管故障。",
             [
                 (
                     "确认已核查（保持关闭）",
@@ -388,7 +413,7 @@ async def action(moderation_ui, update, payload, token=""):
                     },
                 )
             ]
-            + home,
+            + switch_back,
         )
     if operation == "mod_ak_recovery_confirm":
         async with runtime.moderation.locks.setdefault(chat, asyncio.Lock()):
@@ -538,7 +563,7 @@ async def action(moderation_ui, update, payload, token=""):
                 ),
             ],
         )
-    raise Rejected("广告杀手操作不存在")
+    raise Rejected("执行开关操作不存在")
 
 
 async def input_text(moderation_ui, update, kind, chat, text):

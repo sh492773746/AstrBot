@@ -395,6 +395,28 @@ async def test_second_turn_keeps_only_same_test_dialogue_and_is_billed_again(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", [False, True])
+async def test_closing_fixture_only_clears_its_original_group_window(
+    scope, replacement
+):
+    value, receiver, sender, _ = scope
+    await control(value, "open")
+    fixture = value.group_ai.test_fixture
+    original = receiver.test_window
+    newer = Window(receiver, sender, [GROUP], ["group_ai"], [], 300, 3)
+    if replacement:
+        receiver.test_window = newer
+    await control(value, "close")
+    assert fixture.closed and value.group_ai.test_fixture is None
+    assert receiver.test_window is (newer if replacement else None)
+    assert original is not newer
+    assert not hasattr(sender, "test_command_window")
+    assert not hasattr(fixture, "notify_quota")
+    receiver.send_text.assert_not_awaited()
+    sender.nim.request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_closed_window_preserves_unknown_block_across_reopen(scope):
     value, receiver, sender, _ = scope
     await control(value, "open")

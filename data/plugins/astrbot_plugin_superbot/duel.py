@@ -328,6 +328,12 @@ class Duel:
         """
         now = self.store.clock()
         if target:
+            from .game_schedule import reason
+
+            closed = reason(self.store, chat, "duel")
+            if closed:
+                raise Rejected(closed)
+        if target:
             if db.execute(
                 f"SELECT 1 FROM duels WHERE chat=? AND status IN {ACTIVE} "
                 "AND (status='pending' OR expires>?) "

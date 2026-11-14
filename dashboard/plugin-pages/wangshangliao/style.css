@@ -636,9 +636,6 @@ code {
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border);
 }
-.private-switch {
-  margin-top: 12px;
-}
 .example-switch button {
   min-height: 38px;
 }
@@ -946,9 +943,6 @@ button.danger {
   }
   .section-switch button {
     flex: 1 1 calc(33.333% - 8px);
-  }
-  .private-switch button {
-    flex: 1 1 calc(50% - 8px);
   }
   .route-summary {
     grid-template-columns: 1fr;

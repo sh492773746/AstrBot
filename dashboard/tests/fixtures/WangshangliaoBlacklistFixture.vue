@@ -13,7 +13,9 @@ const candidates: BlacklistMember[] = [
 ];
 const lists: Record<string, BlacklistEntry[]> = {
   "5": [
-    { id: "8", peer: "1008", name: "已离群成员", kicks: 3, phase: "mute", status: "unknown", cycle: 1 },
+    { id: "8", peer: "1008", name: "已离群成员", kicks: 3, phase: "mute", status: "unknown", cycle: 1,
+      error: "business_rejected", provider_code: -1,
+      current_state: { membership: "absent", mute: "unavailable", checked_at: 1794326023 } },
     { id: "9", peer: "1009", name: "正在处理的成员", kicks: 1, phase: "mute", status: "pending", cycle: 1 },
     { id: "10", peer: "1010", name: "执行出错的成员", kicks: 0, phase: "mute", status: "error", cycle: 1 },
     { id: "11", peer: "1011", name: "用于检查长名称换行的黑名单成员".repeat(3), kicks: 2, phase: "mute", status: "active", cycle: 1 },
@@ -22,11 +24,11 @@ const lists: Record<string, BlacklistEntry[]> = {
   ],
   "6": [],
 };
-const whitelist: Record<string, Array<BlacklistMember & { source?: string; count?: number }>> = {
+const whitelist: Record<string, BlacklistMember[]> = {
   "5": [
     { id: "12", name: "" },
     { id: "13", name: "同名名单成员" },
-    { id: "14", name: "同名名单成员", source: "daily_top30", count: 101 },
+    { id: "14", name: "同名名单成员" },
     { id: "11", name: "历史双名单成员" },
   ],
   "6": [],

@@ -1,10 +1,12 @@
 """Permission-checked, versioned point-wheel group configuration."""
 
+from .game_navigation import game_back, scoped_game_page
 from .game_switches import blocker
 from .store import Rejected, encode
 from .wheel import RULES
 
 
+@scoped_game_page
 async def action(ui, update, payload):
     """Display or update wheel configuration under existing group authority.
 
@@ -21,17 +23,15 @@ async def action(ui, update, payload):
     name = payload["action"]
     back = [("返回玩法管理", {"action": "admin_game"})]
     if name == "wheel_groups":
-        rows = store.db.execute(
-            "SELECT chat,title FROM platform_mod_groups WHERE enabled=1 ORDER BY chat"
-        ).fetchall()
-        rows = [
-            row
-            for row in rows
-            if store.allowed(uid, "manager")
-            or store.db.execute(
-                "SELECT 1 FROM mod_acl WHERE uid=? AND chat=?", (uid, row["chat"])
-            ).fetchone()
-        ]
+        from .group_visibility import visible_groups
+
+        rows = await visible_groups(
+            runtime,
+            uid,
+            store.db.execute(
+                "SELECT chat,title FROM platform_mod_groups WHERE enabled=1 ORDER BY chat"
+            ).fetchall(),
+        )
         page = max(0, min(int(payload.get("page", 0)), max(0, (len(rows) - 1) // 8)))
         buttons = [
             (row["title"], {"action": "wheel_group", "chat": row["chat"]})
@@ -49,6 +49,8 @@ async def action(ui, update, payload):
     chat = str(payload["chat"])
     await runtime.moderation.check(uid, chat, "view", enabled=False)
     config, version = runtime.wheel.config(chat)
+    if name == "wheel_group":
+        store.clear_dialog(uid)
     if name == "wheel_edit":
         if payload["field"] not in {"stakes", "limit", "cooldown"}:
             raise Rejected("设置项无效")
@@ -56,7 +58,7 @@ async def action(ui, update, payload):
             uid, {"form": "wheel_field", "payload": {**payload, "version": version}}
         )
         prompt = {
-            "stakes": "发送1—4个不同档位，用空格分隔；每档5—1000且为5的倍数。\n例如：50 100 500 1000",
+            "stakes": "每次发送一个档位，例如50；每档5—1000且为5的倍数，最多4档。\n发送“完成”预览，“上一步”撤销最后一档。",
             "limit": "发送每人每日次数上限：1—1000。",
             "cooldown": "发送冷却秒数：3—3600。",
         }[payload["field"]]
@@ -134,16 +136,6 @@ async def action(ui, update, payload):
         f"实际状态：{'⚠️ ' + reason if reason else '🟢 配置就绪'}\n"
         f"档位：{' / '.join(map(str, config['stakes']))}\n每日次数：{config['limit']} · 冷却：{config['cooldown']}秒\n\n📖 固定规则\n{RULES}",
         [
-            (
-                "关闭" if config["enabled"] else "开启",
-                {
-                    "action": "wheel_preview",
-                    "chat": chat,
-                    "version": version,
-                    "field": "enabled",
-                    "value": not config["enabled"],
-                },
-            ),
             *[
                 (label, {"action": "wheel_edit", "chat": chat, "field": field})
                 for label, field in [
@@ -152,8 +144,7 @@ async def action(ui, update, payload):
                     ("冷却秒数", "cooldown"),
                 ]
             ],
-            ("返回选群", {"action": "wheel_groups"}),
-            ("本群玩法总览", {"action": "games_group_view", "chat": chat}),
-        ],
+        ]
+        + game_back(ui, chat, "wheel"),
         fold_sections=True,
     )

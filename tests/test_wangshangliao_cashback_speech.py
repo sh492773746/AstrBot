@@ -9,11 +9,11 @@ import pytest
 from pydantic import ValidationError
 
 from astrbot.builtin_stars.wangshangliao_moderation.cashback import CashbackService
+from astrbot.builtin_stars.wangshangliao_moderation.cashback_models import GroupRule
 from astrbot.builtin_stars.wangshangliao_moderation.cashback_store import (
     CashbackError,
     CashbackStore,
 )
-from astrbot.builtin_stars.wangshangliao_moderation.cashback_models import GroupRule
 from tests.test_wangshangliao_cashback_qualification import (
     OWNER,
     entry,
@@ -55,14 +55,16 @@ def test_mature_silent_member_cannot_bypass_speech_gate(scenario, operation):
     enable_speech(scenario)
     row = mature(scenario)
     assert row["state"] == "verifying" and row["first_spoke_at"] == 0
-    assert store.invitation_summary("5", "1")["pending"] == 0
+    summary = store.invitation_summary("5", "1")
+    assert summary["pending"] == 0
     assert store.list_entries(OWNER, "5", "pending")["payable_count"] == 0
-    summary = store.private_invitation_summaries(
-        "1", "bot", "99", ("5",), detail_group="5"
-    )[0]
     assert summary["verifying"] == summary["unspoken"] == 1
     assert summary["hold_pending"] == summary["spoken"] == summary["pending"] == 0
-    assert not summary["items"][0]["payable"]
+    ledger = store.list_entries(OWNER, "5", "verifying")
+    assert ledger["total"] == 1
+    assert ledger["payable_count"] == ledger["payable_amount"] == 0
+    assert ledger["items"][0]["first_spoke_at"] == 0
+    assert not hasattr(store, "private_invitation_summaries")
     with pytest.raises(CashbackError, match="speech_required"):
         store.mutate(
             OWNER,
@@ -94,11 +96,10 @@ def test_speech_does_not_shorten_three_hour_clock_and_is_idempotent(scenario):
     row = mature(scenario)
     assert row["state"] == "pending" and row["amount"] == 300
     assert store.invitation_summary("5", "1")["pending"] == 300
-    assert store.list_entries(OWNER, "5")["payable_amount"] == 300
-    assert (
-        store.private_invitation_summaries("1", "bot", "99", ("5",))[0]["pending"]
-        == 300
-    )
+    ledger = store.list_entries(OWNER, "5")
+    assert ledger["payable_amount"] == 300
+    assert ledger["payable_count"] == 1
+    assert ledger["items"][0]["first_spoke_at"] == first["first_spoke_at"]
     assert (
         store.mutate(
             OWNER,
@@ -109,6 +110,10 @@ def test_speech_does_not_shorten_three_hour_clock_and_is_idempotent(scenario):
         )["amount"]
         == 300
     )
+    paid = store.list_entries(OWNER, "5", "paid")
+    assert paid["total"] == 1 and paid["amount"] == 300
+    assert paid["items"][0]["paid_at"] == clock[0]
+    assert paid["items"][0]["payment_kind"] == "pay"
 
 
 def test_speaking_after_three_hours_releases_qualification(scenario):
@@ -128,11 +133,12 @@ def test_disabling_speech_restores_normal_qualification(scenario):
     enable_speech(scenario, False)
     row = scan(scenario)
     assert row["state"] == "pending" and row["first_spoke_at"] == 0
-    summary = store.private_invitation_summaries(
-        "1", "bot", "99", ("5",), detail_group="5"
-    )[0]
+    summary = store.invitation_summary("5", "1")
     assert summary["pending"] == 300
-    assert "first_spoke_at" not in summary["items"][0]
+    assert summary["require_speech"] == 0
+    assert summary["items"][0]["first_spoke_at"] == 0
+    ledger = store.list_entries(OWNER, "5")
+    assert ledger["payable_count"] == 1 and ledger["payable_amount"] == 300
 
 
 def test_enabling_speech_preserves_paid_history_but_correction_rechecks(scenario):

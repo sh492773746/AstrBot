@@ -10,8 +10,11 @@ BLACKLIST_COMMANDS = {
     "移除黑名单",
     "选择黑名单",
     "确认黑名单",
-    "黑名单禁言时长",
 }
+
+REMOVED_GROUP_COMMANDS = frozenset(
+    {"帮助", "群管帮助", "help", "我的权限", "sid", "黑名单禁言时长"}
+)
 
 BUSINESS_COMMANDS = {
     "关键词回复",
@@ -21,7 +24,6 @@ BUSINESS_COMMANDS = {
     "启用回复",
     "停用回复",
     "定时广告",
-    "广告图片",
     "添加广告",
     "修改广告",
     "删除广告",
@@ -29,33 +31,18 @@ BUSINESS_COMMANDS = {
     "停用广告",
     "确认回复",
     "确认广告",
-    "客服设置",
-    "客服话术",
-    "客服风格",
-    "客服长度",
-    "客服链接",
-    "客服知识",
-    "添加客服知识",
-    "删除客服知识",
-    "确认客服",
 }
-# Recognized only to explain their retirement; public dispatch never executes them.
+# General chat actions remain retired; explicit mute-only grants are independent.
 RETIRED_CHAT_ACTIONS = frozenset({"禁言", "全员禁言", "解除全员禁言"})
 RETIRED_CHAT_REPLY = (
-    "手动禁言、全员禁言和解除全员禁言请直接在旺商聊App里操作，机器人不再接受这些聊天命令。"
+    "未执行：普通手动禁言、全员禁言和解除全员禁言请直接在旺商聊App里操作。"
+    "\n仅服务端单独授权的专门汇报成员可在对应群发送「@成员 禁言128」，表示禁言128分钟；"
+    "单次1至4320分钟（最多3天），不含踢人、解禁或名单权限。"
     "\n解除单个成员禁言：本群授权管理可发送「解禁 @成员」，请从客户端选择真正的@成员。"
     "\n自动广告处罚、防刷屏不受影响。"
     "\n每日定时禁言、定时解除可直接发送「定时禁言 23:00 08:00」，插件「运行与日志 → 定时管理」可查看和暂停。"
 )
 
-PERSONAL_KNOWLEDGE_COMMANDS = {
-    "我的知识",
-    "查看我的知识",
-    "我的知识容量",
-    "添加我的知识",
-    "修改我的知识",
-    "删除我的知识",
-}
 GROUP_KNOWLEDGE_COMMANDS = {
     "本群知识",
     "查看群知识",
@@ -66,30 +53,17 @@ GROUP_KNOWLEDGE_COMMANDS = {
     "删除群知识",
     "群知识引用",
 }
-KNOWLEDGE_COMMANDS = PERSONAL_KNOWLEDGE_COMMANDS | GROUP_KNOWLEDGE_COMMANDS
+KNOWLEDGE_COMMANDS = GROUP_KNOWLEDGE_COMMANDS
 
 NO_ARGUMENT = {
     *WHITELIST_COMMANDS,
     *BLACKLIST_COMMANDS,
-    "客服列表",
-    "退出客服",
-    "结账",
-    "结账结果",
-    "菜单",
-    "私聊菜单",
-    "帮助",
-    "群管帮助",
-    "help",
-    "sid",
-    "我的权限",
-    "群列表",
     "成员列表",
     "禁言名单",
     "下一页",
     "能力",
     "规则",
     "违规计数",
-    "开发门禁",
     "全员禁言",
     "解除全员禁言",
     "定时状态",
@@ -133,9 +107,6 @@ NO_ARGUMENT = {
     "开启防刷屏",
     "关闭防刷屏",
     "热群状态",
-    "我的套餐",
-    "我的额度",
-    "套餐说明",
     "本群额度",
     "确认本群扣费",
     "开启热群",
@@ -146,8 +117,6 @@ NO_ARGUMENT = {
     "关闭自主接话",
     "开启冷场发话",
     "关闭冷场发话",
-    "我的知识",
-    "我的知识容量",
     "本群知识",
     "本群知识容量",
     "本群知识范围",
@@ -155,10 +124,6 @@ NO_ARGUMENT = {
 WITH_ARGUMENT = {
     *WHITELIST_COMMANDS,
     *BLACKLIST_COMMANDS - {"黑名单列表"},
-    "选择客服",
-    "确认已付款",
-    "确认修改",
-    "选择群",
     "成员搜索",
     "结果",
     "禁言",
@@ -171,6 +136,7 @@ WITH_ARGUMENT = {
     "抽奖奖励",
     "中奖人数",
     "抽奖倒计时",
+    "抽奖开始时间",
     "参与上限",
     "抽奖邀请门槛",
     "领奖联系人",
@@ -188,11 +154,6 @@ WITH_ARGUMENT = {
     "启用规则",
     "停用规则",
     "测试规则",
-    "我的知识",
-    "查看我的知识",
-    "添加我的知识",
-    "修改我的知识",
-    "删除我的知识",
     "本群知识",
     "查看群知识",
     "添加群知识",
@@ -201,15 +162,14 @@ WITH_ARGUMENT = {
     "群知识引用",
 }
 ALIASES = {
+    "参与抽奖": "参加抽奖",
     "定时发言": "定时广告",
-    "完整菜单": "私聊菜单",
     "解除禁言": "解禁",
     "解除黑名单": "移除黑名单",
-    "我的额度": "我的套餐",
-    "菜单": "私聊菜单",
-    "群管帮助": "帮助",
-    "help": "帮助",
-    "sid": "我的权限",
+    "删黑": "移除黑名单",
+    "删白": "移除白名单",
+    "加白": "白名单",
+    "加黑": "黑名单",
     "今日排名": "排名",
     "排行": "排名",
     "今日排行": "排名",
@@ -228,13 +188,10 @@ ALIASES = {
 
 INDEX_PATTERN = r"[1-9][0-9]{0,4}"
 TOKEN_PATTERN = r"[a-zA-Z0-9_-]{8,128}"
-FINANCE_CODE_PATTERN = r"[0-9]{6}"
 SCHEDULE_PATTERN = r"[0-9]{2}:[0-9]{2}\s+[0-9]{2}:[0-9]{2}"
 INDEX_COMMANDS = {
     "选择白名单",
     "选择黑名单",
-    "选择群",
-    "选择客服",
     "删除关键词",
     "删除规则",
     "启用规则",
@@ -242,7 +199,23 @@ INDEX_COMMANDS = {
 }
 INDEX_TEXT_COMMANDS = {"修改关键词", "修改规则"}
 TOKEN_COMMANDS = {"确认踢出", "确认定时", "确认授权", "确认白名单", "确认黑名单"}
-FINANCE_CODE_COMMANDS = {"确认已付款", "确认修改"}
+MENTION_PREFIX_ACTIONS = frozenset(
+    {
+        "禁言",
+        "解禁",
+        "解除禁言",
+        "踢出",
+        "黑名单",
+        "移除黑名单",
+        "解除黑名单",
+        "白名单",
+        "移除白名单",
+        "删黑",
+        "删白",
+        "加白",
+        "加黑",
+    }
+)
 
 
 def argument_pattern(command):
@@ -253,65 +226,35 @@ def argument_pattern(command):
         return INDEX_PATTERN + r"\s+\S.*"
     if command in TOKEN_COMMANDS:
         return TOKEN_PATTERN
-    if command in FINANCE_CODE_COMMANDS:
-        return FINANCE_CODE_PATTERN
     if command == "定时禁言":
         return SCHEDULE_PATTERN
-    if command == "黑名单禁言时长":
-        return r"[0-9]{1,5}\s*(?:分钟|小时|天)"
     if command in {"添加白名单", "移除白名单", "添加黑名单", "移除黑名单"}:
         return r"\S.{0,63}"
     return ""
 
 
-INVITATION_NUMBER = r"(?:[1-9][0-9]?|100)"
-INVITATION_DETAIL = (
-    r"(?:明细|我拉了谁|我邀请了谁|"
-    r"(?:(?:昨日|昨天|今日|今天)(?:邀请(?:好友)?(?:记录|明细)|明细)))"
-)
-
-
-def private_invitation_request(text):
-    """Parse bounded own-record requests without accepting account or group IDs.
+def is_removed_group_command(text):
+    """Identify retired chat entries without declaring an executable command.
 
     Args:
-        text: Actual sender message, not model-supplied tool arguments.
+        text: Original message or cached command, not quoted content.
 
     Returns:
-        Number, detail mode and period, or None for unsupported text.
+        Whether the message must be consumed without business actions or AI.
     """
-    if not isinstance(text, str) or len(text) > 256:
-        return None
-    text = text.strip().removeprefix("/")
-    if any(c in text for c in ("\n", "\r", "\u2028", "\u2029", "\x00")):
-        return None
-    match = re.fullmatch(
-        r"(?:我的邀请\s+)?(?P<number>"
-        + INVITATION_NUMBER
-        + r")(?:\s+(?P<detail>"
-        + INVITATION_DETAIL
-        + r"))?",
-        text,
-    )
-    number = int(match["number"]) if match else None
-    suffix = match["detail"] if match else None
-    if not match:
-        if text == "我的邀请":
-            return {"number": None, "detail": False, "period": "all"}
-        if re.fullmatch(r"我的邀请\s+" + INVITATION_DETAIL, text):
-            suffix = text.split(maxsplit=1)[1]
-        elif re.fullmatch(r"(?:昨日|昨天|今日|今天)邀请(?:好友)?(?:记录|明细)", text):
-            suffix = text
-        else:
-            return None
-    period = (
-        "yesterday"
-        if suffix and suffix.startswith(("昨日", "昨天"))
-        else "day"
-        if suffix and suffix.startswith(("今日", "今天"))
-        else None
-    )
-    return {"number": number, "detail": True if suffix else None, "period": period}
+    if not isinstance(text, str) or len(text) > 4096:
+        return False
+    text = text.strip()
+    if any(char in text for char in ("\n", "\r", "\u2028", "\u2029", "\x00")):
+        return False
+    parts = text.removeprefix("/").split(maxsplit=1)
+    if not parts:
+        return False
+    if parts[0] in {"管理", "群管"}:
+        if len(parts) == 1:
+            return parts[0] == "群管"
+        parts = parts[1].removeprefix("/").split(maxsplit=1)
+    return bool(parts and parts[0] in REMOVED_GROUP_COMMANDS)
 
 
 def recognize_command(text: str) -> str:
@@ -326,49 +269,34 @@ def recognize_command(text: str) -> str:
     if not isinstance(text, str) or len(text) > 4096:
         return ""
     text = text.strip()
-    # These exact public private-chat controls use the existing menu admission.
-    # Main handles the original text; group invocation remains private-only.
     if text in {"/chat", "/exit"}:
-        return "私聊菜单"
+        return ""
     if any(char in text for char in ("\n", "\r", "\u2028", "\u2029", "\x00")):
         return ""
     if text.startswith(("管理 ", "/管理 ")):
-        from .group_management import management_command
-
-        # Admit only a fixed envelope; Main checks the actual group grant.
-        return "私聊菜单" if management_command(text) else ""
+        return ""
     if text.startswith("/"):
         text = text[1:]
-    if text == "参与玩家福利抽奖":
+    if text in {"参与玩家福利抽奖", "参与抽奖"}:
         return "参加抽奖"
-    own = private_invitation_request(text)
-    if own and not text.isdigit():
-        return "我的邀请" + (
-            " " + str(own["number"]) if own["number"] is not None else ""
-        )
-    if text == "群管":
-        return "帮助"
     if text.startswith("群管") and text[2:3].isspace():
         text = text[2:].lstrip()
     if text.startswith("@"):
+        mute = re.fullmatch(
+            r"(@[^\r\n]{1,256}?)\s+禁言(?:\s*([0-9]{1,5})(?:分钟|分)?)?[。.!！]?",
+            text,
+        )
+        if mute:
+            return "禁言 " + mute[1] + (" " + mute[2] if mute[2] else "")
         match = re.fullmatch(
-            r"(@[^\r\n]{1,256}?)\s+(黑名单|移除黑名单|解除黑名单|白名单)", text
+            r"(@[^\r\n]{1,256}?)\s+(黑名单|移除黑名单|解除黑名单|白名单|移除白名单|删黑|删白|加白|加黑)",
+            text,
         )
         if match:
             return ALIASES.get(match[2], match[2]) + " " + match[1]
-    for action in (
-        "禁言",
-        "解禁",
-        "解除禁言",
-        "踢出",
-        "黑名单",
-        "移除黑名单",
-        "解除黑名单",
-        "白名单",
-    ):
-        if text.startswith(action + "@"):
-            text = ALIASES.get(action, action) + " " + text[len(action) :]
-            break
+    prefix, marker, remainder = text.partition("@")
+    if marker and prefix in MENTION_PREFIX_ACTIONS:
+        text = ALIASES.get(prefix, prefix) + " @" + remainder
     parts = text.split(maxsplit=1)
     if not parts:
         return ""

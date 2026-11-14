@@ -17,7 +17,7 @@ class ActorIdentity:
 
     @property
     def principal(self) -> str:
-        """Return a transport-bound key for non-authorizing private services."""
+        """Return the transport-bound actor key shared by group business services."""
         if not self.peer or len(self.peer.encode()) > 1024:
             raise ProtocolError("private_identity_unverified")
         return "nim/" + self.peer

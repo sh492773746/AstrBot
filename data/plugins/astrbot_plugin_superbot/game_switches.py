@@ -13,7 +13,7 @@ FEATURES = {
 }
 
 
-def blocker(store, chat, key, enabled, *, rollout=False, points=True):
+def blocker(store, chat, key, enabled, *, rollout=False, points=True, admission=True):
     """Explain the first closed admission gate without changing configuration.
 
     Args:
@@ -36,12 +36,9 @@ def blocker(store, chat, key, enabled, *, rollout=False, points=True):
     if not store.db.execute(
         "SELECT 1 FROM mod_groups WHERE chat=? AND enabled=1", (str(chat),)
     ).fetchone():
-        return "本群未登记或已停用，请管理员先在「群管理」启用本群。"
+        return "本群未登记或已停用，请群管理员在「群管理」重新开启。"
     if not enabled:
-        return (
-            f"本群{label}未启用，请管理员在「玩法管理 → 本群玩法启停」开启；"
-            "总开关或管理员授权不会自动开启本群玩法。"
-        )
+        return f"本群{label}未启用，请群管理员在「玩法管理 → 本群玩法启停」开启。"
     if points and not store.get("group_points_enabled", False):
         return "逐群积分配置尚未完成，请管理员核查；未提交、未扣分。"
     if rollout and str(chat) not in store.get("games_v3_groups", []):
@@ -49,6 +46,10 @@ def blocker(store, chat, key, enabled, *, rollout=False, points=True):
             f"本群{label}开关已开启，但新版开放尚未确认；"
             "请管理员重新预览并确认开启本群玩法，已有桌次继续按原规则完成。"
         )
+    if admission:
+        from .game_schedule import reason
+
+        return reason(store, chat, key)
     return ""
 
 

@@ -20,29 +20,25 @@ SENDER = "TP7ouPn6uoYSyjweRduBeKBoyyi69n2nbj"
 
 
 @pytest.mark.asyncio
-async def test_deposit_qr_owner_and_expiry(wallet):
+async def test_retired_deposit_qr_never_sends_payment_address(wallet):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
     from data.plugins.astrbot_plugin_superbot.ui import UI
 
-    pay, clock = wallet
+    pay, _ = wallet
     order = pay.create("2", 10, "qr-order")
     bot = SimpleNamespace(send_photo=AsyncMock())
     ui = UI(SimpleNamespace(store=pay.store, payments=pay, bot=bot))
     update = SimpleNamespace(
         effective_user=SimpleNamespace(id=2), effective_chat=SimpleNamespace(id=2)
     )
-    await ui.action(update, {"action": "deposit_qr", "id": order["id"]})
-    assert bot.send_photo.call_args.kwargs["photo"].getvalue().startswith(b"\x89PNG")
-    assert ADDRESS in bot.send_photo.call_args.kwargs["caption"]
+    with pytest.raises(Rejected, match="旧充值及余额支付入口已停用"):
+        await ui.action(update, {"action": "deposit_qr", "id": order["id"]})
     update.effective_user.id = 3
-    with pytest.raises(Rejected):
+    with pytest.raises(Rejected, match="旧充值及余额支付入口已停用"):
         await ui.action(update, {"action": "deposit_qr", "id": order["id"]})
-    update.effective_user.id = 2
-    clock[0] += 1801
-    with pytest.raises(Rejected):
-        await ui.action(update, {"action": "deposit_qr", "id": order["id"]})
+    bot.send_photo.assert_not_awaited()
 
 
 @pytest.fixture

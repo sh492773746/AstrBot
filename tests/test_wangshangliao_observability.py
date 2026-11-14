@@ -225,6 +225,7 @@ def test_disabled_debug_avoids_hashing_identifiers(monkeypatch):
         ("receive", "received"),
         ("process", "started"),
         ("process", "completed"),
+        ("process", "dispatch_finished"),
         ("recall", "observed"),
     ):
         d.emit(stage, outcome, "private-message", group="private-group")
@@ -250,7 +251,7 @@ def test_timing_samples_reuse_the_bounded_buffer(monkeypatch):
     for _ in range(1000):
         d.observe("event_loop", 0.001)
     assert factory.call_count == 1
-    assert d.snapshot()["timings"]["event_loop"]["samples"] == 512
+    assert d.snapshot()["timings"]["event_loop"]["samples"] == 1000
     assert d.snapshot()["timings"]["event_loop"]["count"] == 1000
 
 

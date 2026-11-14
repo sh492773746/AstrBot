@@ -47,7 +47,10 @@ async def test_admin_group_status_and_stale_switch(k3):
     await ui.admin(event, {"action": "k3_group", "chat": "-1001"}, "")
     assert "本群开关：🟢 开启" in ui.render.await_args.args[1]
     assert ui.render.await_args.kwargs["fold_sections"]
-    preview = ui.render.await_args.args[2][0][1]
+    assert not any(
+        p.get("action") == "k3_preview" for _, p in ui.render.await_args.args[2]
+    )
+    preview = {"action": "k3_preview", "chat": "-1001", "version": 1, "enabled": False}
     await ui.admin(event, preview, "")
     save = ui.render.await_args.args[2][0][1]
     await ui.admin(event, save, "")

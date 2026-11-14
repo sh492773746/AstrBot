@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>大海传媒超级机器人 · 管理</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">AstrBot 插件页面</p>
+      <h1>大海传媒超级机器人</h1>
+      <p class="muted">按群管理积分、玩法和群内服务；本BOT规则由本BOT总控维护。</p>
+    </div>
+    <button id="refresh" type="button" title="刷新页面">↻</button>
+  </header>
+
+  <p id="status" class="status" role="status">正在读取页面环境…</p>
+
+  <details class="notice" open>
+    <summary><strong>权限边界</strong></summary>
+    <p>本页面只说明 Superbot 的管理范围，不会把 Telethon AI 账号、本BOT密钥或其他群的配置暴露到这里。</p>
+    <div class="grid">
+      <div><strong>群主与指定群管</strong><span>当前群主自动管理；其他人须为现任Telegram管理员且获群主指定。仅管理本群，撤权后旧入口失效。</span></div>
+      <div><strong>本BOT总控</strong><span>赔率、概率、抽水、模型密钥、本BOT总开关和全局授权仍由本BOT管理员管理。</span></div>
+    </div>
+  </details>
+
+  <nav role="tablist" aria-label="Superbot 管理说明">
+    <button role="tab" aria-selected="true" data-panel="overview">总控说明</button>
+    <button role="tab" aria-selected="false" data-panel="groups">群功能分区</button>
+    <button role="tab" aria-selected="false" data-panel="access">接入与排查</button>
+  </nav>
+
+  <main>
+    <section id="panel-overview" role="tabpanel">
+      <h2>全部功能启停</h2>
+      <p class="muted">本BOT总开关只表示本BOT允许；目标群仍需单独登记、启用并通过权限检查。</p>
+      <div class="rows">
+        <div class="row"><strong>本BOT允许</strong><span class="pill neutral">由本BOT控制</span></div>
+        <div class="row"><strong>本群启用</strong><span class="pill neutral">由群主在群管理设置</span></div>
+        <div class="row"><strong>业务可用</strong><span class="pill neutral">本BOT允许 + 本群启用 + 权限正常</span></div>
+      </div>
+      <h2>插件入口</h2>
+      <div class="links">
+        <div><strong>Superbot 管理页</strong><code>/plugin-page/astrbot_plugin_superbot/management</code></div>
+        <div><strong>Telethon AI 账号页</strong><code>/plugin-page/astrbot_plugin_telethon_ai/accounts</code></div>
+      </div>
+    </section>
+
+    <section id="panel-groups" role="tabpanel" hidden>
+      <h2>每个群独立划分</h2>
+      <div class="feature-grid">
+        <article><h3>排行与群活动</h3><p>积分榜、标准与严格活跃统计；活跃排行奖励和达标随机抽奖。候选顺序固定、人工审核递补、奖品人工兑现，不自动转账。</p></article>
+        <article><h3>命令与交互</h3><p>兼容裸命令或严格指向本BOT，按群独立；回复其他BOT不触发业务。群键盘由管理员主动开启，帮助统一。</p></article>
+        <article><h3>积分与日常</h3><p>签到、积分查询、流水、输赢和群内积分钱包。余额、奖励和统计按群隔离。</p></article>
+        <article><h3>加拿大 28</h3><p>群内激活后识别文字下注、期次、结算和历史查询；不读取其他群的下注状态。</p></article>
+        <article><h3>积分快三</h3><p>与加拿大 28 使用互斥房间；骰子开奖、赔率和异常核查按群独立。</p></article>
+        <article><h3>娱乐玩法</h3><p>积分转盘、老虎机 PvP、扫雷接龙等逐群启用；订单和流水不混入加拿大 28。</p></article>
+        <article><h3>广告与群管</h3><p>广告杀手、广告位、群客服和群设置只作用于当前群，本BOT审核规则仍由本BOT控制。</p></article>
+        <article><h3>AI 与制图</h3><p>新接入群默认关闭，需要本BOT另行授权；不能通过 Superbot 页面绕过预算或密钥限制。</p></article>
+      </div>
+      <details class="notice">
+        <summary><strong>为什么“已授权”后仍可能显示未开启？</strong></summary>
+        <p>授权、本BOT允许、本群启用、机器人管理员权限和对应预算是不同条件。任一条件不满足，群内入口都会保持关闭；请在群管理中查看具体缺失项。</p>
+      </details>
+    </section>
+
+    <section id="panel-access" role="tabpanel" hidden>
+      <h2>接入检查</h2>
+      <div class="check-list">
+        <div><span class="check">1</span><p><strong>先把机器人加入超级群</strong><br><span class="muted">建议授予删除消息、限制成员、置顶消息等实际需要的权限。</span></p></div>
+        <div><span class="check">2</span><p><strong>由当前群主确认管理，按需指定群管</strong><br><span class="muted">拉入者和普通管理员不自动获得永久管理权，总管身份不能替代本群授权。</span></p></div>
+        <div><span class="check">3</span><p><strong>分别开启本BOT总控和本群功能</strong><br><span class="muted">修改后只刷新当前群菜单，不覆盖其他群。</span></p></div>
+      </div>
+      <details class="notice">
+        <summary><strong>常见排查</strong></summary>
+        <ul>
+          <li>群内键盘失效：检查机器人是否仍在群内、权限是否被撤销，以及本群开关是否开启。</li>
+          <li>功能提示“尚未开启”：检查本BOT允许、本群启用和玩法总开关三层状态。</li>
+          <li>私聊看不到玩法：玩法入口只在群内显示，私聊仅提供指引和账户管理。</li>
+        </ul>
+      </details>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-"""Offline delivery guards for private management and sender-only queries."""
+"""Retired private replies stay silent; active group delivery guards stay enforced."""
 
 import asyncio
 import socket
@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import pytest_asyncio
 
+from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
 from astrbot.core.platform.sources.wangshangliao import wire
 from astrbot.core.platform.sources.wangshangliao.adapter import WangshangliaoAdapter
 from astrbot.core.platform.sources.wangshangliao.group_scope import group_revision
@@ -22,8 +23,8 @@ from tests.test_wangshangliao_transport_hardening import BlockingLock
 pytestmark = pytest.mark.usefixtures("wsl_active_policy", "wsl_command_classifier")
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def offline(monkeypatch):
+@pytest.fixture(autouse=True)
+def offline(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("real_network_forbidden")
 
@@ -71,11 +72,32 @@ async def delivery(setup, monkeypatch, tmp_path):
     event.set_extra("wsl_plain_command", True)
     key = (id(adapter), "1", "2", event.unified_msg_origin)
     engine.selections[key] = {"group": "5", "expires": time.monotonic() + 600}
-    await adapter.ledger.ingest("1", "private/2/OTAy", "inbound", {"sender": "2"})
     try:
         yield service, engine, event
     finally:
         await adapter.ledger.close()
+
+
+async def assert_private_retired(event):
+    """Check that a cached private reply stopped without delivery effects.
+
+    Args:
+        event: Retired native private event with an isolated delivery adapter.
+    """
+    adapter = event.platform
+    assert not event.eligible
+    assert event.is_stopped()
+    assert event.reply_index == 0
+    assert event.get_extra("_wsl_native_reply_result") == "not_sent"
+    assert not adapter.send_lock.waiting.is_set()
+    adapter.nim.request.assert_not_awaited()
+    adapter.get_moderation_members.assert_not_awaited()
+    adapter.execute_action.assert_not_awaited()
+    async with adapter.ledger.db.execute(
+        "SELECT (SELECT COUNT(*) FROM inbox),"
+        "(SELECT COUNT(*) FROM outbox),(SELECT COUNT(*) FROM reply_recalls)"
+    ) as cursor:
+        assert await cursor.fetchone() == (0, 0, 0)
 
 
 async def revoke(service, adapter, group="5"):
@@ -108,19 +130,15 @@ async def revoke(service, adapter, group="5"):
     "change",
     ["manager", "pause", "leave", "role", "actor", "peer", "session", "version"],
 )
-async def test_member_directory_rechecks_exact_scope_after_send_lock(delivery, change):
+async def test_private_member_directory_stops_before_send_lock(delivery, change):
     service, engine, event = delivery
     adapter = event.platform
-    response = await engine.run(event, "成员列表")
-    assert "Target" in response
+    assert await engine.run(event, "成员列表") is None
     await adapter.send_lock.lock.acquire()
-    task = asyncio.create_task(event.send(event.plain_result(response)))
     try:
-        await asyncio.wait_for(adapter.send_lock.waiting.wait(), 3)
         if change == "manager":
             await revoke(service, adapter)
             assert not service.management.allowed(event, "5")
-            assert service.management.allowed(event, "6")
         elif change in {"pause", "leave", "role"}:
             tenant = service.store.tenant("1", "5")
             if change == "pause":
@@ -148,86 +166,72 @@ async def test_member_directory_rechecks_exact_scope_after_send_lock(delivery, c
             event.session_id = "1/private/3/OTAz"
         else:
             service.management.versions[service.management.key(adapter, "5")] += 1
-        adapter.send_lock.lock.release()
-        with pytest.raises(wire.ProtocolError, match="management_reply_scope_changed"):
-            await asyncio.wait_for(task, 3)
-        adapter.nim.request.assert_not_awaited()
-        assert await adapter.ledger.receipt("1/private/2/OTAy/message/0") is None
+        await asyncio.wait_for(
+            event.send(event.plain_result("cached member directory")), 1
+        )
+        await assert_private_retired(event)
     finally:
         if adapter.send_lock.lock.locked():
             adapter.send_lock.lock.release()
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("test_scope", [False, True])
-async def test_member_directory_revoked_between_segments_keeps_first_receipt(
+async def test_private_member_directory_never_reserves_first_segment(
     delivery, test_scope
 ):
     service, engine, event = delivery
     adapter = event.platform
     if test_scope:
         event.set_extra("wsl_command_result", True)
-    response = await engine.run(event, "成员列表")
+    assert await engine.run(event, "成员列表") is None
 
     async def send(*args):
         await revoke(service, adapter)
         return 200, wire.properties([(7, b"1000000"), (12, b"123")])
 
     adapter.nim.request.side_effect = send
-    with pytest.raises(wire.ProtocolError, match="management_reply_scope_changed"):
-        await event.send(event.plain_result(response + "\n" + "x" * 9000))
-    assert adapter.nim.request.await_count == 1
+    await event.send(event.plain_result("cached directory\n" + "x" * 9000))
+    await assert_private_retired(event)
     key = "1/private/2/OTAy/message/0"
-    assert (await adapter.ledger.receipt(key + "/part/0"))["status"] == "accepted"
-    assert (await adapter.ledger.receipt(key))["status"] == "unknown"
+    assert await adapter.ledger.receipt(key + "/part/0") is None
+    assert await adapter.ledger.receipt(key) is None
 
 
 @pytest.mark.asyncio
-async def test_unrelated_group_revocation_does_not_block_selected_group_reply(delivery):
+async def test_unrelated_group_grant_cannot_revive_private_reply(delivery):
     service, engine, event = delivery
     adapter = event.platform
-    response = await engine.run(event, "成员列表")
+    assert await engine.run(event, "成员列表") is None
     await adapter.send_lock.lock.acquire()
-    task = asyncio.create_task(event.send(event.plain_result(response)))
     try:
-        await asyncio.wait_for(adapter.send_lock.waiting.wait(), 3)
         await revoke(service, adapter, "6")
-        adapter.send_lock.lock.release()
-        await asyncio.wait_for(task, 3)
-        assert adapter.nim.request.await_count == 1
-        assert (await adapter.ledger.receipt("1/private/2/OTAy/message/0"))[
-            "status"
-        ] == "accepted"
+        await asyncio.wait_for(
+            event.send(event.plain_result("cached group 5 directory")), 1
+        )
+        await assert_private_retired(event)
     finally:
         if adapter.send_lock.lock.locked():
             adapter.send_lock.lock.release()
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["3", "Target"])
-async def test_menu_parameter_reply_retains_management_delivery_guard(delivery, text):
+async def test_private_menu_parameter_cannot_deliver_cached_result(delivery, text):
     service, engine, event = delivery
     adapter = event.platform
-    response = await engine.run(event, "成员列表")
+    assert await engine.run(event, "成员列表") is None
     event.message_str = text
     await adapter.send_lock.lock.acquire()
-    task = asyncio.create_task(event.send(event.plain_result(response)))
     try:
-        await asyncio.wait_for(adapter.send_lock.waiting.wait(), 3)
         await revoke(service, adapter)
-        adapter.send_lock.lock.release()
-        with pytest.raises(wire.ProtocolError, match="management_reply_scope_changed"):
-            await asyncio.wait_for(task, 3)
-        adapter.nim.request.assert_not_awaited()
+        await asyncio.wait_for(
+            event.send(event.plain_result("cached member selection")), 1
+        )
+        await assert_private_retired(event)
     finally:
         if adapter.send_lock.lock.locked():
             adapter.send_lock.lock.release()
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -235,11 +239,11 @@ async def test_selected_group_revoked_before_send_cannot_fall_back_to_other_gran
     delivery,
 ):
     service, engine, event = delivery
-    response = await engine.run(event, "成员列表")
+    assert await engine.run(event, "成员列表") is None
     await revoke(service, event.platform)
-    assert service.management.allowed(event, "6")
-    await event.send(event.plain_result(response))
-    event.platform.nim.request.assert_not_awaited()
+    assert not service.management.allowed(event, "6")
+    await event.send(event.plain_result("cached member directory"))
+    await assert_private_retired(event)
 
 
 @pytest.mark.asyncio
@@ -249,8 +253,7 @@ async def test_generated_member_reply_never_rebinds_scope_before_send(
     delivery, selection_change, remaining_grant
 ):
     service, engine, event = delivery
-    response = await engine.run(event, "成员列表")
-    assert "Target" in response
+    assert await engine.run(event, "成员列表") is None
     await revoke(service, event.platform)
     if not remaining_grant:
         await revoke(service, event.platform, "6")
@@ -261,20 +264,19 @@ async def test_generated_member_reply_never_rebinds_scope_before_send(
         engine.selections[key] = {"group": "6", "expires": time.monotonic() + 600}
     else:
         engine.selections[key]["expires"] = 0
-    await event.send(event.plain_result(response))
-    event.platform.nim.request.assert_not_awaited()
-    assert await event.platform.ledger.receipt("1/private/2/OTAy/message/0") is None
+    await event.send(event.plain_result("cached member directory"))
+    await assert_private_retired(event)
 
 
 @pytest.mark.asyncio
-async def test_original_group_guard_survives_selecting_a_revoked_other_group(delivery):
+async def test_switching_groups_cannot_revive_private_reply(delivery):
     service, engine, event = delivery
-    response = await engine.run(event, "成员列表")
+    assert await engine.run(event, "成员列表") is None
     key = (id(event.platform), "1", "2", event.unified_msg_origin)
     engine.selections[key] = {"group": "6", "expires": time.monotonic() + 600}
     await revoke(service, event.platform, "6")
-    await event.send(event.plain_result(response))
-    assert event.platform.nim.request.await_count == 1
+    await event.send(event.plain_result("cached group 5 directory"))
+    await assert_private_retired(event)
 
 
 @pytest.mark.asyncio
@@ -291,30 +293,30 @@ async def test_original_group_guard_survives_selecting_a_revoked_other_group(del
         ("定时状态", "本群尚未启用定时规则"),
     ],
 )
-async def test_private_management_results_freeze_scope_at_real_dispatch(
+async def test_private_management_rejects_before_result_generation(
     delivery, command, expected
 ):
     service, engine, event = delivery
     adapter = event.platform
     key = (id(adapter), "1", "2", event.unified_msg_origin)
     if command == "选择群 1":
-        await engine.run(event, "群列表")
+        assert await engine.run(event, "群列表") is None
     elif command == "下一页":
         engine.selections[key].update(
             all_members=[{"userId": "3", "display_name": "Target"}], offset=0
         )
-    response = await service.manager_command(event, command)
-    assert expected in response
+    with pytest.raises(OpenError, match="private_messages_retired"):
+        await service.manager_command(event, command)
     engine.selections.clear()
     await revoke(service, adapter)
     await revoke(service, adapter, "6")
-    await event.send(event.plain_result(response))
-    adapter.nim.request.assert_not_awaited()
+    await event.send(event.plain_result(expected))
+    await assert_private_retired(event)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("command", ["成员列表", "选择群 1", "群列表"])
-async def test_non_sensitive_denial_and_missing_selection_remain_deliverable(
+async def test_private_denial_and_missing_selection_are_not_delivered(
     delivery, command
 ):
     service, engine, event = delivery
@@ -323,18 +325,18 @@ async def test_non_sensitive_denial_and_missing_selection_remain_deliverable(
     if command == "群列表":
         await revoke(service, adapter)
         await revoke(service, adapter, "6")
-    response = await service.manager_command(event, command)
-    assert response and "Target" not in response and "Group 5" not in response
+    with pytest.raises(OpenError, match="private_messages_retired"):
+        await service.manager_command(event, command)
     assert event.get_extra("_wsl_management_delivery_guard") is None
-    await event.send(event.plain_result(response))
-    assert adapter.nim.request.await_count == 1
+    await event.send(event.plain_result("cached permission denial"))
+    await assert_private_retired(event)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "target", ["groups", "members", "next", "back", "activity", "schedule"]
 )
-async def test_native_menu_chain_keeps_generated_result_scope(delivery, target):
+async def test_private_native_menu_chain_stops_before_dispatch(delivery, target):
     service, engine, initial = delivery
     adapter = initial.platform
     paths = {
@@ -350,7 +352,9 @@ async def test_native_menu_chain_keeps_generated_result_scope(delivery, target):
         engine.selections[key].update(
             all_members=[{"userId": "3", "display_name": "Target"}], offset=0
         )
-    texts = []
+    selections = {key: dict(value) for key, value in engine.selections.items()}
+    command = AsyncMock(side_effect=AssertionError("private_menu_must_not_dispatch"))
+    service.manager_command = command
     for number, text in enumerate(paths[target]):
         event = native_event(text, private=True)
         event.platform = adapter
@@ -359,33 +363,20 @@ async def test_native_menu_chain_keeps_generated_result_scope(delivery, target):
         event.message_obj.message_id = f"menu-{target}-{number}"
         payload = event.get_extra("wangshangliao_payload")
         payload["_open_revision"] = group_revision(adapter.config, "")
-        service.command_at = {k: v - 4 for k, v in service.command_at.items()}
         real_send = event.send
-        final = number == len(paths[target]) - 1
-
-        async def deliver(message, *, final=final, real_send=real_send, event=event):
-            texts.append(message.chain[0].text)
-            if final:
-                engine.selections.clear()
-                await revoke(service, adapter)
-                await revoke(service, adapter, "6")
-            await real_send(message)
-
-        event.send = deliver
-        adapter.nim.request.reset_mock()
+        event.send = AsyncMock(wraps=real_send)
         await service.on_event(event)
-    if target == "back":
-        assert "Target" not in texts[-1]
-        assert adapter.nim.request.await_count == 1
-    else:
-        assert any(
-            label in texts[-1] for label in ("Group 5", "Target", "奖品", "定时规则")
-        )
-        adapter.nim.request.assert_not_awaited()
+        assert event.is_stopped()
+        assert event.get_extra("_component_claimed") is True
+        event.send.assert_not_awaited()
+        command.assert_not_awaited()
+        assert engine.selections == selections
+        await real_send(event.plain_result("cached menu response"))
+        await assert_private_retired(event)
 
 
 @pytest.mark.asyncio
-async def test_group_list_does_not_require_native_admin_for_listing_only(delivery):
+async def test_private_group_list_stays_retired_with_member_native_role(delivery):
     service, engine, event = delivery
     adapter = event.platform
     tenant = service.store.tenant("1", "6")
@@ -393,16 +384,15 @@ async def test_group_list_does_not_require_native_admin_for_listing_only(deliver
     await service.refresh()
     adapter.config.update(service.policy_values("1", adapter.config))
     event.message_str = "群列表"
-    response = await engine.run(event, "群列表")
-    assert "Group 5" in response and "Group 6" in response
-    await event.send(event.plain_result(response))
-    assert adapter.nim.request.await_count == 1
+    assert await engine.run(event, "群列表") is None
+    await event.send(event.plain_result("cached Group 5 and Group 6"))
+    await assert_private_retired(event)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("boundary", ["lock", "segment"])
-async def test_invitation_guard_rechecks_delivery_boundaries(
+async def test_private_invitation_reply_stops_before_delivery_guards(
     delivery, asynchronous, boundary
 ):
     _, _, event = delivery
@@ -431,32 +421,19 @@ async def test_invitation_guard_rechecks_delivery_boundaries(
         adapter.nim.request.side_effect = send
     else:
         await adapter.send_lock.lock.acquire()
-    task = asyncio.create_task(event.send(event.plain_result("x" * 9000)))
     try:
-        if boundary == "lock":
-            await asyncio.wait_for(adapter.send_lock.waiting.wait(), 3)
-            state["allowed"] = False
-            adapter.send_lock.lock.release()
-        with pytest.raises(wire.ProtocolError, match="private_query_scope_changed"):
-            await asyncio.wait_for(task, 3)
-        assert adapter.nim.request.await_count == (boundary == "segment")
-        if boundary == "segment":
-            key = "1/private/2/OTAy/message/0"
-            assert (await adapter.ledger.receipt(key + "/part/0"))[
-                "status"
-            ] == "accepted"
-            assert (await adapter.ledger.receipt(key))["status"] == "unknown"
-        assert state["checks"] > 1
+        state["allowed"] = False
+        await asyncio.wait_for(event.send(event.plain_result("x" * 9000)), 1)
+        assert state["checks"] == 0
+        await assert_private_retired(event)
     finally:
         if adapter.send_lock.lock.locked():
             adapter.send_lock.lock.release()
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["你好", "菜单", "帮助", "我的邀请"])
-async def test_ordinary_private_reply_does_not_require_manager_authority(
+async def test_ordinary_private_reply_stays_silent_without_manager_authority(
     delivery, text
 ):
     service, _, event = delivery
@@ -467,7 +444,64 @@ async def test_ordinary_private_reply_does_not_require_manager_authority(
     await revoke(service, adapter, "6")
     assert not service.management.allowed(event)
     await event.send(event.plain_result("ordinary reply"))
-    assert adapter.nim.request.await_count == 1
-    assert (await adapter.ledger.receipt("1/private/2/OTAy/message/0"))[
-        "status"
-    ] == "accepted"
+    await assert_private_retired(event)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("boundary", ["lock", "segment"])
+async def test_group_reply_guard_rechecks_delivery_boundaries(
+    delivery, asynchronous, boundary
+):
+    _, _, private_event = delivery
+    adapter = private_event.platform
+    event = native_event("group query")
+    event.platform = adapter
+    event.eligible = True
+    state = {"allowed": True, "checks": 0}
+
+    def guard():
+        state["checks"] += 1
+        if not state["allowed"]:
+            raise wire.ProtocolError("group_query_scope_changed")
+
+    async def async_guard():
+        await asyncio.sleep(0)
+        guard()
+
+    event.set_extra(
+        "_wsl_invitation_delivery_guard", async_guard if asynchronous else guard
+    )
+    if boundary == "segment":
+
+        async def send(*args):
+            state["allowed"] = False
+            return 200, wire.properties([(7, b"1000000"), (12, b"123")])
+
+        adapter.nim.request.side_effect = send
+    else:
+        await adapter.send_lock.lock.acquire()
+    task = asyncio.create_task(event.send(event.plain_result("x" * 9000)))
+    try:
+        if boundary == "lock":
+            await asyncio.wait_for(adapter.send_lock.waiting.wait(), 3)
+            state["allowed"] = False
+            adapter.send_lock.lock.release()
+        with pytest.raises(wire.ProtocolError, match="group_query_scope_changed"):
+            await asyncio.wait_for(task, 3)
+        assert adapter.nim.request.await_count == (boundary == "segment")
+        key = "1/5/message/0"
+        if boundary == "segment":
+            assert (await adapter.ledger.receipt(key + "/part/0"))[
+                "status"
+            ] == "accepted"
+            assert (await adapter.ledger.receipt(key))["status"] == "unknown"
+        else:
+            assert await adapter.ledger.receipt(key + "/part/0") is None
+        assert state["checks"] > 1
+    finally:
+        if adapter.send_lock.lock.locked():
+            adapter.send_lock.lock.release()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        event.processing_completion.cancel()

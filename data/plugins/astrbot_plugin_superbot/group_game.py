@@ -1,6 +1,8 @@
 """Group text orders and existing non-betting queries."""
 
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from telegram import InlineKeyboardButton as Button
 from telegram import InlineKeyboardMarkup
@@ -148,7 +150,17 @@ class GroupGame:
     async def action(self, update, data, token=""):
         """Allow queries only; all historical betting callbacks fail closed."""
         op = data.get("action")
-        if op not in {"play", "bets", "points", "checkin", "cancel"}:
+        if op not in {
+            "play",
+            "bets",
+            "points",
+            "checkin",
+            "cancel",
+            "account",
+            "my_reports",
+            "my_warnings",
+            "my_query",
+        }:
             raise Rejected("旧下注入口已停用，请在本群发送 jnd 后直接发送文字下注")
         uid, chat = str(update.effective_user.id), str(update.effective_chat.id)
         if update.effective_chat.type != "supergroup" or getattr(
@@ -163,6 +175,83 @@ class GroupGame:
             # The shared query path verifies membership once and fails closed on transport errors.
             return await self.text_game.queue_bets(update)
         await self.runtime.community.member(uid, chat, require_moderation=False)
+        if not self.store.db.execute(
+            "SELECT 1 FROM mod_groups WHERE chat=? AND enabled=1", (chat,)
+        ).fetchone():
+            raise Rejected("本群功能已停用。")
+        if op == "my_query":
+            if data.get("query") not in {
+                "points",
+                "checkin",
+                "history",
+                "flow",
+                "profit",
+            }:
+                raise Rejected("无效个人查询。")
+            event = SimpleNamespace(
+                effective_user=update.effective_user,
+                effective_chat=update.effective_chat,
+                message=SimpleNamespace(
+                    message_id=0,
+                    date=datetime.fromtimestamp(self.store.clock(), timezone.utc),
+                ),
+            )
+            callback = getattr(update, "callback_query", None)
+            return await self.text_game.query_points(
+                event,
+                data["query"],
+                callback_id=getattr(callback, "id", None),
+                private=True,
+            )
+        if op in {"account", "my_reports", "my_warnings"}:
+            buttons = [
+                (label, {"action": "my_query", "query": query})
+                for label, query in (
+                    ("积分", "points"),
+                    ("签到", "checkin"),
+                    ("历史", "history"),
+                    ("流水", "flow"),
+                    ("输赢", "profit"),
+                )
+                if self.store.get("modules", {}).get(
+                    "points" if query in {"points", "checkin"} else "game"
+                )
+            ]
+            if hasattr(self.runtime, "community"):
+                buttons += [
+                    ("我的举报", {"action": "my_reports"}),
+                    ("我的警告", {"action": "my_warnings"}),
+                ]
+            if op == "my_reports":
+                rows = self.store.db.execute(
+                    "SELECT c.id,c.status,c.outcome FROM cm_cases c JOIN cm_reports r ON r.case_id=c.id "
+                    "WHERE r.uid=? AND c.chat=? ORDER BY c.created DESC LIMIT 10",
+                    (uid, chat),
+                ).fetchall()
+                text = "📋 **本群我的举报**\n" + (
+                    "\n".join(
+                        f"#{r['id']} · {r['outcome'] or r['status']}" for r in rows
+                    )
+                    or "暂无记录。"
+                )
+            elif op == "my_warnings":
+                rows = self.store.db.execute(
+                    "SELECT reason,revoked FROM cm_violations WHERE uid=? AND chat=? ORDER BY at DESC LIMIT 10",
+                    (uid, chat),
+                ).fetchall()
+                text = "📋 **本群我的警告**\n" + (
+                    "\n".join(
+                        f"{r['reason']} · {'已撤销' if r['revoked'] else '记录在案'}"
+                        for r in rows
+                    )
+                    or "暂无记录。"
+                )
+            else:
+                title = self.store.db.execute(
+                    "SELECT title FROM mod_groups WHERE chat=?", (chat,)
+                ).fetchone()[0]
+                text = f"👤 **我的 · {title or chat}**\nUID：{uid}\n仅本人可见，所有查询只限当前群。"
+            return await self.render(update, text, buttons, fold_sections=True)
         module = "points" if op == "points" else "game"
         if not self.store.get("modules", {}).get(module):
             raise Rejected("该功能尚未开放")
@@ -180,6 +269,9 @@ class GroupGame:
     async def message(self, update, command, text):
         """Consume retired commands; route queries and plain text separately."""
         action = command.removeprefix("/")
+        if action == "my" or text.strip() in {"我的", "👤 我的"}:
+            await self.action(update, {"action": "account"})
+            return True
         if action in {"bet", "game", "cancel"}:
             return True
         if action in {"play", "bets", "checkin"}:

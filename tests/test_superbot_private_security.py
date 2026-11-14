@@ -13,8 +13,10 @@ from test_superbot_avatar_ai import ai  # noqa: F401
 
 from data.plugins.astrbot_plugin_superbot.ads import Ads
 from data.plugins.astrbot_plugin_superbot.main import Main
+from data.plugins.astrbot_plugin_superbot.moderation import Moderation
 from data.plugins.astrbot_plugin_superbot.points import Points
 from data.plugins.astrbot_plugin_superbot.store import Rejected
+from data.plugins.astrbot_plugin_superbot.tenants import migrate
 from data.plugins.astrbot_plugin_superbot.ui import UI
 
 
@@ -24,6 +26,10 @@ def private_bot(env):
     plugin = Main(MagicMock(), {"platform_id": "fixture"})
     plugin.store, plugin.game = store, game
     plugin.points, plugin.ads = Points(store), Ads(store)
+    plugin.moderation = Moderation(plugin)
+    migrate(store)
+    plugin.tenants = SimpleNamespace()
+    plugin.merchant_ads = SimpleNamespace()
     plugin.application = SimpleNamespace(
         bot=SimpleNamespace(send_message=AsyncMock(), username="fixture_bot")
     )
@@ -62,13 +68,9 @@ def incoming(text="", uid=777, callback=None):
 @pytest.mark.parametrize(
     "payload",
     [
-        {"action": "admin"},
-        {"action": "modules"},
-        {"action": "admin_points"},
-        {"action": "admin_ads"},
-        {"action": "admin_game"},
-        {"action": "mod_home"},
         {"action": "module_save", "key": "game", "enabled": False},
+        {"action": "form", "form": "grant"},
+        {"action": "form", "form": "revoke"},
     ],
 )
 async def test_stranger_admin_callbacks_rejected(private_bot, payload):
@@ -78,6 +80,37 @@ async def test_stranger_admin_callbacks_rejected(private_bot, payload):
     with pytest.raises(ApplicationHandlerStop):
         await bot.receive(incoming(callback=callback), None)
     assert bot.bot.send_message.await_args.kwargs["text"] == "无权限"
+    assert bot.store.get("modules") == before
+    assert not bot.store.allowed("777")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "admin"},
+        {"action": "mod_home"},
+        {"action": "modules"},
+        {"action": "admin_points"},
+        {"action": "admin_ads"},
+        {"action": "admin_game"},
+    ],
+)
+async def test_old_admin_navigation_opens_safe_group_selection(private_bot, payload):
+    bot = private_bot
+    before = bot.store.get("modules")
+    callback = bot.store.callback("777", "777", payload)
+    event = incoming(callback=callback)
+    with pytest.raises(ApplicationHandlerStop):
+        await bot.receive(event, None)
+    assert "我的群" in event.callback_query.edit_message_text.await_args.kwargs["text"]
+    markup = event.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    assert {
+        bot.store.resolve(button.callback_data[3:], "777", "777")["action"]
+        for row in markup.inline_keyboard for button in row
+    } == {"tenant_join", "tenant_ad_search"}
+    bot.bot.send_message.assert_awaited_once()
+    assert bot.bot.send_message.await_args.kwargs["text"] == "菜单已更新。"
     assert bot.store.get("modules") == before
     assert not bot.store.allowed("777")
 
@@ -152,8 +185,20 @@ async def test_private_callbacks_are_throttled_before_rendering(
     bot.keyboard_versions["777"] = str(bot.ui.keyboard("777").to_dict())
     callback = bot.store.callback("777", "777", {"action": "account"})
     before = bot.store.db.execute("SELECT count(*) FROM callbacks").fetchone()[0]
-    edits, notices = 0, 0
-    for _ in range(20):
+    first = incoming(callback=callback)
+    with pytest.raises(ApplicationHandlerStop):
+        await bot.receive(first, None)
+    markup = first.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    buttons = [button for row in markup.inline_keyboard for button in row]
+    assert {
+        bot.store.resolve(button.callback_data[3:], "777", "777")["action"]
+        for button in buttons
+    } == {"tenant_home", "help"}
+    rendered = bot.store.db.execute("SELECT count(*) FROM callbacks").fetchone()[0]
+    assert rendered - before == len(buttons)
+    edits = first.callback_query.edit_message_text.await_count
+    notices = first.callback_query.answer.await_count
+    for _ in range(19):
         event = incoming(callback=callback)
         with pytest.raises(ApplicationHandlerStop):
             await bot.receive(event, None)
@@ -161,7 +206,8 @@ async def test_private_callbacks_are_throttled_before_rendering(
         notices += event.callback_query.answer.await_count
     after = bot.store.db.execute("SELECT count(*) FROM callbacks").fetchone()[0]
     assert edits == 1 and notices == 2
-    assert after - before == 7
+    assert after == rendered
+    assert len(bot.private_requests) == 1
     assert not bot.active_updates
 
 
@@ -219,14 +265,49 @@ async def test_private_global_window_is_bounded(private_bot, monkeypatch):
     bot.ui.action = AsyncMock()
     for uid in range(100, 220):
         with pytest.raises(ApplicationHandlerStop):
-            await bot.receive(incoming("我的", uid=uid), None)
+            await bot.receive(incoming("帮助", uid=uid), None)
     assert bot.ui.action.await_count == 120
     for uid in range(220, 240):
         with pytest.raises(ApplicationHandlerStop):
-            await bot.receive(incoming("我的", uid=uid), None)
+            await bot.receive(incoming("帮助", uid=uid), None)
     assert bot.ui.action.await_count == 120
     assert len(bot.private_requests) == 120
-    ticks[0] += 60
+    ticks[0] = 1059.999
     with pytest.raises(ApplicationHandlerStop):
-        await bot.receive(incoming("我的", uid=241), None)
+        await bot.receive(incoming("帮助", uid=240), None)
+    assert bot.ui.action.await_count == 120
+    assert len(bot.private_requests) == 120
+    ticks[0] = 1060.0
+    with pytest.raises(ApplicationHandlerStop):
+        await bot.receive(incoming("帮助", uid=241), None)
     assert bot.ui.action.await_count == 121
+    assert len(bot.private_requests) == 1
+    assert all(
+        call.args[1] == {"action": "help"} for call in bot.ui.action.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_private_user_window_recovers_at_exact_boundary(private_bot, monkeypatch):
+    ticks = [1000.0]
+    monkeypatch.setattr(
+        "data.plugins.astrbot_plugin_superbot.main.time.monotonic", lambda: ticks[0]
+    )
+    bot = private_bot
+    bot.ui.action = AsyncMock()
+    for index in range(30):
+        ticks[0] = 1000.0 + index * 0.5
+        with pytest.raises(ApplicationHandlerStop):
+            await bot.receive(incoming("帮助"), None)
+    assert bot.ui.action.await_count == 30
+    for now in (1015.0, 1059.999):
+        ticks[0] = now
+        with pytest.raises(ApplicationHandlerStop):
+            await bot.receive(incoming("帮助"), None)
+        assert bot.ui.action.await_count == 30
+        assert len(bot.private_limits["777"]["requests"]) == 30
+    ticks[0] = 1060.0
+    with pytest.raises(ApplicationHandlerStop):
+        await bot.receive(incoming("帮助"), None)
+    assert bot.ui.action.await_count == 31
+    assert len(bot.private_limits["777"]["requests"]) == 30
