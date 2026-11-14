@@ -4,11 +4,13 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from astrbot.builtin_stars.wangshangliao_moderation import ai_plans
 from astrbot.builtin_stars.wangshangliao_moderation.ai_plans import AIPlans, money
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import (
     OpenError,
@@ -307,13 +309,59 @@ def test_paid_limit_exemption_still_has_budget(plans, tier, amount, limit):
         charge(plans, "money-full", now=now + 6, exempt=True)
 
 
-def test_expiry_renewal_does_not_reset_same_day_usage(plans):
+def test_expiry_renewal_does_not_reset_same_day_usage(plans, monkeypatch):
+    clock = [NOW]
+    # Replace only billing's clock reference, not the shared time module.
+    monkeypatch.setattr(ai_plans, "time", SimpleNamespace(time=lambda: clock[0]))
     preview = grant(plans)
+    assert preview["starts"] == NOW
     when = preview["ends"] - 60
     charge(plans, now=when)
-    state = plans.snapshot("nim/1001", "1", now=when + 61)
+    before = plans.snapshot("nim/1001", "1", now=when)
+    assert before["tier"] == "plus" and before["used"] == 1
+    clock[0] = when + 61
+    state = plans.snapshot("nim/1001", "1")
+    assert state["day"] == before["day"]
     assert state["tier"] == "trial" and state["used"] == 1
     assert state["remaining"] == 19
+    renewal = grant(plans)
+    assert renewal["starts"] == clock[0]
+    renewed = plans.snapshot("nim/1001", "1")
+    assert renewed["day"] == before["day"]
+    assert renewed["tier"] == "plus" and renewed["used"] == 1
+    assert renewed["remaining"] == 1999
+
+
+def test_expiry_across_beijing_midnight_resets_only_daily_usage(plans, monkeypatch):
+    clock = [NOW + 12 * 3600 + 30]
+    monkeypatch.setattr(ai_plans, "time", SimpleNamespace(time=lambda: clock[0]))
+    preview = grant(plans)
+    midnight = (
+        datetime.fromtimestamp(preview["ends"], ZoneInfo("Asia/Shanghai"))
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
+    when = preview["ends"] - 60
+    assert when < midnight < preview["ends"]
+    charge(plans, now=when)
+    before = plans.snapshot("nim/1001", "1", now=midnight - 1)
+    assert before["tier"] == "plus" and before["used"] == 1
+    clock[0] = midnight
+    next_day = plans.snapshot("nim/1001", "1")
+    assert next_day["day"] != before["day"]
+    assert next_day["period"] == before["period"]
+    assert next_day["tier"] == "plus" and next_day["used"] == 0
+    assert next_day["remaining"] == 2000
+    assert next_day["cost_micro"] == before["cost_micro"] > 0
+    clock[0] = preview["ends"] + 1
+    expired = plans.snapshot("nim/1001", "1")
+    assert expired["day"] == next_day["day"]
+    assert expired["tier"] == "trial" and expired["used"] == 0
+    assert expired["remaining"] == 20
+    with plans.store.connect() as db:
+        assert [
+            tuple(row) for row in db.execute("SELECT day,state FROM ai_charges")
+        ] == [(before["day"], "settled")]
 
 
 def test_price_change_payload_change_and_unsent_refund(plans):
