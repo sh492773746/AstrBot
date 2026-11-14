@@ -4,6 +4,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -535,15 +536,25 @@ async def test_fresh_scope_rejects_mutation_during_worker(
         elif change == "path":
             case.adapter.ledger.path = case.root / "other.sqlite3"
         elif change == "inode":
-            replacement = case.root / "replacement.sqlite3"
-            replacement.write_bytes(case.path.read_bytes())
-            replacement.replace(case.path)
+            original_stat = rankings.Path.stat
+
+            def replaced_stat(path, *args, **kwargs):
+                result = original_stat(path, *args, **kwargs)
+                if path == case.path:
+                    return os.stat_result(
+                        (result.st_mode, result.st_ino + 1, *result[2:])
+                    )
+                return result
+
+            # SQLite still owns the file here; Windows forbids replacing it.
+            monkeypatch.setattr(rankings.Path, "stat", replaced_stat)
         elif change == "day":
             case.clock[0] += 86400
         release.set()
         with pytest.raises(ProtocolError, match="ranking_scope"):
             await task
         assert not case.runtime.cache and not case.runtime.settled_cache
+        assert not case.runtime.normalized_cache
     finally:
         release.set()
         assert await asyncio.to_thread(finished.wait, 2)

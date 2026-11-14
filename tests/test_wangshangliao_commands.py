@@ -17,20 +17,104 @@ from tests.fixtures.wsl_actions import bind_action_port
 from tests.test_wangshangliao_plain_commands import native_event
 
 
-@pytest.fixture(autouse=True)
-def offline(monkeypatch):
-    """Keep command regressions isolated from native network access.
+@pytest_asyncio.fixture(autouse=True)
+async def offline(monkeypatch):
+    """Deny network I/O after the runner initializes its Windows self-pipe.
 
     Args:
-        monkeypatch: Test-scoped socket replacement.
+        monkeypatch: Test-scoped patch factory.
+
+    Yields:
+        Nothing; denial remains active through dependent-fixture cleanup.
     """
 
     def forbidden(*args, **kwargs):
         raise AssertionError("real_network_forbidden")
 
-    monkeypatch.setattr(socket.socket, "connect", forbidden)
-    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
-    monkeypatch.setattr(socket, "create_connection", forbidden)
+    with monkeypatch.context() as guard:
+        guard.setattr(socket.socket, "connect", forbidden)
+        guard.setattr(socket.socket, "connect_ex", forbidden)
+        guard.setattr(socket, "create_connection", forbidden)
+        yield
+
+
+class TestOfflineNetworkGuard:
+    """Exercise the Windows self-pipe without exempting business connections."""
+
+    @classmethod
+    @pytest.fixture(scope="class", autouse=True)
+    def windows_selfpipe(cls):
+        """Use CPython's TCP socketpair only for event-loop initialization.
+
+        Yields:
+            Counts of initialized self-pipes and cleanly closed runners.
+        """
+        state = {"pairs": 0, "closed": 0}
+        connect = socket.socket.connect
+        connect_ex = socket.socket.connect_ex
+        create_connection = socket.create_connection
+        close = asyncio.BaseEventLoop.close
+
+        def socketpair():
+            pair = socket._fallback_socketpair()
+            assert all(sock.family == socket.AF_INET for sock in pair)
+            state["pairs"] += 1
+            return pair
+
+        def close_after_guard(loop):
+            assert socket.socket.connect is connect
+            assert socket.socket.connect_ex is connect_ex
+            assert socket.create_connection is create_connection
+            close(loop)
+            state["closed"] += 1
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(socket, "socketpair", socketpair)
+            patch.setattr(asyncio.BaseEventLoop, "close", close_after_guard)
+            yield state
+        assert state["pairs"] > 0
+        assert state["closed"] == state["pairs"]
+
+    def assert_network_blocked(self, host):
+        """Exercise every guarded connection API without a loopback exemption.
+
+        Args:
+            host: Numeric loopback or documentation-only remote address.
+        """
+        address = (host, 9)
+        with socket.socket() as sock:
+            with pytest.raises(AssertionError):
+                sock.connect(address)
+            with pytest.raises(AssertionError):
+                sock.connect_ex(address)
+        with pytest.raises(AssertionError):
+            socket.create_connection(address, timeout=0.1)
+
+    @pytest_asyncio.fixture
+    async def guarded_cleanup(self):
+        """Keep dependent-fixture cleanup inside the network-denial lifetime.
+
+        Yields:
+            Nothing; cleanup itself must still be guarded.
+        """
+        yield
+        self.assert_network_blocked("127.0.0.1")
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "192.0.2.1"])
+    def test_sync_network_remains_blocked(
+        self, windows_selfpipe, guarded_cleanup, host
+    ):
+        assert windows_selfpipe["pairs"] > 0
+        self.assert_network_blocked(host)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("host", ["127.0.0.1", "192.0.2.1"])
+    async def test_async_network_remains_blocked(
+        self, windows_selfpipe, guarded_cleanup, host
+    ):
+        assert asyncio.get_running_loop()._ssock.family == socket.AF_INET
+        assert windows_selfpipe["pairs"] > 0
+        self.assert_network_blocked(host)
 
 
 @pytest_asyncio.fixture

@@ -4452,8 +4452,8 @@
       "html": "wangshangliao-testing.html",
       "markdown": "wangshangliao-testing.md",
       "aggregate": "llms-full.txt",
-      "sha256": "351041f0ae8253f8979241b6845ee0769bd575669bef8b3f28020c4e72c93c27",
-      "line_count": 768,
+      "sha256": "6fbd347f68623c9c923e9206a4593d581948b3fc0fbdcea7b7b764c89bb07374",
+      "line_count": 773,
       "headings": [
         {
           "level": 1,
@@ -4621,31 +4621,31 @@
           "level": 2,
           "title": "性能门槛",
           "line": 710,
-          "end_line": 730
+          "end_line": 735
         },
         {
           "level": 2,
           "title": "当前证据与缺项",
-          "line": 731,
-          "end_line": 734
+          "line": 736,
+          "end_line": 739
         },
         {
           "level": 3,
           "title": "2026-10-15 资料与代码清理（历史）",
-          "line": 735,
-          "end_line": 744
+          "line": 740,
+          "end_line": 749
         },
         {
           "level": 3,
           "title": "之前的功能轮次",
-          "line": 745,
-          "end_line": 762
+          "line": 750,
+          "end_line": 767
         },
         {
           "level": 2,
           "title": "历史记录",
-          "line": 763,
-          "end_line": 768
+          "line": 768,
+          "end_line": 773
         }
       ]
     },
@@ -6351,7 +6351,7 @@
       "html": "wangshangliao-scripts.html",
       "markdown": "wangshangliao-scripts.md",
       "aggregate": "llms-full.txt",
-      "sha256": "bf2960072f0633160b60c004c4a5910338ac33c8b129d6a051d81c2efcc207c5",
+      "sha256": "6679303d013f82de066470c8622b1b68269a91a5a208f33155349e8c40c8019b",
       "line_count": 448,
       "headings": [
         {

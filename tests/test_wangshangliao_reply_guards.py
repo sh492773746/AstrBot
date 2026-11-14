@@ -17,20 +17,34 @@ from astrbot.core.platform.sources.wangshangliao.group_scope import group_revisi
 from astrbot.core.platform.sources.wangshangliao.runtime_policy import runtime
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 from tests.test_wangshangliao_command_parity import setup as setup
+from tests.test_wangshangliao_commands import (
+    TestOfflineNetworkGuard as TestOfflineNetworkGuard,
+)
 from tests.test_wangshangliao_plain_commands import native_event
 from tests.test_wangshangliao_transport_hardening import BlockingLock
 
 pytestmark = pytest.mark.usefixtures("wsl_active_policy", "wsl_command_classifier")
 
 
-@pytest.fixture(autouse=True)
-def offline(monkeypatch):
+@pytest_asyncio.fixture(autouse=True)
+async def offline(monkeypatch):
+    """Deny network I/O after the runner initializes its Windows self-pipe.
+
+    Args:
+        monkeypatch: Test-scoped patch factory.
+
+    Yields:
+        Nothing; denial remains active through dependent-fixture cleanup.
+    """
+
     def forbidden(*args, **kwargs):
         raise AssertionError("real_network_forbidden")
 
-    monkeypatch.setattr(socket.socket, "connect", forbidden)
-    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
-    monkeypatch.setattr(socket, "create_connection", forbidden)
+    with monkeypatch.context() as guard:
+        guard.setattr(socket.socket, "connect", forbidden)
+        guard.setattr(socket.socket, "connect_ex", forbidden)
+        guard.setattr(socket, "create_connection", forbidden)
+        yield
 
 
 @pytest_asyncio.fixture

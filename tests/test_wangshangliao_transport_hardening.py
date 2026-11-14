@@ -33,8 +33,11 @@ from astrbot.core.platform.sources.wangshangliao.progression_store import (
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
 
 
-@pytest.fixture(autouse=True)
-def offline(monkeypatch, tmp_path):
+@pytest_asyncio.fixture(autouse=True)
+async def offline(monkeypatch, tmp_path):
+    # Initialize asyncio's internal socketpair before denying all test traffic.
+    assert asyncio.get_running_loop().is_running()
+
     def forbidden(*args, **kwargs):
         raise AssertionError("real_network_forbidden")
 
@@ -43,6 +46,20 @@ def offline(monkeypatch, tmp_path):
     monkeypatch.setattr(socket, "create_connection", forbidden)
     for module in (automatic, moderation, activities, activity_store, content_rules):
         monkeypatch.setattr(module, "instance_dir", lambda _: tmp_path)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "192.0.2.1"])
+async def test_offline_guard_blocks_loopback_and_remote_connections(host):
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family) as connection:
+        for connect in (
+            connection.connect,
+            connection.connect_ex,
+            socket.create_connection,
+        ):
+            with pytest.raises(AssertionError, match="^real_network_forbidden$"):
+                connect((host, 443))
 
 
 @pytest_asyncio.fixture

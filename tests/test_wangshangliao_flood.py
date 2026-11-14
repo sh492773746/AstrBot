@@ -510,7 +510,12 @@ async def test_restricted_media_flood_keeps_first_warning(fresh_bot, kind, adver
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["video", "forward"])
-async def test_restricted_media_worker_counts_flood_after_individual_recalls(bot, kind):
+async def test_restricted_media_worker_counts_flood_after_individual_recalls(
+    bot, monkeypatch, kind
+):
+    # Keep the authenticated burst inside three seconds regardless of SQLite speed.
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
     bot.config["moderation"].update(
         video_whitelist_only=True,
         recall_forward=True,
@@ -523,10 +528,19 @@ async def test_restricted_media_worker_counts_flood_after_individual_recalls(bot
     )
     try:
         for n in range(5):
-            await ingest(bot, str(800 + n), "", kind=kind)
+            clock[0] += 0.25
+            envelope = await ingest(bot, str(800 + n), "", kind=kind)
+            assert envelope["_ingress_flood"]["rapid"] == n + 1
+            assert envelope["_ingress_flood"]["category"] == (
+                "message_flood" if n == 4 else ""
+            )
             await runtime.step()
             await asyncio.gather(*runtime.workers.values())
-        await drain_recalls(runtime)
+            await drain_recalls(runtime)
+            if n < 4:
+                assert bot.calls == [
+                    ("recall", str(800 + i), "22") for i in range(n + 1)
+                ]
         assert bot.calls == [("recall", str(800 + n), "22") for n in range(4)] + [
             ("mute", "2", 1),
             ("recall", "804", "22"),

@@ -6,6 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+import pytest_asyncio
 
 from astrbot.builtin_stars.wangshangliao_moderation.command_menu import (
     CommandMenu,
@@ -17,14 +18,20 @@ from astrbot.builtin_stars.wangshangliao_moderation.open_store import (
     OpenStore,
 )
 from astrbot.core.platform.sources.wangshangliao.identity import ActorIdentity
+from tests.test_wangshangliao_commands import (
+    TestOfflineNetworkGuard as TestOfflineNetworkGuard,
+)
 
 
-@pytest.fixture(autouse=True)
-def offline_only(monkeypatch):
-    """Reject network access during every synthetic authority test.
+@pytest_asyncio.fixture(autouse=True)
+async def offline_only(monkeypatch):
+    """Deny network I/O after the runner initializes its Windows self-pipe.
 
     Args:
         monkeypatch: Test-scoped environment and socket overrides.
+
+    Yields:
+        Nothing; denial remains active through dependent-fixture cleanup.
     """
     monkeypatch.setenv("ASTRBOT_DISABLE_FILE_LOGGING", "1")
     monkeypatch.setenv("ASTRBOT_DISABLE_METRICS", "1")
@@ -32,8 +39,10 @@ def offline_only(monkeypatch):
     def reject_connection(*args, **kwargs):
         raise AssertionError("distributed_authority_network_forbidden")
 
-    monkeypatch.setattr(socket.socket, "connect", reject_connection)
-    monkeypatch.setattr(socket.socket, "connect_ex", reject_connection)
+    with monkeypatch.context() as guard:
+        guard.setattr(socket.socket, "connect", reject_connection)
+        guard.setattr(socket.socket, "connect_ex", reject_connection)
+        yield
 
 
 @pytest.fixture

@@ -9750,16 +9750,21 @@ root运行可能导入AstrBot的CLI时，逐条命令加`env ASTRBOT_DISABLE_FIL
 
 ## 性能门槛
 
-使用二十群、每秒一百条、慢AI及私聊洪泛，覆盖真实接收／调度／规则／存储链路。
+使用二十群、每秒一百条、群AI慢桩及被忽略的私信洪泛，覆盖真实接收／调度／规则／存储链路。
 这里的“真实”指执行实际代码，平台收发、慢模型和财务身份可以是隔离模拟；
 不是向二十个生产群发消息。规则P95目标不超过1秒，记录绝对账本查询P95、
 样本数、积压／拒绝、内存及任务峰值。模型测试可用本地慢桩，不必付费或改变公共门禁。
 
 用户于**北京时间2026-10-17**接受当轮查询P95 3.027ms，取消查询相对增长
 不超过10%作为本轮上线阻断。当前复测明确选用
-`check_wsl_open_load.py --integrated --finance --absolute-query-report --seconds 30`；
+`check_wsl_open_load.py --integrated --absolute-query-report --seconds 30`；
 没有该参数时工具仍执行旧10%断言。绝对报告模式不新增一个未经约定的绝对SLA，
 `within_ten_percent=false`保留为诊断，不改写成历史通过。
+
+2026-11-14发布版本已移除私信财务导航，旧`--finance`在访问数据库、网络或
+设置CPU亲和性前明确拒绝。慢模型隔离改用两个真实群AI请求，保留套餐成本预留与
+结算核验；私信仅确认接收，不解码正文、不写入消息账本。可用
+`ASTRBOT_WSL_EVIDENCE_ROOT`指定私有验收输出目录。
 
 旧记录`wsl-native-load-20261015T140619.json`：
 3000条消息，规则P95约13.51ms；账本P95从11.665ms升到17.846ms，增幅52.99%，**未达标**。
@@ -15396,7 +15401,7 @@ their initial baseline rather than clearing the counter.
 | 隔离财务页面 | `tests/test_wangshangliao_settlement_page.py` | 插件结账使用临时账本、合成后台身份及真实本地API；旧独立站4个页面脚本已移除，不等于生产付款验收 |
 | 线上读取＋合成编辑 | [check_wangshangliao_page.py](check_wangshangliao_page.py)、[check_wsl_cards_browser.py](check_wsl_cards_browser.py) | 使用真实部署页面／读取，拦截设置写入；不是纯离线，也不证明真实改名片 |
 | 好友入口移除检查 | [check_wsl_friend_removal.py](check_wsl_friend_removal.py) | 访问真实后台并探测已移除路由；`--reload`重载插件，`--docs`写截图；不是好友删除或纯合成测试 |
-| 只读性能／本地负载 | [benchmark_wsl_database.py](benchmark_wsl_database.py)、[check_wsl_open_load.py](check_wsl_open_load.py) | 前者临时合成库；后者默认真实库只读，可`--database`指定快照；当前绝对报告显式加`--absolute-query-report` |
+| 只读性能／本地负载 | [benchmark_wsl_database.py](benchmark_wsl_database.py)、[check_wsl_open_load.py](check_wsl_open_load.py) | 前者临时合成库；后者默认真实库只读，可`--database`指定快照；`--integrated`使用群AI慢桩和群消息，私信只确认接收；`--finance`已退役并在访问数据前拒绝；当前绝对报告显式加`--absolute-query-report` |
 | 固定测试实验室 | [wsl_test_lab.py](wsl_test_lab.py) | 邀请、移除及平台角色等测试能力；预览确认、对象白名单，不用于正式群；预览也访问平台并保存测试日志 |
 | 旧群离线归零 | [reset_wsl_test_group.py](reset_wsl_test_group.py) | 默认预览；`--apply`只处理已授权1459282，双服务停止、备份／摘要确认；不是全新群证明 |
 | 历史群验收工具 | [check_wsl_pair_live.py](check_wsl_pair_live.py)、[check_wsl_pair_rejoin_live.py](check_wsl_pair_rejoin_live.py) | 仍依赖旧私信辅助类，不能作为当前整套验收直接运行；群处罚／成员流程需另审查现行阶段与恢复边界 |
@@ -15406,7 +15411,7 @@ their initial baseline rather than clearing the counter.
 | 独立收费测试 | [check_wsl_model_cost.py](check_wsl_model_cost.py) | 固定最多4次模型调用；只在单独授权后运行，不打开公共AI门禁 |
 | 知识检索模型测试 | [check_wsl_knowledge_model.py](check_wsl_knowledge_model.py) `--apply` | 独立测试库检索、当前咨询／热群人格各一次真实调用；不传正式知识，不等于公共AI聊天门禁通过 |
 | 语义模型专项 | [check_wangshangliao_semantic.py](check_wangshangliao_semantic.py) | 六个合成场景使用真实配置模型，可能计费，无`--apply`门禁；不执行平台处罚，但不是离线回归 |
-| 后台复核 | [check_wsl_readonly_retest.py](check_wsl_readonly_retest.py) | 默认真实读取及页面检查；旧`--private`阶段已不适用，不能运行；`--platform`访问认证平台，不能笼统称零写入 |
+| 后台复核 | [check_wsl_readonly_retest.py](check_wsl_readonly_retest.py) | 默认真实读取及20个群管理页面检查；`--private`入口已删除；`--platform`访问认证平台，不能笼统称零写入 |
 | 旧结账日志检查 | `check_wsl_cashier_logging.py`（已移除） | 不再重启独立结账进程；日志由插件入口统一记录 |
 
 English: prefer the entries above. Offline/rendering checks do not prove upstream
@@ -15467,7 +15472,7 @@ The first verifier error was recovered read-only without replaying the first mes
 `check_wsl_shared_soak.py`仍断言预算未确认；`check_wsl_account_names.py`仍要求
 双账号和零启用群，`check_wsl_friend_removal.py`要求双账号，
 `check_wsl_test_activation_live.py`还固定旧双账号实例，当前三账号绑定不适用，
-`check_wsl_readonly_retest.py`等旧工具还要求正式群暂停。运行基线已变化时，
+其他旧工具可能仍要求正式群暂停；`check_wsl_readonly_retest.py`已移除该历史断言。运行基线已变化时，
 先审阅适用性，不为通过旧脚本而停用已授权群、改预算或恢复旧账号配置。
 旧共享平台脚本已于2026-10-21移除：它只检查返回行的`running`，
 缺少启用实例的完整集合断言，空返回也可能通过，且重载选项指向旧采集插件。

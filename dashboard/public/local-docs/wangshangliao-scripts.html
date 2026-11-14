@@ -125,7 +125,7 @@ their initial baseline rather than clearing the counter.</p>
 <tr>
 <td>只读性能／本地负载</td>
 <td><a href="benchmark_wsl_database.py">benchmark_wsl_database.py</a>、<a href="check_wsl_open_load.py">check_wsl_open_load.py</a></td>
-<td>前者临时合成库；后者默认真实库只读，可<code>--database</code>指定快照；当前绝对报告显式加<code>--absolute-query-report</code></td>
+<td>前者临时合成库；后者默认真实库只读，可<code>--database</code>指定快照；<code>--integrated</code>使用群AI慢桩和群消息，私信只确认接收；<code>--finance</code>已退役并在访问数据前拒绝；当前绝对报告显式加<code>--absolute-query-report</code></td>
 </tr>
 <tr>
 <td>固定测试实验室</td>
@@ -175,7 +175,7 @@ their initial baseline rather than clearing the counter.</p>
 <tr>
 <td>后台复核</td>
 <td><a href="check_wsl_readonly_retest.py">check_wsl_readonly_retest.py</a></td>
-<td>默认真实读取及页面检查；旧<code>--private</code>阶段已不适用，不能运行；<code>--platform</code>访问认证平台，不能笼统称零写入</td>
+<td>默认真实读取及20个群管理页面检查；<code>--private</code>入口已删除；<code>--platform</code>访问认证平台，不能笼统称零写入</td>
 </tr>
 <tr>
 <td>旧结账日志检查</td>
@@ -235,7 +235,7 @@ The first verifier error was recovered read-only without replaying the first mes
 <p><code>check_wsl_shared_soak.py</code>仍断言预算未确认；<code>check_wsl_account_names.py</code>仍要求
 双账号和零启用群，<code>check_wsl_friend_removal.py</code>要求双账号，
 <code>check_wsl_test_activation_live.py</code>还固定旧双账号实例，当前三账号绑定不适用，
-<code>check_wsl_readonly_retest.py</code>等旧工具还要求正式群暂停。运行基线已变化时，
+其他旧工具可能仍要求正式群暂停；<code>check_wsl_readonly_retest.py</code>已移除该历史断言。运行基线已变化时，
 先审阅适用性，不为通过旧脚本而停用已授权群、改预算或恢复旧账号配置。
 旧共享平台脚本已于2026-10-21移除：它只检查返回行的<code>running</code>，
 缺少启用实例的完整集合断言，空返回也可能通过，且重载选项指向旧采集插件。

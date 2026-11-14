@@ -712,15 +712,19 @@ env ASTRBOT_DISABLE_FILE_LOGGING=1 .venv/bin/python -m scripts.check_wsl_test_ac
 观察工具先记录初始<code>NRestarts</code>，再断言本次观察没有增量，不能清零失败计数伪造零重启。
 修复前的观察结果与修复后的新观察分开记录。</p>
 <h2>性能门槛</h2>
-<p>使用二十群、每秒一百条、慢AI及私聊洪泛，覆盖真实接收／调度／规则／存储链路。
+<p>使用二十群、每秒一百条、群AI慢桩及被忽略的私信洪泛，覆盖真实接收／调度／规则／存储链路。
 这里的“真实”指执行实际代码，平台收发、慢模型和财务身份可以是隔离模拟；
 不是向二十个生产群发消息。规则P95目标不超过1秒，记录绝对账本查询P95、
 样本数、积压／拒绝、内存及任务峰值。模型测试可用本地慢桩，不必付费或改变公共门禁。</p>
 <p>用户于<strong>北京时间2026-10-17</strong>接受当轮查询P95 3.027ms，取消查询相对增长
 不超过10%作为本轮上线阻断。当前复测明确选用
-<code>check_wsl_open_load.py --integrated --finance --absolute-query-report --seconds 30</code>；
+<code>check_wsl_open_load.py --integrated --absolute-query-report --seconds 30</code>；
 没有该参数时工具仍执行旧10%断言。绝对报告模式不新增一个未经约定的绝对SLA，
 <code>within_ten_percent=false</code>保留为诊断，不改写成历史通过。</p>
+<p>2026-11-14发布版本已移除私信财务导航，旧<code>--finance</code>在访问数据库、网络或
+设置CPU亲和性前明确拒绝。慢模型隔离改用两个真实群AI请求，保留套餐成本预留与
+结算核验；私信仅确认接收，不解码正文、不写入消息账本。可用
+<code>ASTRBOT_WSL_EVIDENCE_ROOT</code>指定私有验收输出目录。</p>
 <p>旧记录<code>wsl-native-load-20261015T140619.json</code>：
 3000条消息，规则P95约13.51ms；账本P95从11.665ms升到17.846ms，增幅52.99%，<strong>未达标</strong>。
 这是当时相对门槛下的失败，原始结果不改写，也不恢复已取消的上线阻断。

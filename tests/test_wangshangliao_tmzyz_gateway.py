@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -39,6 +41,10 @@ def _write(tmp_path, **changes):
 
 def test_gateway_config_is_private_and_bounded(tmp_path):
     path = _write(tmp_path)
+    if not hasattr(tmzyz_gateway.os, "geteuid"):
+        with pytest.raises(ProtocolError, match="tmzyz_gateway_config_unsupported"):
+            tmzyz_gateway.load(path)
+        return
     config = tmzyz_gateway.load(path)
     assert config.player_code == "fixture-player"
     assert config.carrier == "移动"
@@ -52,6 +58,19 @@ def test_gateway_config_is_private_and_bounded(tmp_path):
     path.write_text("{not-json", encoding="utf-8")
     with pytest.raises(ProtocolError, match="tmzyz_gateway_config_invalid"):
         tmzyz_gateway.load(path)
+
+
+def test_gateway_config_never_reads_credentials_without_ownership_support(
+    tmp_path, monkeypatch
+):
+    path = _write(tmp_path)
+    monkeypatch.delattr(tmzyz_gateway.os, "geteuid", raising=False)
+    read = Mock(side_effect=AssertionError("Credentials must remain unread"))
+    monkeypatch.setattr(Path, "read_text", read)
+    with pytest.raises(ProtocolError, match="tmzyz_gateway_config_unsupported"):
+        tmzyz_gateway.load(path)
+    read.assert_not_called()
+    assert tmzyz_gateway.load(tmp_path / "missing.json") is None
 
 
 @pytest.mark.asyncio

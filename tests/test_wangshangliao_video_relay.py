@@ -3,6 +3,7 @@
 import asyncio
 import copy
 import json
+import os
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -280,7 +281,9 @@ async def test_dashboard_draft_preview_commit_and_restart_without_business_mutat
     assert configs == before
     service.update_bot.assert_not_awaited()
     path = root / "video-relay-control.sqlite3"
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.is_file()
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT COUNT(*) FROM relay_config_audit").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM relay_previews").fetchone()[0] == 0

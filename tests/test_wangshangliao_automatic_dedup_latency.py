@@ -8,6 +8,7 @@ from contextlib import closing
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 
 from astrbot.core.platform.sources.wangshangliao import automatic
 from astrbot.core.platform.sources.wangshangliao.wire import ProtocolError
@@ -15,24 +16,42 @@ from tests.test_wangshangliao_automatic_unknown_expiry import (
     adapter as expiry_adapter,
 )
 from tests.test_wangshangliao_automatic_unknown_expiry import seed as expiry_seed
+from tests.test_wangshangliao_commands import (
+    TestOfflineNetworkGuard as TestOfflineNetworkGuard,
+)
 
 adapter = expiry_adapter
 seed = expiry_seed
 
 
-@pytest.fixture(autouse=True)
-def offline_only(monkeypatch):
-    """Forbid external connections and subprocesses in these transport doubles."""
+@pytest_asyncio.fixture(autouse=True)
+async def offline_only(monkeypatch):
+    """Deny business I/O after the runner initializes its Windows self-pipe.
+
+    Args:
+        monkeypatch: Test-scoped patch factory.
+
+    Yields:
+        Nothing; denial remains active through dependent-fixture cleanup.
+    """
 
     def forbidden(*args, **kwargs):
         raise AssertionError("automatic_dedup_external_io_forbidden")
 
-    monkeypatch.setattr(socket.socket, "connect", forbidden)
-    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
-    monkeypatch.setattr(socket, "create_connection", forbidden)
-    monkeypatch.setattr(
-        asyncio, "create_subprocess_exec", AsyncMock(side_effect=forbidden)
-    )
+    with monkeypatch.context() as guard:
+        guard.setattr(socket.socket, "connect", forbidden)
+        guard.setattr(socket.socket, "connect_ex", forbidden)
+        guard.setattr(socket, "create_connection", forbidden)
+        guard.setattr(
+            asyncio, "create_subprocess_exec", AsyncMock(side_effect=forbidden)
+        )
+        yield
+
+
+@pytest.mark.asyncio
+async def test_offline_guard_still_blocks_subprocesses():
+    with pytest.raises(AssertionError, match="automatic_dedup_external_io_forbidden"):
+        await asyncio.create_subprocess_exec("offline-subprocess-must-not-start")
 
 
 def ledger_snapshot(adapter):

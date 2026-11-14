@@ -1,8 +1,9 @@
 """Offline consent, privacy and rule-review regressions."""
 
 import asyncio
+import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from superbot_authority import designate_admin
@@ -270,6 +271,8 @@ async def test_first_policy_adoption_undo_and_stale_confirmation(setup):
 
 
 def test_local_package_is_private_masked_and_expires(setup):
+    from pathlib import Path
+
     review, store = setup.runtime.semantic_review, setup.store
     review.start("-1001", "2", 0)
     review.capture(
@@ -277,13 +280,20 @@ def test_local_package_is_private_masked_and_expires(setup):
             "推广联系 @someone https://t.me/+Invite 微信:secret123 ABC 手机号13812345678"
         )
     )
-    key, count = review.package("-1001", "1")
+    with (
+        patch.object(Path, "mkdir", autospec=True, side_effect=Path.mkdir) as mkdir,
+        patch.object(Path, "chmod", autospec=True, side_effect=Path.chmod) as chmod,
+    ):
+        key, count = review.package("-1001", "1")
     assert count == 1
     row = store.db.execute("SELECT path FROM sr_packages WHERE id=?", (key,)).fetchone()
-    from pathlib import Path
-
     path = Path(row["path"])
-    assert path.stat().st_mode & 0o777 == 0o600
+    mkdir.assert_called_once_with(path.parent, mode=0o700, exist_ok=True)
+    chmod.assert_called_once_with(path, 0o600)
+    # Windows mode bits do not describe ACL privacy.
+    if os.name == "posix":
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+        assert path.stat().st_mode & 0o777 == 0o600
     content = path.read_text()
     assert "@someone" not in content
     assert "13812345678" not in content
@@ -293,6 +303,24 @@ def test_local_package_is_private_masked_and_expires(setup):
     setup.now[0] += 86401
     review.cleanup()
     assert not path.exists()
+
+
+@pytest.mark.parametrize("operation", ["mkdir", "chmod"])
+def test_local_package_permission_error_fails_closed(setup, operation):
+    from pathlib import Path
+
+    review, store = setup.runtime.semantic_review, setup.store
+    review.start("-1001", "2", 0)
+    assert review.capture(event("private review sample"))
+    with (
+        patch.object(
+            Path, operation, side_effect=PermissionError("Private storage unavailable")
+        ),
+        pytest.raises(PermissionError, match="Private storage unavailable"),
+    ):
+        review.package("-1001", "1")
+    assert not store.db.execute("SELECT 1 FROM sr_packages").fetchone()
+    assert not list((store.path.parent / "semantic_packages").glob("sr-*.json"))
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
 
 from astrbot.builtin_stars.wangshangliao_moderation.cashback import CashbackService
@@ -17,22 +18,32 @@ from astrbot.builtin_stars.wangshangliao_moderation.finance_sandbox import (
 )
 from astrbot.builtin_stars.wangshangliao_moderation.open_rpc import OpenCall, OpenRPC
 from astrbot.builtin_stars.wangshangliao_moderation.open_store import OpenError
+from tests.test_wangshangliao_commands import (
+    TestOfflineNetworkGuard as TestOfflineNetworkGuard,
+)
 from tests.test_wangshangliao_open_rpc_guards import rpc_scope as rpc_scope
 
 
-@pytest.fixture(autouse=True)
-def forbid_network(monkeypatch):
-    """Fail any accidental network connection in these offline regressions.
+@pytest_asyncio.fixture(autouse=True)
+async def forbid_network(monkeypatch):
+    """Deny network I/O after the runner initializes its Windows self-pipe.
 
     Args:
-        monkeypatch: Test-local restoration of socket methods.
+        monkeypatch: Test-scoped patch factory.
+
+    Yields:
+        Nothing; denial remains active through dependent-fixture cleanup.
     """
-    monkeypatch.setattr(
-        socket.socket, "connect", Mock(side_effect=AssertionError("offline test"))
-    )
-    monkeypatch.setattr(
-        socket.socket, "connect_ex", Mock(side_effect=AssertionError("offline test"))
-    )
+    with monkeypatch.context() as guard:
+        guard.setattr(
+            socket.socket, "connect", Mock(side_effect=AssertionError("offline test"))
+        )
+        guard.setattr(
+            socket.socket,
+            "connect_ex",
+            Mock(side_effect=AssertionError("offline test")),
+        )
+        yield
 
 
 @pytest.fixture

@@ -41,7 +41,8 @@ def load(path: Path) -> GatewayConfig | None:
 
     Raises:
         ProtocolError: If the file is a symlink, too large, readable by another
-            user, owned by another account or structurally invalid.
+            user, owned by another account, structurally invalid, or the host
+            cannot validate POSIX ownership and permissions.
     """
     try:
         info = path.lstat()
@@ -49,11 +50,14 @@ def load(path: Path) -> GatewayConfig | None:
         return None
     except OSError:
         raise ProtocolError("tmzyz_gateway_config_unreadable") from None
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is None:
+        raise ProtocolError("tmzyz_gateway_config_unsupported")
     if (
         stat.S_ISLNK(info.st_mode)
         or not stat.S_ISREG(info.st_mode)
         or info.st_size > 4096
-        or info.st_uid != os.geteuid()
+        or info.st_uid != geteuid()
         or stat.S_IMODE(info.st_mode) & 0o077
     ):
         raise ProtocolError("tmzyz_gateway_config_insecure")

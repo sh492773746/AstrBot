@@ -559,14 +559,33 @@ async def test_one_cancelled_worker_does_not_drop_the_rest_of_the_queue(media_qu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("host", ["posix", "nt"])
 async def test_close_kills_active_recognizers_and_terminates_waiting_metadata(
-    media_queue, monkeypatch
+    media_queue, monkeypatch, host
 ):
     env = media_queue
     entered = asyncio.Queue()
     processes = []
+    killers = []
 
     async def spawn(*args, **kwargs):
+        if args[0] == "taskkill":
+            assert host == "nt"
+            pid = int(args[2])
+            assert args == ("taskkill", "/PID", str(pid), "/T", "/F")
+            assert kwargs == {
+                "stdout": asyncio.subprocess.DEVNULL,
+                "stderr": asyncio.subprocess.DEVNULL,
+            }
+            assert pid in {process.pid for process in processes}
+            killer = SimpleNamespace(pid=pid, wait=AsyncMock(return_value=0))
+            killers.append(killer)
+            return killer
+        assert args[:2] == (
+            sys.executable,
+            str(Path(media_moderation.__file__).with_name("media_worker.py")),
+        )
+        assert kwargs["start_new_session"] is (host != "nt")
         process = SimpleNamespace(returncode=None, pid=101 + len(processes))
 
         async def communicate(_):
@@ -582,7 +601,11 @@ async def test_close_kills_active_recognizers_and_terminates_waiting_metadata(
         return process
 
     kill = Mock()
-    monkeypatch.setattr(media_moderation.os, "killpg", kill)
+    platform = SimpleNamespace(name=host, environ=os.environ)
+    if host == "posix":
+        platform.killpg = kill
+    monkeypatch.setattr(media_moderation, "os", platform)
+    monkeypatch.setattr(media_moderation, "signal", SimpleNamespace(SIGKILL=9))
     monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(side_effect=spawn))
     for mid in range(100, 105):
         assert enqueue(env, mid)
@@ -590,9 +613,24 @@ async def test_close_kills_active_recognizers_and_terminates_waiting_metadata(
     await asyncio.wait_for(entered.get(), 1)
     await asyncio.wait_for(entered.get(), 1)
     await asyncio.wait_for(env.runtime.close(), 2)
-    assert kill.call_count == 2
+    assert len(processes) == 2
+    if host == "posix":
+        assert kill.call_count == 2
+        assert {call.args for call in kill.call_args_list} == {
+            (process.pid, 9) for process in processes
+        }
+        assert not killers
+    else:
+        kill.assert_not_called()
+        assert len(killers) == 2
+        assert {killer.pid for killer in killers} == {
+            process.pid for process in processes
+        }
+        for killer in killers:
+            killer.wait.assert_awaited_once_with()
     for process in processes:
-        process.wait.assert_awaited_once()
+        process.wait.assert_awaited_once_with()
+        assert process.returncode == -9
     assert env.runtime.counts["cancelled"] == 5
     assert env.runtime.counts["completed"] == 5
     assert env.runtime.counts["unchecked"] == 5

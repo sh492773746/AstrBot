@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import pytest_asyncio
 
 from astrbot.builtin_stars.wangshangliao_moderation import flood
 from astrbot.core.platform.sources.wangshangliao.storage import Ledger
@@ -48,13 +49,14 @@ async def test_completed_rule_workers_wake_the_next_member_item_immediately(bot)
         await runtime.close()
 
 
-@pytest.fixture(autouse=True)
-def offline_only(monkeypatch):
-    """Forbid external network and subprocess execution during every probe.
+@pytest_asyncio.fixture(autouse=True)
+async def offline_only(monkeypatch):
+    """Forbid all network and subprocess execution after loop initialization.
 
     Args:
         monkeypatch: Test-scoped replacement owner.
     """
+    assert asyncio.get_running_loop().is_running()
 
     def forbidden(*args, **kwargs):
         raise AssertionError("offline_latency_probe_external_io_forbidden")
@@ -65,6 +67,26 @@ def offline_only(monkeypatch):
     monkeypatch.setattr(
         asyncio, "create_subprocess_exec", AsyncMock(side_effect=forbidden)
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "192.0.2.1"])
+async def test_offline_guard_blocks_loopback_and_remote_connections(host):
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family) as connection:
+        for connect in (
+            connection.connect,
+            connection.connect_ex,
+            socket.create_connection,
+        ):
+            with pytest.raises(
+                AssertionError, match="^offline_latency_probe_external_io_forbidden$"
+            ):
+                connect((host, 443))
+    with pytest.raises(
+        AssertionError, match="^offline_latency_probe_external_io_forbidden$"
+    ):
+        await asyncio.create_subprocess_exec("offline-probe-must-not-run")
 
 
 @pytest.mark.asyncio

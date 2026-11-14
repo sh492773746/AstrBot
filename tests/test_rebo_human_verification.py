@@ -57,10 +57,11 @@ async def test_trusted_verification_frame(verification_bundle, outcome):
         errors = []
         external_requests = []
         page.on("pageerror", lambda error: errors.append(str(error)))
-        await page.add_init_script("""
-            const original=window.setTimeout;
-            window.setTimeout=(fn,ms,...args)=>original(fn,ms>=150000?10000:ms>=25000?1500:ms,...args);
-        """)
+        if outcome == "init_timeout":
+            await page.add_init_script("""
+                const original=window.setTimeout;
+                window.setTimeout=(fn,ms,...args)=>original(fn,ms===30000?1500:ms,...args);
+            """)
 
         async def route(request):
             url = urlsplit(request.request.url)
